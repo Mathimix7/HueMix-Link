@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+<h1>{% block title %} Rooms {% endblock %}</h1>
+{% block content %}
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+<header class="header">
+    <p class="number">#2</p>
+    <h1 style="font-family:verdana">SPECIFY SERVER <br>PORTS</h1>
+  </header>
+<form name="roomForm" action="" method="post" onsubmit="">
+    <section class="content">
+        <ul class="list">
+        <li class="list__item">
+            <form action="/action_page.php">
+                <label style="font-family:verdana" for="fname">New port TCP server:</label>
+                <input type="text" id="TCPPort" name="TCPPort" placeholder="{{ tcpPort }}"><br><br>
+                <label style="font-family:verdana" for="fname">New port Website:</label>
+                <input type="text" id="websitePort" name="websitePort" placeholder="{{ websitePort }}"><br><br>
+                <button type="submit" class="button3" value="Cancel" name="buttons">Cancel </button>
+                <button type="submit" class="button3" value="Save" name="buttons">Save </button>
+            </form>
+        </li>
+</section>
+{% endblock %}
+

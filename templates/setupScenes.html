@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+<h1>{% block title %} Scenes {% endblock %}</h1>
+{% block content %}
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+<header class="header">
+    <p class="number">#3</p>
+    <h1 style="font-family:verdana">Choose all scenes<br> you want!</h1>
+  </header>
+  <form name="scenesForm" action="" method="post" onsubmit="">
+    <section class="content">
+        <ul class="list">
+        {% for i in messages %}
+        <li class="list__item">
+            <label class="label--checkbox">
+                <input style="font-family:verdana" type="checkbox" class="checkbox" name="scenes" id="{{ messages[i] }}" value="{{ messages[i] }}"> {{ messages[i] }} </input><br>
+            </label>
+        </li>
+        {% endfor %}
+        <br>
+        <button type="submit" class="button3" value="Next" name="buttons">Next </button>
+    </form>
+</section>
+{% endblock %}

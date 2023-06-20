@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+<h1>{% block title %} Buttons {% endblock %}</h1>
+{% block content %}
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='main.css') }}" />
+<header class="header">
+    <p class="number">#1</p>
+    <h1 style="font-family:verdana">Servers <br>information</h1>
+  </header>
+  <form name="home" action="" method="post" onsubmit="">
+    <section class="content">
+        <ul class="list">
+        {% for i in messages %}
+        <li class="list__item">
+            <label class="label--radio">
+                <input style="font-family:verdana" type="radio" class="radio" name="rooms" id="{{ messages[i] }}" value="{{ messages[i] }}"> {{ messages[i] }} </input><br>
+            </label>
+        </li>
+        {% endfor %}
+        <br>
+        <button type="submit" class="button3" value="Delete" name="buttons">Delete</button>
+        <button type="submit" class="button3" value="Rename" name="buttons">Rename </button>
+    </form>
+</section>
+
+{% endblock %}

@@ -1,0 +1,167 @@
+{% extends 'base.html' %}
+<h1>{% block title %} Buttons {% endblock %}</h1>
+{% block rawContent %}
+<body>
+    <style>
+        /* body{
+            background: #333333;
+        } */
+        h3{
+            text-align: center;
+            font-size: 30px;
+            color: #000000
+        }
+        h1{
+            margin-top: -20px;
+            text-align: center;
+            font-size: 50px;
+            color: #000000
+        }
+        img{
+            width: 20%;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .container { 
+            height: 200px;
+            position: relative;
+        }
+        .button {
+            width: 250px;
+            height: 50px;
+            position: absolute;
+            left: 50%;
+            background-color:#646464;
+            color: #fff;
+            border:none; 
+            font-size: 25px;
+            border-radius:5px; 
+            transition: 0.5s;
+            cursor: pointer;
+            transform: translate(-50%, -50%);
+        }
+        .button:hover{
+            background-color:#4242f8;
+        }
+        .lds-dual-ring {
+            display: inline-block;
+            width: 80px;
+            height: 80px;
+            position: absolute;
+            left: 50%;
+            top: 50px;
+            transform: translate(-50%, -50%);
+        }
+        .lds-dual-ring:after {
+            content: " ";
+            display: block;
+            width: 64px;
+            height: 64px;
+            margin: 8px;
+            border-radius: 50%;
+            border: 6px solid #fff;
+            border-color: #fff transparent #fff transparent;
+            animation: lds-dual-ring 1.2s linear infinite;
+        }
+        @keyframes lds-dual-ring {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+        div#loading {
+            display: none;
+        }
+        .form{
+            position: absolute;
+            left: 50%;
+            top: 50px;
+            color: #fff;
+            border:none; 
+            font-size: 25px;
+            transform: translate(-50%, -50%);
+        }
+        .h3form{
+            text-align: center;
+            font-size: 30px;
+            color: #000000;
+            margin-top: 10px;
+        }
+        .formInput{
+            width: 200px;
+            height: 10px;
+            background-color: #646464;
+            color: white;
+            padding: 14px 20px;
+            margin: 8px 0;
+            outline: none;
+            border-radius: 4px;
+            cursor: pointer;
+            position: absolute;
+            left: 50%;
+            top: 50px;
+            font-size: 25px;
+            border: 2px solid #8e9292;
+            transform: translate(-50%, -50%);
+            text-align: center; 
+        }
+        .formInput::placeholder {
+            text-align: center; 
+        }
+        .input-field:focus{
+            border-color: #8e9292;
+            box-shadow: 0 4px 4px rgba(229, 103, 23, 0.075) inset, 0 0 8px#8e9292;
+            outline: 0 none;
+        }
+
+    </style>
+    <div id="content">
+        <h3>HueMix Link</h3>
+        <h1>Bridge Found</h1>
+        <img src="./static/hueBridge.png"/>
+        <div class="container">
+            <h3 class="h3form">Press Hue Bridge button</h3>
+            <form onsubmit="return submitForm()">
+                <input type="submit" value="Continue" class="button" onclick=startLoading()></button>
+            </a> 
+        </div>
+    </div>
+    <div id="loading">
+        <h3>HueMix Link</h3>
+        <h1>Creating user</h1>
+        <img src="./static/hueBridge.png"/>
+        <div class="container">
+            <div class="lds-dual-ring"></div>
+        </div>
+    </div>
+    <script>
+        function findGetParameter(parameterName) {
+        var result = null,
+            tmp = [];
+        location.search
+            .substr(1)
+            .split("&")
+            .forEach(function (item) {
+            tmp = item.split("=");
+            if (tmp[0] === parameterName) result = decodeURIComponent(tmp[1]);
+            });
+        return result;
+        }
+        function submitForm() {
+            var ip = findGetParameter("ip")
+            console.log(ip)
+            window.location = '/createUser?ip='+ip
+            return false
+        }
+        function startLoading() {
+            var x = document.getElementById("content")
+            x.style.display = "none"
+            var x = document.getElementById("loading")
+            x.style.display = "block"
+        }
+    </script>
+
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+<h1>{% block title %} Confirm Set-up {% endblock %}</h1>
+{% block content %}
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+<link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.0/css/line.css">
+<header class="header">
+    <p class="number">#1</p>
+    <h1 style="font-family:verdana">Confirm <br> Set-up</h1>
+  </header>
+    <section class="content">
+        <ul class="list">
+            <li class="list__item">
+                <h2 style="font-family:verdana">Button Name:</h2>
+                <p style="font-family:verdana">{{ macAddress }}</p>
+                <h2 style="font-family:verdana">Selected Scenes:</h2>
+                <ul class="sortable-list">
+                    {% for i in messages %}
+                        <li class="item" draggable="true">
+                            <i class="uil uil-draggabledots"></i>
+                            <div class="details">
+                                <span>{{ messages[i] }}</span>
+                            </div>
+                        </li>
+                    {% endfor %}
+                </ul>
+            </li>
+        </ul>
+        <br>
+    <form name="home" action="" method="post" onsubmit="">
+        <button type="submit" class="button3" value="Cancel" name="buttons">Cancel </button>
+        <button type="submit" class="button3" value="Confirm" name="buttons">Confirm </button>
+    </form>
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        let sceneCodeList = urlParams.get('SceneCodeList').split(',');
+        let sceneNameList = "{{ SceneNamesList }}".split(",");
+        const sceneDict = {};
+        for (let i = 0; i < sceneCodeList.length; i++) {
+            const sceneName = sceneNameList[i];
+            const sceneCode = sceneCodeList[i];
+            sceneDict[sceneName] = sceneCode;
+        }
+
+        const sortableList = document.querySelector(".sortable-list");
+        const items = sortableList.querySelectorAll(".item");
+
+        items.forEach(item => {
+            item.addEventListener("dragstart", () => {
+                setTimeout(() => item.classList.add("dragging"), 0);
+            });
+            item.addEventListener("dragend", () => {
+                item.classList.remove("dragging");
+                updateListsOrder();
+            });
+        });
+
+        const initSortableList = (e) => {
+            e.preventDefault();
+            const draggingItem = document.querySelector(".dragging");
+            let siblings = [...sortableList.querySelectorAll(".item:not(.dragging)")];
+            let nextSibling = siblings.find(sibling => {
+                return e.clientY <= sibling.offsetTop + sibling.offsetHeight / 2;
+            });
+            sortableList.insertBefore(draggingItem, nextSibling);
+        }
+        function updateListsOrder() {
+            const items = sortableList.querySelectorAll(".item");
+            const updatedSceneCodeList = [];
+            const updatedSceneNameList = [];
+            items.forEach(item => {
+                const sceneName = item.querySelector("span").textContent;
+                const sceneCode = sceneDict[sceneName];
+                updatedSceneCodeList.push(sceneCode);
+                updatedSceneNameList.push(sceneName);
+            });
+            sceneCodeList = updatedSceneCodeList;
+            sceneNameList = updatedSceneNameList;
+            const urlParams = new URLSearchParams(window.location.search);
+            urlParams.set('SceneCodeList', sceneCodeList.join(','));
+            const newUrl = `${window.location.origin}${window.location.pathname}?${urlParams.toString()}`;
+            history.pushState(null, null, newUrl);
+        }
+
+        sortableList.addEventListener("dragover", initSortableList);
+        sortableList.addEventListener("dragenter", e => e.preventDefault());
+    </script>
+</section>
+{% endblock %}

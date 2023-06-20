@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+    <title>{% block title %} {% endblock %}</title>
+    <style>
+        nav a {
+            color: #16a085;
+            font-size: 3em;
+            font-family: Helvetica, Arial, sans-serif;
+            text-decoration: none;
+            margin: 0 auto;
+            display: table;
+        }
+    </style>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='main.css') }}" />
+</head>
+<body>
+    <div id="page-container">
+        <div id="content-wrap">
+          <!-- all other page content -->
+            <nav>
+                <a href="{{ url_for('main') }}">Hue Buttons Setup Website</a>
+            </nav>
+            <hr>
+            <style>
+                .alert.error {
+                    color: red;
+                    background: rgba(255, 0, 0, 0.3);
+                    font-size: 25px;
+                    font-family: Helvetica, Arial, sans-serif;
+                    }
+                .alert.success {
+                    color: #00A300;
+                    background: rgba(0, 255, 0, 0.3);
+                    font-size: 25px;
+                    font-family: Helvetica, Arial, sans-serif;
+                    }
+            </style>
+            {% with messages = get_flashed_messages(with_categories=true) %} {% if
+                messages %} {% for category, message in messages %} {% if category ==
+                'error' %}
+                <div class="alert {{ category }}" role="alert">
+                    <p><strong>Error:</strong> {{ message }} <button type="button" class="buttonInvisible" data-dismiss="alert"> <span aria-hidden="true">&times;</span></button></p>
+                </div>
+                {% else %}
+                <div class="alert {{ category }}" role="alert">
+                    <p><strong>Success:</strong> {{ message }} <button type="button" class="buttonInvisible" data-dismiss="alert"> <span aria-hidden="true">&times;</span></button></p>
+                </div>
+                {% endif %} {% endfor %} {% endif %} {% endwith %}
+                <script
+                src="https://code.jquery.com/jquery-3.2.1.slim.min.js"
+                integrity="sha384-KJ3o2DKtIkvYIK3UENzmM7KCkRr/rE9/Qpg6aAZGJwFDMVNA/GpGFF93hXpG5KkN"
+                crossorigin="anonymous"
+                ></script>
+                <script
+                src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"
+                integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q"
+                crossorigin="anonymous"
+                ></script>
+                <script
+                src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"
+                integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl"
+                crossorigin="anonymous"
+                ></script>
+            <div class="content">
+                {% block content %} {% endblock %}
+            </div>
+            {% block rawContent %} {% endblock %}
+        </div>
+        <footer id="footer">
+            <p>Developer: Mathimix<br>
+            <a href="https://github.com/mathimix7">Github Page</a>
+        </footer>
+    </div>
+</body>
+</html>

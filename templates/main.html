@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+<h1>{% block title %} Buttons {% endblock %}</h1>
+{% block rawContent %}
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+    <div class="button-container">
+        <button id="buttonHref">Buttons</button>
+        <button id="serversHref">Servers</button>
+        <button id="settingsHref">Settings</button>
+    </div>
+    <script>
+        document.getElementById("serversHref").addEventListener("click", function() {
+          window.location.href = "/servers";
+        });
+        document.getElementById("buttonHref").addEventListener("click", function() {
+          window.location.href = "/buttons";
+        });
+        document.getElementById("settingsHref").addEventListener("click", function() {
+          window.location.href = "/settings";
+        });
+    </script>
+
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+<h1>{% block title %} Buttons {% endblock %}</h1>
+{% block content %}
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='main.css') }}" />
+<header class="header">
+    <p class="number">#1</p>
+    <h1 style="font-family:verdana">Settings <br>HueMix Link</h1>
+</header>
+<section class="content">
+    <ul class="list">
+        <form name="home" action="" method="post" onsubmit="">
+            <button type="submit" class="button3" value="Set-Up HueBridge" name="buttons">Set-Up HueBridge</button>
+            <button type="submit" class="button3" value="Set-Up Ports" name="buttons">Set-Up Ports </button>
+        </form> 
+    </ul>
+</section>
+
+{% endblock %}

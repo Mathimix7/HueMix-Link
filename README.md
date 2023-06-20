@@ -1,4 +1,6 @@
-# HueMix Link :bulb:
+<p align="center"><img src="" alt="HueMix-Link's logo"/></p>
+
+<h1 align="center">OctoPrint</h1>
 
 HueMix Link is a project aimed at controlling Hue lights using an ESP-based button. It consists of a client-server architecture where the ESP, programmed as an ESP-NOW device, connects to a server also running on an ESP. The server then communicates with a TCP server running on a Linux machine. The Linux machine hosts a website for configuring buttons, servers, and the Hue bridge.
 

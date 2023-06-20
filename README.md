@@ -1,37 +1,14 @@
 <p align="center"><img src="" alt="HueMix-Link's logo"/></p>
 
-<h1 align="center">OctoPrint</h1>
-
-HueMix Link is a project aimed at controlling Hue lights using an ESP-based button. It consists of a client-server architecture where the ESP, programmed as an ESP-NOW device, connects to a server also running on an ESP. The server then communicates with a TCP server running on a Linux machine. The Linux machine hosts a website for configuring buttons, servers, and the Hue bridge.
+<h1 align="center">HueMix-Link</h1>
 
 ## Project Overview
 
-HueMix Link provides a convenient way to control Hue lights using a physical button. The ESP-based button, configured as an ESP-NOW device, sends data to a server running on another ESP. The server then communicates with a TCP server running on a Linux machine. The Linux machine hosts a website that allows you to configure buttons, servers, and the Hue bridge. The project includes various components, such as the ESP code, the TCP server, and the website.
+HueMix Link provides a convenient way to control Hue lights using a physical button. The ESP-based button, configured as an ESP-NOW device, sends data to a server running on another ESP. The server then communicates with a TCP server running on a Linux machine. The Linux machine hosts a website that allows you to configure buttons, servers, the Hue bridge, & more. The project includes various components, such as the ESP code, the TCP server, the website, & more.
 
 ## File Organization
 
 The project repository is organized as follows:
-
-HueMix Link/
-├── DataFiles/
-│   ├── devices.json
-│   ├── macAddresses.json
-│   ├── servers.json
-│   └── settings.json
-├── static/
-│   ├── button.css
-│   ├── buttonStyle.css
-│   ├── hueBridge.png
-│   └── main.css
-├── templates/
-│   ├── template1.html
-│   ├── template2.html
-│   └── ...
-├── HueActivations.py
-├── tcp_server.py
-├── HueConfig.py
-├── website.py
-└── utils.py
 
 - DataFiles/: Contains JSON files for storing device, MAC addresses, server, and settings information.
 - static/: Holds CSS files and other static assets for the website.

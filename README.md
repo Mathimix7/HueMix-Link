@@ -53,18 +53,22 @@ To set up the Linux service for hosting the HueMix Link website and running the 
 5. Website server should be up and running. To check status run `sudo systemctl status huemixlinkwebsite`.
 
 ## 3D Model
-- This 3D model represents the physical design of the HueMix-Link button and server.
+- This 3D model represents the physical design for the HueMix-Link button and server.
 - Dimensions: 10cm x 5cm x 2cm
-- To assemble the hardware, follow the provided PCB layout and connect the components accordingly.
+- Works with the provided PCB layout.
 
 ![HueMix-Link 3D Model](3d-model.png)
 
 ## PCB and Schematics
 
 If you are interested in printing the PCB and reviewing the schematics, you can find the necessary files and resources below:
-
-- [PCB Image](link-to-pcb-image): View the image of the PCB design.
-- [Schematics PDF](link-to-schematics-pdf): Access the detailed schematics in PDF format.
-- [KiCad Files](link-to-kicad-files): Download the KiCad project files for further exploration and customization.
+#### Button PCB:
+- [PCB Image](Schematics%20and%20PCB/esp_now_button/esp_now_button_front.png): View the image of the PCB designs.
+- [Schematics PDF](Schematics%20and%20PCB/esp_now_button/esp_now_button.pdf): Access the detailed schematics in PDF format.
+- [KiCad Files](Schematics%20and%20PCB/esp_now_button/): Download the KiCad project files for further exploration and customization.
+#### Server PCB:
+- [PCB Image](Schematics%20and%20PCB/esp_now_server/esp_now_button_front.png): View the image of the PCB designs.
+- [Schematics PDF](Schematics%20and%20PCB/esp_now_server/esp_now_button.pdf): Access the detailed schematics in PDF format.
+- [KiCad Files](Schematics%20and%20PCB/esp_now_server/): Download the KiCad project files for further exploration and customization.
 
 Feel free to utilize these resources to understand the PCB design and schematics, make modifications if needed, and proceed with printing the PCB for your project.

@@ -1,0 +1,15 @@
+[Unit]
+Description=HueMix Link
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/user/HueMix-Link/Python/tcp_server.py
+WorkingDirectory=/home/user/HueMix-Link/Python
+Environment=PYTHONPATH=/home/user/.local/lib/python3.8/site-packages:/usr/lib/python3/dist-packages
+RestartSec=5s
+Restart=on-failure
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

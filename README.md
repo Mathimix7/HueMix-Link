@@ -79,6 +79,38 @@ The ESP server also has a button that can be used to control the lights. The mai
 
 **Note:** It is recommended to press the button under the device once every time a new server is created to ensure the buttons are aware of the server's existence.
 
+## ESP-NOW Button
+
+The ESP-NOW button is based on the ESP-NOW protocol and operates in deep sleep mode to optimize battery life. With a single main button, it provides convenient control over the Hue lights. Here are the key features and functionalities of the button:
+### Deep Sleep Mode
+
+The ESP-NOW button is designed to operate in deep sleep mode at all times. This feature helps to maximize battery life by minimizing power consumption during idle periods.
+### Button Actions
+
+The main button on the ESP-NOW button serves various functions:
+
+1. Single Click:
+   - On a single click, the button attempts to send the data to the ESP server.
+   - It cycles through the scenes that can be configured on the website.
+2. First Click Interaction:
+   - If it's the first time the button is clicked and it's in proximity to a server, it automatically gets added to the entire system and the website.
+3. Two-Second Click:
+   - If the button is clicked again within two seconds of the first click, it turns off the lights (if they are currently on).
+   - Otherwise, it transitions to the first scene in the sequence.
+4. Holding the Button:
+   - Holding the button allows you to increase or decrease the brightness level of the lights.
+
+### LED Indication
+
+The ESP-NOW button features LED indicators to provide feedback on the status of data transmission:
+
+- Single Blink: The LED blinks once to indicate that the message was successfully sent to the server.
+- Double Blink: If the LED blinks twice, it means the data was not successfully sent. Please ensure that the server is connected and within close proximity to the button.
+
+Note: It is recommended to check the server connection and ensure they are not too far apart if you encounter issues with data transmission.
+
+By utilizing the ESP-NOW button, you can conveniently control the Hue lights and enjoy extended battery life due to the efficient deep sleep mode.
+
 ## Linux Service Setup
 
 To set up the Linux service for hosting the HueMix Link website and running the TCP server, follow these steps:

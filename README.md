@@ -36,6 +36,49 @@ The HueMix Link website provides a user-friendly interface for configuring butto
 
 ![HueMix Link Website](website-screenshot.png)
 
+## ESP Server
+
+The ESP server is responsible for receiving data from the ESP-NOW device and sending it to the TCP server. It consists of two ESP devices connected via UART communication. One ESP device receives the data, and the other ESP device sends the data to the TCP server.
+
+### LED Indicators
+
+The ESP server has three LED indicators:
+
+- Blue LED: Indicates the Wi-Fi connection status.
+  - On: The device is connected to Wi-Fi.
+  - Blinking: The device is in Wi-Fi Manager mode.
+- White LED: Indicates data reception via ESP-NOW.
+- Red LED: Indicates successful transmission of the message to the TCP server.
+
+### Wi-Fi Manager Mode
+
+When the blue LED is blinking, it means the ESP server is in Wi-Fi Manager mode. Follow these steps to connect to the device:
+
+1. Connect to the network named `HueMix Link - id`.
+2. Use the password `HueMixLink`.
+3. Access the website at `192.168.4.1`.
+4. Enter the Wi-Fi credentials and TCP server IP and port on the website to configure the ESP server.
+
+### Resetting TCP Data and Wi-Fi Credentials
+
+To reset the TCP data or Wi-Fi credentials, follow these steps:
+
+1. Locate the button under the ESP server device.
+2. Hold the button for 5 seconds to initiate the reset process.
+
+### Updating Servers
+
+To update all the servers that are running and let the buttons know which servers to connect to, follow these steps:
+
+1. Press the button under the ESP server device once.
+   - This action will update the servers that are currently running. This helps the button know which server to connect to in order to get a more reliable connection.
+
+### Server Button
+
+The ESP server also has a button that can be used to control the lights. The main button of the server functions as a normal button.
+
+**Note:** It is recommended to press the button under the device once every time a new server is created to ensure the buttons are aware of the server's existence.
+
 ## Linux Service Setup
 
 To set up the Linux service for hosting the HueMix Link website and running the TCP server, follow these steps:
@@ -63,12 +106,10 @@ To set up the Linux service for hosting the HueMix Link website and running the 
 
 If you are interested in printing the PCB and reviewing the schematics, you can find the necessary files and resources below:
 #### Button PCB:
-- [PCB Image](Schematics%20and%20PCB/esp_now_button/esp_now_button_front.png){:target="_blank" rel="noopener noreferrer"}: View the image of the PCB designs.
+- [PCB Image](Schematics%20and%20PCB/esp_now_button/esp_now_button_front.png): View the image of the PCB designs.
 - [Schematics PDF](Schematics%20and%20PCB/esp_now_button/esp_now_button.pdf): Access the detailed schematics in PDF format.
 - [KiCad Files](Schematics%20and%20PCB/esp_now_button/): Download the KiCad project files for further exploration and customization.
 #### Server PCB:
 - [PCB Image](Schematics%20and%20PCB/esp_now_server/esp_now_server_front.png): View the image of the PCB designs.
 - [Schematics PDF](Schematics%20and%20PCB/esp_now_server/esp_now_server.pdf): Access the detailed schematics in PDF format.
 - [KiCad Files](Schematics%20and%20PCB/esp_now_server/): Download the KiCad project files for further exploration and customization.
-
-Feel free to utilize these resources to understand the PCB design and schematics, make modifications if needed, and proceed with printing the PCB for your project.

@@ -13,8 +13,8 @@ To set up the HueMix Link project, follow these steps:
 3. Connect the ESP-based button according to the provided PCB and wire connections. [Schematics and PCB](#button-pcb)
 4. Connect the ESP-based server according to the provided PCB and wire connections.[Schematics and PCB](#server-pcb)
 5. Flash the `esp_now_server.ino` sketch to the ESP NOW server and `tcp_client_server.ino` sketch to the TCP server.
-6. Wait until blue led is flashing, connect to ``HueMix Link - id`` network with password ``HueMixLink``. Follow the steps at ``192.168.4.1``.
-7. Flash the `esp_now_button.ino` sketch to the ESP-based button *(esp8266 version does not include deep sleep)*.
+6. Flash the `esp_now_button.ino` sketch to the ESP-based button *(esp8266 version does not include deep sleep)*.
+7. Wait until blue led is flashing, connect to ``HueMix Link - id`` network with password ``HueMixLink``. Follow the steps at ``192.168.4.1``.
 8. When you press the button it should be automaticaly added to the website to set-up the scenes.
 
 ## Usage

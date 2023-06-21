@@ -10,8 +10,8 @@ To set up the HueMix Link project, follow these steps:
 
 1. Run the `tcp_server.py` script and the `website.py` on the Linux machine. [Set-up service](#linux-service-setup)
 2. Configure the hue bridge and assign ports according to your preferences.
-3. Connect the ESP-based button according to the provided PCB and wire connections.
-4. Connect the ESP-based server according to the provided PCB and wire connections.
+3. Connect the ESP-based button according to the provided PCB and wire connections. [Schematics and PCB](#button-pcb)
+4. Connect the ESP-based server according to the provided PCB and wire connections.[Schematics and PCB](#server-pcb)
 5. Flash the `esp_now_server.ino` sketch to the ESP NOW server and `tcp_client_server.ino` sketch to the TCP server.
 6. Wait until blue led is flashing, connect to ``HueMix Link - id`` network with password ``HueMixLink``. Follow the steps at ``192.168.4.1``.
 7. Flash the `esp_now_button.ino` sketch to the ESP-based button *(esp8266 version does not include deep sleep)*.
@@ -41,13 +41,13 @@ The HueMix Link website provides a user-friendly interface for configuring butto
 To set up the Linux service for hosting the HueMix Link website and running the TCP server, follow these steps:
 #### TCP service:
 1. Run `sudo nano /etc/systemd/system/huemixlinktcp.service`
-2. Paste code provided at [HueMix-Link TCP service](../main/systemd-services/huemixlinktcp.service).
+2. Paste code provided at [HueMix-Link TCP service](systemd-services/huemixlinktcp.service).
 3. Change paths as necessary then save and close the file.
 4. Run `sudo systemctl enable huemixlinktcp` and `sudo systemctl start huemixlinktcp`. 
 5. TCP server should be up and running. To check status run `sudo systemctl status huemixlinktcp`.
 #### Website service:
 1. Run `sudo nano /etc/systemd/system/huemixlinkwebsite.service`
-2. Paste code provided at [HueMix-Link Website service](../main/systemd-services/huemixlinkwebsite.service).
+2. Paste code provided at [HueMix-Link Website service](systemd-services/huemixlinkwebsite.service).
 3. Change paths as necessary then save and close the file.
 4. Run `sudo systemctl enable huemixlinkwebsite` and `sudo systemctl start huemixlinkwebsite`. 
 5. Website server should be up and running. To check status run `sudo systemctl status huemixlinkwebsite`.
@@ -63,12 +63,12 @@ To set up the Linux service for hosting the HueMix Link website and running the 
 
 If you are interested in printing the PCB and reviewing the schematics, you can find the necessary files and resources below:
 #### Button PCB:
-- [PCB Image](Schematics%20and%20PCB/esp_now_button/esp_now_button_front.png): View the image of the PCB designs.
-- [Schematics PDF](Schematics%20and%20PCB/esp_now_button/esp_now_button.pdf): Access the detailed schematics in PDF format.
-- [KiCad Files](Schematics%20and%20PCB/esp_now_button/): Download the KiCad project files for further exploration and customization.
+- [PCB Image](Schematics%20and%20PCB/esp_now_button/esp_now_button_front.png){:target="_blank"}: View the image of the PCB designs.
+- [Schematics PDF](Schematics%20and%20PCB/esp_now_button/esp_now_button.pdf){:target="_blank"}: Access the detailed schematics in PDF format.
+- [KiCad Files](Schematics%20and%20PCB/esp_now_button/){:target="_blank"}: Download the KiCad project files for further exploration and customization.
 #### Server PCB:
-- [PCB Image](Schematics%20and%20PCB/esp_now_server/esp_now_button_front.png): View the image of the PCB designs.
-- [Schematics PDF](Schematics%20and%20PCB/esp_now_server/esp_now_button.pdf): Access the detailed schematics in PDF format.
-- [KiCad Files](Schematics%20and%20PCB/esp_now_server/): Download the KiCad project files for further exploration and customization.
+- [PCB Image](Schematics%20and%20PCB/esp_now_server/esp_now_server_front.png){:target="_blank"}: View the image of the PCB designs.
+- [Schematics PDF](Schematics%20and%20PCB/esp_now_server/esp_now_server.pdf){:target="_blank"}: Access the detailed schematics in PDF format.
+- [KiCad Files](Schematics%20and%20PCB/esp_now_server/){:target="_blank"}: Download the KiCad project files for further exploration and customization.
 
 Feel free to utilize these resources to understand the PCB design and schematics, make modifications if needed, and proceed with printing the PCB for your project.

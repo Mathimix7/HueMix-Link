@@ -63,12 +63,12 @@ To set up the Linux service for hosting the HueMix Link website and running the 
 
 If you are interested in printing the PCB and reviewing the schematics, you can find the necessary files and resources below:
 #### Button PCB:
-- [PCB Image](Schematics%20and%20PCB/esp_now_button/esp_now_button_front.png){:target="_blank"}: View the image of the PCB designs.
-- [Schematics PDF](Schematics%20and%20PCB/esp_now_button/esp_now_button.pdf){:target="_blank"}: Access the detailed schematics in PDF format.
-- [KiCad Files](Schematics%20and%20PCB/esp_now_button/){:target="_blank"}: Download the KiCad project files for further exploration and customization.
+- [PCB Image](Schematics%20and%20PCB/esp_now_button/esp_now_button_front.png){:target="_blank" rel="noopener noreferrer"}: View the image of the PCB designs.
+- [Schematics PDF](Schematics%20and%20PCB/esp_now_button/esp_now_button.pdf): Access the detailed schematics in PDF format.
+- [KiCad Files](Schematics%20and%20PCB/esp_now_button/): Download the KiCad project files for further exploration and customization.
 #### Server PCB:
-- [PCB Image](Schematics%20and%20PCB/esp_now_server/esp_now_server_front.png){:target="_blank"}: View the image of the PCB designs.
-- [Schematics PDF](Schematics%20and%20PCB/esp_now_server/esp_now_server.pdf){:target="_blank"}: Access the detailed schematics in PDF format.
-- [KiCad Files](Schematics%20and%20PCB/esp_now_server/){:target="_blank"}: Download the KiCad project files for further exploration and customization.
+- [PCB Image](Schematics%20and%20PCB/esp_now_server/esp_now_server_front.png): View the image of the PCB designs.
+- [Schematics PDF](Schematics%20and%20PCB/esp_now_server/esp_now_server.pdf): Access the detailed schematics in PDF format.
+- [KiCad Files](Schematics%20and%20PCB/esp_now_server/): Download the KiCad project files for further exploration and customization.
 
 Feel free to utilize these resources to understand the PCB design and schematics, make modifications if needed, and proceed with printing the PCB for your project.

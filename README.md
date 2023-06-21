@@ -1,4 +1,4 @@
-<p align="center"><img src="/images/logo.png" alt="HueMix-Link's logo"/></p>
+<p align="center"><img src="/images/logo.png" alt="HueMix-Link's logo", width="400" ></p>
 
 <h1 align="center">HueMix-Link</h1>
 

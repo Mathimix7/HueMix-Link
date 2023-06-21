@@ -1,6 +1,5 @@
-<p align="center"><img src="/images/logo.png" alt="HueMix-Link's logo", width="250" ></p>
-
 <h1 align="center">HueMix-Link</h1>
+<p align="center"><img src="/images/logo.png" alt="HueMix-Link's logo", width="250" ></p>
 
 ## Project Overview
 

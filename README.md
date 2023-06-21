@@ -1,4 +1,4 @@
-<p align="center"><img src="" alt="HueMix-Link's logo"/></p>
+<p align="center"><img src="/images/logo.png" alt="HueMix-Link's logo"/></p>
 
 <h1 align="center">HueMix-Link</h1>
 
@@ -42,13 +42,30 @@ The HueMix Link website provides a user-friendly interface for configuring butto
 To set up the Linux service for hosting the HueMix Link website and running the TCP server, follow these steps:
 #### TCP service:
 1. Run `sudo nano /etc/systemd/system/huemixlinktcp.service`
-2. Paste code provided at [HueMix-Link TCP service](../blob/main/systemd-services/huemixlinktcp.service).
+2. Paste code provided at [HueMix-Link TCP service](../main/systemd-services/huemixlinktcp.service).
 3. Change paths as necessary then save and close the file.
 4. Run `sudo systemctl enable huemixlinktcp` and `sudo systemctl start huemixlinktcp`. 
 5. TCP server should be up and running. To check status run `sudo systemctl status huemixlinktcp`.
 #### Website service:
 1. Run `sudo nano /etc/systemd/system/huemixlinkwebsite.service`
-2. Paste code provided at [HueMix-Link Website service](../blob/main/systemd-services/huemixlinkwebsite.service).
+2. Paste code provided at [HueMix-Link Website service](../main/systemd-services/huemixlinkwebsite.service).
 3. Change paths as necessary then save and close the file.
 4. Run `sudo systemctl enable huemixlinkwebsite` and `sudo systemctl start huemixlinkwebsite`. 
 5. Website server should be up and running. To check status run `sudo systemctl status huemixlinkwebsite`.
+
+## 3D Model
+- This 3D model represents the physical design of the HueMix-Link button and server.
+- Dimensions: 10cm x 5cm x 2cm
+- To assemble the hardware, follow the provided PCB layout and connect the components accordingly.
+
+![HueMix-Link 3D Model](3d-model.png)
+
+## PCB and Schematics
+
+If you are interested in printing the PCB and reviewing the schematics, you can find the necessary files and resources below:
+
+- [PCB Image](link-to-pcb-image): View the image of the PCB design.
+- [Schematics PDF](link-to-schematics-pdf): Access the detailed schematics in PDF format.
+- [KiCad Files](link-to-kicad-files): Download the KiCad project files for further exploration and customization.
+
+Feel free to utilize these resources to understand the PCB design and schematics, make modifications if needed, and proceed with printing the PCB for your project.

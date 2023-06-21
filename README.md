@@ -9,7 +9,7 @@ HueMix Link provides a convenient way to control Hue lights using a physical but
 
 To set up the HueMix Link project, follow these steps:
 
-1. Run the `tcp_server.py` script and the `website.py` on the Linux machine. [Set-up service](#linux-server-setup)
+1. Run the `tcp_server.py` script and the `website.py` on the Linux machine. [Set-up service](#linux-service-setup)
 2. Configure the hue bridge and assign ports according to your preferences.
 3. Connect the ESP-based button according to the provided PCB and wire connections.
 4. Connect the ESP-based server according to the provided PCB and wire connections.
@@ -40,15 +40,15 @@ The HueMix Link website provides a user-friendly interface for configuring butto
 ## Linux Service Setup
 
 To set up the Linux service for hosting the HueMix Link website and running the TCP server, follow these steps:
-### TCP service:
+#### TCP service:
 1. Run `sudo nano /etc/systemd/system/huemixlinktcp.service`
 2. Paste code provided at [HueMix-Link TCP service](../blob/main/systemd-services/huemixlinktcp.service).
 3. Change paths as necessary then save and close the file.
 4. Run `sudo systemctl enable huemixlinktcp` and `sudo systemctl start huemixlinktcp`. 
 5. TCP server should be up and running. To check status run `sudo systemctl status huemixlinktcp`.
-### Website service:
-1. Run `sudo nano /etc/systemd/system/huemixlinktcp.service`
-2. Paste code provided at [HueMix-Link TCP service](../blob/main/systemd-services/huemixlinktcp.service).
+#### Website service:
+1. Run `sudo nano /etc/systemd/system/huemixlinkwebsite.service`
+2. Paste code provided at [HueMix-Link Website service](../blob/main/systemd-services/huemixlinkwebsite.service).
 3. Change paths as necessary then save and close the file.
-4. Run `sudo systemctl enable huemixlinktcp` and `sudo systemctl start huemixlinktcp`. 
-5. TCP server should be up and running. To check status run `sudo systemctl status huemixlinktcp`.
+4. Run `sudo systemctl enable huemixlinkwebsite` and `sudo systemctl start huemixlinkwebsite`. 
+5. Website server should be up and running. To check status run `sudo systemctl status huemixlinkwebsite`.

@@ -39,7 +39,7 @@ WiFiManager wifiManager;
 Bounce button;
 
 WiFiManagerParameter custom_tcp_server("server", "TCP Server IP", "", 40);
-WiFiManagerParameter custom_tcp_port("port", "TCP Server Port", "", 6);
+WiFiManagerParameter custom_tcp_port("port", "TCP Server Port", "7777", 6);
 
 void toggleLED() {
   ledState = !ledState;

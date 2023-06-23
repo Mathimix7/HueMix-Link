@@ -83,7 +83,7 @@ def decreaseBrightness(macAddress):
     groupBrightness = groupBrightness['action']['bri']
     groupBrightnessDecrease = 31
     try:
-        requests.put(getaActionEndpoint(groupNumber), data=json.dumps({"bri": str(groupBrightness-groupBrightnessDecrease)}))
+        requests.put(getaActionEndpoint(groupNumber), data=json.dumps({"bri": groupBrightness-groupBrightnessDecrease}))
         logger.debug("Message sent to the Hue Bridge API")
     except Exception as e:
         logger.warning("Hue Bridge API not working" + str(e))
@@ -97,7 +97,7 @@ def increaseBrightness(macAddress):
     groupBrightness = groupBrightness['action']['bri']
     groupBrightnessincrease = 31
     try:
-        requests.put(getaActionEndpoint(groupNumber), data=json.dumps({"bri":str(groupBrightness + groupBrightnessincrease)}))
+        requests.put(getaActionEndpoint(groupNumber), data=json.dumps({"bri": groupBrightness + groupBrightnessincrease}))
         logger.debug("Message sent to the Hue Bridge API")
     except Exception as e:
         logger.warning("Hue Bridge API not working" + str(e))

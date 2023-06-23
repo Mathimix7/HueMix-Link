@@ -245,7 +245,7 @@ void loop() {
     buttonPressed = true;
   }
 
-  if (button.read() == HIGH && buttonPressed && !buttonHeld) {
+  if (button.read() == LOW && buttonPressed && !buttonHeld) {
     if (millis() - buttonHoldStartTime >= holdingThreshold) {
       buttonHeld = true;
     }
@@ -262,10 +262,9 @@ void loop() {
     }
     buttonPressed = false;
   }
-
   if (millis() - holdingIntervalUpdate >= holdingInterval && buttonHeld) {
-    sendData("Holding");
     Serial.println("Holding");
+    sendData("Holding");
     holdingIntervalUpdate = millis();
     lastButtonPress = millis();
   }

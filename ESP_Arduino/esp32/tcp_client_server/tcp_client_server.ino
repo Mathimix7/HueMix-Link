@@ -176,6 +176,8 @@ void buttonReset() {
       if (millis() - buttonPressTime > 5000) {
         wifiManager.resetSettings();
         esp_restart();
+      } else {
+        getServerMacAddresses();
       }
     }
     lastButtonState = buttonState;

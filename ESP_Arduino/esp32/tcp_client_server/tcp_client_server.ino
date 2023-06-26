@@ -213,7 +213,7 @@ void loop() {
     wifiManager.setConnectRetries(100);
     if (wifiManager.getWiFiIsSaved()) wifiManager.setEnableConfigPortal(false);
     wifiManager.autoConnect(ssidName, "HueMixLink");
-    sleep(100);
+    delay(100);
   }
   digitalWrite(LED_WIFI, LOW);
   if (Serial2.available()) {

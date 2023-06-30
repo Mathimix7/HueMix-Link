@@ -18,7 +18,6 @@ def startSocket(sock:socket.socket=None):
     logger.info("starting up on port %s%s" % server_address)
     sock.bind(server_address)
     sock.listen(1)
-    sock.settimeout(3)
     return sock
 
 sock = startSocket()
@@ -42,6 +41,7 @@ def is_valid_mac_address(mac_address):
 while True:
     logger.info('waiting for a connection')
     connection, client_address = sock.accept()
+    connection.settimeout(3)
     try:
         logger.info('connection from ' + str(client_address))
         data = connection.recv(50)

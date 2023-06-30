@@ -6,9 +6,10 @@
 #include <Ticker.h>
 #include <Bounce2.h>
 
-#define LED_WIFI 4
-#define LED_SERIAL 32
-#define BUTTON_PIN 22
+#define LED_WIFI 18
+#define LED_SERIAL 19
+#define BUTTON_PIN 12
+#define BUTTON_RESET 13
 
 bool macAddressesSave;
 String macAddresses;
@@ -17,14 +18,13 @@ String serverIPString;
 String serverPortString;
 const char* serverIP;
 int serverPort;
-const int buttonPin = 26;
 bool buttonState = false;
 bool lastButtonState = false;
 long buttonPressTime;
 char ssid[] = "HueMix Link - ";
 const int combinedLength = sizeof(ssid) + 9; 
 char ssidName[combinedLength];
-bool ledState = false;
+bool ledState = true;
 int lastButtonPress = 0;
 bool buttonPressed = false;
 bool buttonHeld = false;
@@ -43,7 +43,7 @@ WiFiManagerParameter custom_tcp_port("port", "TCP Server Port", "7777", 6);
 
 void toggleLED() {
   ledState = !ledState;
-  digitalWrite(LED_WIFI, ledState ? LOW : HIGH);
+  digitalWrite(LED_WIFI, ledState ? HIGH : LOW);
   Serial.println(ledState);
 }
 
@@ -74,11 +74,11 @@ void retrieveCustomParameters() {
 }
 
 void setup() {
-  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(BUTTON_RESET, INPUT_PULLUP);
   pinMode(LED_WIFI, OUTPUT);
   pinMode(LED_SERIAL, OUTPUT);
-  digitalWrite(LED_WIFI, HIGH);
-  digitalWrite(LED_SERIAL, HIGH);
+  digitalWrite(LED_WIFI, LOW);
+  digitalWrite(LED_SERIAL, LOW);
   Serial.begin(115200);
   Serial.println("Starting...");
   Serial2.begin(19200);
@@ -116,7 +116,7 @@ void setup() {
   Serial.println(serverPort);
 
   startHandshakeSerial();
-  lastButtonState = digitalRead(buttonPin);
+  lastButtonState = digitalRead(BUTTON_RESET);
 }
 
 void startHandshakeSerial() {
@@ -166,7 +166,7 @@ void getServerMacAddresses() {
 }
 
 void buttonReset() {
-  buttonState = digitalRead(buttonPin);
+  buttonState = digitalRead(BUTTON_RESET);
   if (buttonState != lastButtonState) {
     if (buttonState == LOW) {
       Serial.println("Button Pressed");
@@ -196,7 +196,7 @@ void sendData(const char* message) {
   strcat(combinedString, macAddressString.c_str());
   if (!client.connected()) {
     if (client.connect(serverIP, serverPort)) {
-      digitalWrite(LED_SERIAL, LOW);
+      digitalWrite(LED_SERIAL, HIGH);
       Serial.println("Connected to server");
       client.print(combinedString);
       client.flush();
@@ -206,18 +206,18 @@ void sendData(const char* message) {
 }
 
 void loop() {
-  digitalWrite(LED_SERIAL, HIGH);
+  digitalWrite(LED_SERIAL, LOW);
   buttonReset();
   while (WiFi.status() != WL_CONNECTED) {
     buttonReset();
-    digitalWrite(LED_WIFI, HIGH);
+    digitalWrite(LED_WIFI, LOW);
     wifiManager.setConnectTimeout(180);
     wifiManager.setConnectRetries(100);
     if (wifiManager.getWiFiIsSaved()) wifiManager.setEnableConfigPortal(false);
     wifiManager.autoConnect(ssidName, "HueMixLink");
-    delay(100);
+    sleep(100);
   }
-  digitalWrite(LED_WIFI, LOW);
+  digitalWrite(LED_WIFI, HIGH);
   if (Serial2.available()) {
     String data = Serial2.readStringUntil('\n');
     data.trim();
@@ -226,7 +226,7 @@ void loop() {
     } else {
       if (!client.connected()) {
         if (client.connect(serverIP, serverPort)) {
-          digitalWrite(LED_SERIAL, LOW);
+          digitalWrite(LED_SERIAL, HIGH);
           Serial.println("Connected to server");
           client.print(data);
           client.flush();

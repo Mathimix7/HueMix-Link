@@ -6,6 +6,7 @@ import time
 from HueActivations import goThruScenes, TurnOffScene, decreaseBrightness, increaseBrightness, checkStatus, updateAPI
 from HueActivations import savedBridge
 import json
+import re
 
 def startSocket(sock:socket.socket=None):
     if sock:
@@ -17,10 +18,10 @@ def startSocket(sock:socket.socket=None):
     logger.info("starting up on port %s%s" % server_address)
     sock.bind(server_address)
     sock.listen(1)
+    sock.settimeout(3)
     return sock
 
 sock = startSocket()
-
 NotFound = True
 ButtonNumberTimes = {}
 ButtonHoldingStatus = {}
@@ -33,6 +34,10 @@ for i in range(len(obj)):
     ButtonNumberTimes[mac] = 0
     ButtonHoldingStatus[mac] = 0
     ButtonTimeUpdate[mac] = 0
+
+def is_valid_mac_address(mac_address):
+    pattern = r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$'
+    return re.match(pattern, mac_address) is not None
 
 while True:
     logger.info('waiting for a connection')
@@ -58,9 +63,12 @@ while True:
                         if mac in server["macAddress"]:
                             server["lastUsed"] = round(datetime.timestamp(datetime.now()))
                     if mac not in serversMacs:
-                        serversMacs.append(mac)
-                        servers.append({"deviceName": "UNKNOWN", "macAddress": mac, "lastUsed": round(datetime.timestamp(datetime.now()))})
-                        logger.info(f"Server not registered, {mac} succesfully added!")
+                        if is_valid_mac_address(mac):
+                            serversMacs.append(mac)
+                            servers.append({"deviceName": "UNKNOWN", "macAddress": mac, "lastUsed": round(datetime.timestamp(datetime.now()))})
+                            logger.info(f"Server not registered, {mac} succesfully added!")
+                        else:
+                            logger.info(f"invalid mac: {mac} skipping...")
                     result = ",".join(serversMacs)
                     connection.sendall(result.encode())
                     with open(os.path.join(PATH, "servers.json"), "w") as f:

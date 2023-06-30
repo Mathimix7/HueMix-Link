@@ -1,17 +1,18 @@
 #include <esp_now.h>
 #include <WiFi.h>
 
-#define LED_PIN 2
+#define LED_PIN 19
 
 volatile bool sendDataFlag = false;
 bool macAddressesSave = false;
 const uint8_t* sendDataMac;
 String recievedData;
 String macAddresses;
+esp_now_peer_info_t peerInfo;
 
 void setup() {
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+  digitalWrite(LED_PIN, HIGH);
   Serial.begin(115200);
   delay(100);
 
@@ -22,6 +23,8 @@ void setup() {
     Serial.println("Error initializing ESP-NOW");
     return;
   }
+  esp_now_register_recv_cb(onDataReceived);
+  esp_now_register_send_cb(onDataSent);
   
   Serial2.begin(19200);
   Serial2.println("handshake");
@@ -39,10 +42,7 @@ void setup() {
     }
   }
 
-  // esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
-  esp_now_register_recv_cb(onDataReceived);
-  esp_now_register_send_cb(onDataSent);
-  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(LED_PIN, LOW);
 }
 
 void startHandshakeSerial() {
@@ -87,21 +87,19 @@ void loop() {
 
 void sendRepeaterMacs() {
   String data;
-  if (macAddressesSave == true){
+  if (macAddressesSave == true) {
     data = macAddresses;
-  }else{
+  } else {
     data = "cancel";
   }
-  esp_now_peer_info_t peerInfo;
-  memcpy(peerInfo.peer_addr, (uint8_t*)sendDataMac, 6);
+
+  memcpy(peerInfo.peer_addr, sendDataMac, 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
-  uint8_t buffer[data.length()];
-  for (size_t i = 0; i < data.length(); i++) {
-    buffer[i] = static_cast<uint8_t>(data.charAt(i));
-  }
-  esp_err_t result = esp_now_send(sendDataMac, buffer, data.length());
-  
+  esp_now_add_peer(&peerInfo);
+  Serial.println(data.c_str());
+  esp_err_t result = esp_now_send(peerInfo.peer_addr, (const uint8_t*)data.c_str(), data.length() + 1);
+
   if (result == ESP_OK) {
     Serial.println("Data sent successfully");
   } else {
@@ -121,7 +119,7 @@ void onDataSent(const uint8_t* mac, esp_now_send_status_t  sendStatus) {
 
 void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   sendDataMac = mac;
-  digitalWrite(LED_PIN, LOW);
+  digitalWrite(LED_PIN, HIGH);
   recievedData = (char*)data;
   if (recievedData.startsWith("HML:LFB")) {
     char *delimiter = ";";
@@ -130,18 +128,20 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
     if (second_part != NULL) {
       second_part += strlen(delimiter);
       while (*second_part == ' ') {
-          second_part++;
+        second_part++;
       }
     }
     recievedData = (char*)second_part;
   }
   String rawRecievedData = recievedData;
   String macAddress = WiFi.macAddress();
-  recievedData = recievedData + "," +macAddress;
+  if (!recievedData.endsWith(macAddress)) {
+    recievedData = recievedData + "," + macAddress;
+  }
   Serial.println(recievedData);
   Serial2.print(recievedData);
   Serial2.println();
-  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(LED_PIN, LOW);
   if (rawRecievedData.endsWith("HoldingStopped") || rawRecievedData.endsWith("Once")) {
     delay(500);
     sendRepeaterMacs();

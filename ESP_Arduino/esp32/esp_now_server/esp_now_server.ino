@@ -6,7 +6,6 @@
 volatile bool sendDataFlag = false;
 bool macAddressesSave = false;
 const uint8_t* sendDataMac;
-String recievedData;
 String macAddresses;
 esp_now_peer_info_t peerInfo;
 
@@ -120,8 +119,8 @@ void onDataSent(const uint8_t* mac, esp_now_send_status_t  sendStatus) {
 void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   sendDataMac = mac;
   digitalWrite(LED_PIN, HIGH);
-  recievedData = (char*)data;
-  if (recievedData.startsWith("HML:LFB")) {
+  String receivedData((const char*)data, len);
+  if (receivedData.startsWith("HML:LFB")) {
     char *delimiter = ";";
     char *second_part;
     second_part = strstr((char*)data, delimiter);
@@ -131,18 +130,15 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
         second_part++;
       }
     }
-    recievedData = (char*)second_part;
+    receivedData = String(second_part);
   }
-  String rawRecievedData = recievedData;
+  String rawReceivedData = receivedData;
   String macAddress = WiFi.macAddress();
-  if (!recievedData.endsWith(macAddress)) {
-    recievedData = recievedData + "," + macAddress;
-  }
-  Serial.println(recievedData);
-  Serial2.print(recievedData);
-  Serial2.println();
+  String dataToSend = receivedData + "," + macAddress;
+  Serial.println(dataToSend);
+  Serial2.println(dataToSend);
   digitalWrite(LED_PIN, LOW);
-  if (rawRecievedData.endsWith("HoldingStopped") || rawRecievedData.endsWith("Once")) {
+  if (rawReceivedData.endsWith("HoldingStopped") || rawReceivedData.endsWith("Once")) {
     delay(500);
     sendRepeaterMacs();
   }

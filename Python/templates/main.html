@@ -1,23 +1,57 @@
-{% extends 'base.html' %}
-<h1>{% block title %} Buttons {% endblock %}</h1>
-{% block rawContent %}
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
-    <div class="button-container">
-        <button id="buttonHref">Buttons</button>
-        <button id="serversHref">Servers</button>
-        <button id="settingsHref">Settings</button>
-    </div>
-    <script>
-        document.getElementById("serversHref").addEventListener("click", function() {
-          window.location.href = "/servers";
-        });
-        document.getElementById("buttonHref").addEventListener("click", function() {
-          window.location.href = "/buttons";
-        });
-        document.getElementById("settingsHref").addEventListener("click", function() {
-          window.location.href = "/settings";
-        });
-    </script>
+{% extends "base.html" %}
+{% block title %} Home {% endblock %}
+{% block content %}
+<style>
+  .button-container {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    margin-top: 20px;
+  }
 
+  .button {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex: 1 1 250px;
+    max-width: 250px;
+    height: 250px;
+    margin: 10px;
+    font-size: 25px;
+    text-align: center;
+    text-decoration: none;
+    background-color: #0D19A3;
+    color: #fff;
+    border-radius: 5px;
+    transition: background-color 0.3s ease;
+  }
+
+  .button span {
+    display: inline-block;
+  }
+
+  .button:hover {
+    background-color: #080F5B;
+  }
+
+  .main-heading {
+    text-align: center;
+    margin-top: 50px;
+  }
+</style>
+<section>
+  <h2 class="main-heading">Welcome to HueMix Link</h2>
+  <div class="button-container">
+    <a class="button button-configure" href="/buttons">
+      <span>Configure Buttons</span>
+    </a>
+    <a class="button button-setup" href="/servers">
+      <span>Set Up Servers</span>
+    </a>
+    <a class="button button-settings" href="/settings">
+      <span>Adjust Settings</span>
+    </a>
+  </div>
+</section>
 {% endblock %}

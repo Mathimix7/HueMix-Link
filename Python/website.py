@@ -12,7 +12,6 @@ def main():
 @app.route("/settings", methods=['POST', 'GET'])
 def settings():
     if request.method == 'POST':
-        print(request.form["buttons"])
         if request.form['buttons'] == 'Set-Up HueBridge':
             return redirect(url_for('bridges'))
         elif request.form['buttons'] == "Set-Up Ports":
@@ -38,7 +37,7 @@ def setupports():
             flash(u'Changes saved successfully!', 'success')
             return redirect(url_for('settings'))
         elif request.form['buttons'] == 'Cancel':
-            flash(u'Set-up cancelled successfully!', 'success')
+            flash(u'Set-up cancelled successfully!', 'info')
             return redirect(url_for('settings'))
     return render_template('setupports.html', tcpPort=tcpPort, websitePort=websitePort)
 
@@ -52,17 +51,14 @@ def bridges():
         except:
             ip = None
     if ip != None:
-        print(ip)
         return redirect(f"/setup?ip={ip}")
     return render_template('discoverBridge.html')
 
 @app.route("/discoverManual")
 def manualDiscover():
     ip = request.args.get("ip")
-    print(ip)
     try:
         a = requests.get(url=f"http://{ip}/api/newdeveloper").json()
-        print(a)
         if a == [{"error":{"type":1,"address":"/","description":"unauthorized user"}}]:
             return redirect(f"/setup?ip={ip}")
         else:
@@ -79,7 +75,6 @@ def createUser():
     ip = request.args.get("ip")
     try:
         a = requests.post(url=f"http://{ip}/api", json={"devicetype":"HueMixLink"}).json()
-        print(a)
     except:
         flash("Unexpected Error!", "error")
         return render_template(url_for("settings"))
@@ -87,7 +82,6 @@ def createUser():
         if a[0]['error']["description"] == "link button not pressed":
             return render_template("pressButton.html")
     except Exception as e:
-        print(e)
         if a[0]["success"]:
             token = a[0]["success"]["username"]
             saveBridge(ip, token)
@@ -144,7 +138,7 @@ def serverRename():
                 flash(u'Name is too short!', 'error')
                 return redirect(url_for(f'setupRename', macAddress=macAddress))
         elif request.form['buttons'] == 'Cancel':
-            flash(u'Set-up cancelled successfully!', 'success')
+            flash(u'Set-up cancelled successfully!', 'info')
             return redirect(url_for('servers'))
     return render_template('setupRename.html')
 
@@ -196,7 +190,7 @@ def setupRename():
                 flash(u'Name is too short!', 'error')
                 return redirect(url_for(f'setupRename', macAddress=macAddress))
         elif request.form['buttons'] == 'Cancel':
-            flash(u'Set-up cancelled successfully!', 'success')
+            flash(u'Set-up cancelled successfully!', 'info')
             return redirect(url_for('home'))
     return render_template('setupRename.html')
 
@@ -214,6 +208,9 @@ def setupRoom():
     RoomList,RoomID = getRooms()
     try:
         if request.method == 'POST':
+            if request.form['buttons'] == 'Cancel':
+                flash(u'Set-up cancelled successfully!', 'info')
+                return redirect(url_for('home'))
             Room = request.form['rooms']
             return redirect(url_for(f'setupScenes', macAddress=macAddress, RoomID=RoomID[Room]))
     except: 
@@ -244,6 +241,9 @@ def setupScenes():
     SceneList, SceneCodeList = getScenes(RoomID)
     try:
         if request.method == 'POST': 
+            if request.form['buttons'] == 'Cancel':
+                flash(u'Set-up cancelled successfully!', 'info')
+                return redirect(url_for('home'))
             ScenesSelectedScenes = request.form.getlist('scenes')
             ScenesCode = ""
             if len(ScenesSelectedScenes) < 2:
@@ -286,7 +286,7 @@ def setupConfirm():
     SceneNamesList = ScenesIDtoName(SceneCodesList)
     if request.method == 'POST':
         if request.form['buttons'] == 'Cancel':
-            flash(u'Set-up cancelled successfully!', 'success')
+            flash(u'Set-up cancelled successfully!', 'info')
             return redirect(url_for('home'))
         elif request.form['buttons'] == 'Confirm':
             try:
@@ -299,4 +299,4 @@ def setupConfirm():
     return render_template('setupConfirm.html', messages=SceneNamesList, macAddress=macAddress, SceneNamesList=",".join(list(SceneNamesList.values())))
 
 
-app.run(host="0.0.0.0", port=getWebsitePort(), debug=True)
+app.run(host="0.0.0.0", port=getWebsitePort())

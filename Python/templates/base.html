@@ -1,78 +1,58 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
-    <title>{% block title %} {% endblock %}</title>
-    <style>
-        nav a {
-            color: #16a085;
-            font-size: 3em;
-            font-family: Helvetica, Arial, sans-serif;
-            text-decoration: none;
-            margin: 0 auto;
-            display: table;
-        }
-    </style>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='main.css') }}" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='base.css') }}"/>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <title>HueMix-Link - {% block title %} {% endblock %}</title>
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
 </head>
+
 <body>
-    <div id="page-container">
-        <div id="content-wrap">
-          <!-- all other page content -->
-            <nav>
-                <a href="{{ url_for('main') }}">Hue Buttons Setup Website</a>
-            </nav>
-            <hr>
-            <style>
-                .alert.error {
-                    color: red;
-                    background: rgba(255, 0, 0, 0.3);
-                    font-size: 25px;
-                    font-family: Helvetica, Arial, sans-serif;
-                    }
-                .alert.success {
-                    color: #00A300;
-                    background: rgba(0, 255, 0, 0.3);
-                    font-size: 25px;
-                    font-family: Helvetica, Arial, sans-serif;
-                    }
-            </style>
-            {% with messages = get_flashed_messages(with_categories=true) %} {% if
-                messages %} {% for category, message in messages %} {% if category ==
-                'error' %}
-                <div class="alert {{ category }}" role="alert">
-                    <p><strong>Error:</strong> {{ message }} <button type="button" class="buttonInvisible" data-dismiss="alert"> <span aria-hidden="true">&times;</span></button></p>
-                </div>
-                {% else %}
-                <div class="alert {{ category }}" role="alert">
-                    <p><strong>Success:</strong> {{ message }} <button type="button" class="buttonInvisible" data-dismiss="alert"> <span aria-hidden="true">&times;</span></button></p>
-                </div>
-                {% endif %} {% endfor %} {% endif %} {% endwith %}
-                <script
-                src="https://code.jquery.com/jquery-3.2.1.slim.min.js"
-                integrity="sha384-KJ3o2DKtIkvYIK3UENzmM7KCkRr/rE9/Qpg6aAZGJwFDMVNA/GpGFF93hXpG5KkN"
-                crossorigin="anonymous"
-                ></script>
-                <script
-                src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"
-                integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q"
-                crossorigin="anonymous"
-                ></script>
-                <script
-                src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"
-                integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl"
-                crossorigin="anonymous"
-                ></script>
-            <div class="content">
-                {% block content %} {% endblock %}
-            </div>
-            {% block rawContent %} {% endblock %}
-        </div>
-        <footer id="footer">
-            <p>Developer: Mathimix<br>
-            <a href="https://github.com/mathimix7">Github Page</a>
-        </footer>
+  <nav>
+    <div class="logo-container">
+      <img src="../static/logo.png" alt="Logo" class="logo">
+      <a class="title" href="/">HueMix-Link</h1>
     </div>
+    <div class="nav-links-big">
+      <ul class="nav-links">
+        <li><a href="/">Home</a></li>
+        <li><a href="/buttons">Buttons</a></li>
+        <li><a href="/servers">Servers</a></li>
+        <li><a href="/settings">Settings</a></li>
+      </ul>
+    </div>
+      <div class="menu-icon" onclick="toggleMenu()">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </div>
+    <div class="responsive-menu">
+      <ul class="nav-links">
+        <li><a href="/">Home</a></li>
+        <li><a href="/buttons">Buttons</a></li>
+        <li><a href="/servers">Servers</a></li>
+        <li><a href="/settings">Settings</a></li>
+      </ul>
+    </div>
+  </nav>
+  {% with messages = get_flashed_messages(with_categories=true) %} 
+  {% if messages %} 
+  {% for category, message in messages %} 
+    <script>
+      executeAlert("{{ category }}", "{{ message }}");
+    </script>  
+ {% endfor %} {% endif %} {% endwith %}
+  <main>
+    {% block content %}
+    
+    {% endblock %}
+  </main>
+  <footer>
+    <p>&copy; 2023 HueMix-Link. All rights reserved.</p>
+    <p>GitHub repository: <a href="https://github.com/Mathimix7/HueMix-Link" target="_blank">GitHub</a></p>
+  </footer>
 </body>
 </html>

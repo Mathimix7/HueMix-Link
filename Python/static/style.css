@@ -1,0 +1,223 @@
+.header {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.number {
+  color: #0D19A3;
+  font-size: 2rem;
+  font-family: Helvetica, Arial, sans-serif;
+}
+
+.content {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.list {
+  max-width: 100%;
+}
+
+h1 {
+  padding: 0.5rem 1rem;
+  margin: 0.5rem 0.5rem 0 0.5rem;
+  border-left: 0.1875rem solid #0D19A3;
+  font-family: Helvetica, Arial, sans-serif;
+  text-transform: uppercase;
+  line-height: 130%;
+  font-size: 2rem;
+}
+
+.list__item {
+  margin: 0 0 0.5rem 0;
+  padding: 0;
+  list-style-type: none;
+}
+
+.label--checkbox,
+.label--radio {
+  position: relative;
+  margin: 0.5rem;
+  font-family: Arial, sans-serif;
+  line-height: 150%;
+  cursor: pointer;
+}
+
+.checkbox {
+  position: relative;
+  top: -0.375rem;
+  margin: 0 1rem 0 0;
+  cursor: pointer;
+}
+
+.checkbox:before {
+  -webkit-transition: -webkit-transform 0.4s cubic-bezier(0.45, 1.8, 0.5, 0.75);
+  -moz-transition: -moz-transform 0.4s cubic-bezier(0.45, 1.8, 0.5, 0.75);
+  transition: transform 0.4s cubic-bezier(0.45, 1.8, 0.5, 0.75);
+  -webkit-transform: rotate(-45deg) scale(0, 0);
+  -moz-transform: rotate(-45deg) scale(0, 0);
+  -ms-transform: rotate(-45deg) scale(0, 0);
+  -o-transform: rotate(-45deg) scale(0, 0);
+  transform: rotate(-45deg) scale(0, 0);
+  content: "";
+  position: absolute;
+  left: 0.1875rem;
+  top: 0.125rem;
+  z-index: 1;
+  width: 0.75rem;
+  height: 0.375rem;
+  border: 2px solid #0D19A3;
+  border-top-style: none;
+  border-right-style: none;
+}
+
+.checkbox:checked:before {
+  -webkit-transform: rotate(-45deg) scale(1, 1);
+  -moz-transform: rotate(-45deg) scale(1, 1);
+  -ms-transform: rotate(-45deg) scale(1, 1);
+  -o-transform: rotate(-45deg) scale(1, 1);
+  transform: rotate(-45deg) scale(1, 1);
+}
+
+.checkbox:after {
+  content: "";
+  position: absolute;
+  top: -0.125rem;
+  left: 0;
+  width: 1rem;
+  height: 1rem;
+  background: #fff;
+  border: 2px solid #f2f2f2;
+  cursor: pointer;
+}
+
+.radio {
+  position: relative;
+  margin: 0 1rem 0 0;
+  cursor: pointer;
+  top: 2px;
+}
+
+.radio:before {
+  -webkit-transition: -webkit-transform 0.4s cubic-bezier(0.45, 1.8, 0.5, 0.75);
+  -moz-transition: -moz-transform 0.4s cubic-bezier(0.45, 1.8, 0.5, 0.75);
+  transition: transform 0.4s cubic-bezier(0.45, 1.8, 0.5, 0.75);
+  -webkit-transform: scale(0, 0);
+  -moz-transform: scale(0, 0);
+  -ms-transform: scale(0, 0);
+  -o-transform: scale(0, 0);
+  transform: scale(0, 0);
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0.125rem;
+  z-index: 1;
+  width: 0.75rem;
+  height: 0.75rem;
+  background: #0D19A3;
+  border-radius: 50%;
+}
+
+.radio:checked:before {
+  -webkit-transform: scale(1, 1);
+  -moz-transform: scale(1, 1);
+  -ms-transform: scale(1, 1);
+  -o-transform: scale(1, 1);
+  transform: scale(1, 1);
+}
+
+.radio:after {
+  content: "";
+  position: absolute;
+  top: -0.25rem;
+  left: -0.125rem;
+  width: 1rem;
+  height: 1rem;
+  background: #fff;
+  border: 2px solid #f2f2f2;
+  border-radius: 50%;
+}
+
+.button-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-left: 50px;
+  margin-top: -10px;
+}
+
+.button3 {
+  display:inline-block;
+  padding:0.4em 1.3em;
+  border-radius: .5em;
+  box-sizing: border-box;
+  text-decoration:none;
+  font-family: Helvetica, Arial, sans-serif;
+  font-weight: 300;
+  font-size: .8rem;
+  color:#FFFFFF;
+  background-color:#0D19A3;
+  text-align:center;
+  transition: all 0.5s;
+  margin-right: 10px;
+  border: 3px solid #3f3f3f;
+}
+
+.button3:hover{
+  background-color:#07004c;
+}
+
+.sortable-list .item {
+  margin-left: -40px;
+  list-style: none;
+  display: flex;
+  cursor: move;
+  background: #fff;
+  align-items: center;
+  border-radius: 5px;
+  padding: 10px 13px;
+  margin-bottom: 11px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+  border: 1px solid #ccc;
+}
+
+.item .details {
+  display: flex;
+  align-items: center;
+}
+
+.item .details span {
+  font-size: 1rem;
+  margin-left: 10px;
+}
+
+.item i {
+  color: #474747;
+  font-size: 1.13rem;
+}
+
+.item.dragging {
+  opacity: 0.6;
+}
+.item.dragging :where(.details, i) {
+  opacity: 0;
+}
+
+@media (max-width: 420px) {
+  .list__item {
+    font-size: 0.9rem;
+  }
+
+  .number {
+    padding-left: 5px;
+  }
+
+  h1 {
+    font-size: 1.8rem;
+  }
+  .button3 {
+    font-size: .75rem;
+  }
+}

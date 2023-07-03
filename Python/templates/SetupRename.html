@@ -1,23 +1,23 @@
 {% extends 'base.html' %}
-<h1>{% block title %} Rooms {% endblock %}</h1>
+<h1>{% block title %} Rename {% endblock %}</h1>
 {% block content %}
-<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
-<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}"/>
 <header class="header">
     <p class="number">#2</p>
-    <h1 style="font-family:verdana">Specify button's Name</h1>
+    <h1 style="font-family:verdana">Specify New<br>Device Name</h1>
   </header>
 <form name="roomForm" action="" method="post" onsubmit="">
     <section class="content">
         <ul class="list">
-        <li class="list__item">
-            <form action="/action_page.php">
-                <label style="font-family:verdana" for="fname">New name:</label>
-                <input type="text" id="nname" name="nname"><br><br>
-                <button type="submit" class="button3" value="Cancel" name="buttons">Cancel </button>
-                <button type="submit" class="button3" value="Change" name="buttons">Change </button>
-            </form>
-        </li>
-</section>
+            <li class="list__item">
+                <form action="">
+                    <label style="font-family:verdana" for="fname">New name:</label>
+                    <input type="text" id="nname" name="nname"><br><br>
+                    <button type="submit" class="button3" value="Cancel" name="buttons">Cancel</button>
+                    <button type="submit" class="button3" value="Change" name="buttons">Change</button>
+                </form>
+            </li>
+        </ul>
+    </section>
+</form>
 {% endblock %}
-

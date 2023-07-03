@@ -299,4 +299,4 @@ def setupConfirm():
     return render_template('setupConfirm.html', messages=SceneNamesList, macAddress=macAddress, SceneNamesList=",".join(list(SceneNamesList.values())))
 
 
-app.run(host="0.0.0.0", port=getWebsitePort(), debug=True)
+app.run(host="0.0.0.0", port=getWebsitePort())

@@ -22,5 +22,13 @@
         <button type="submit" class="button3" value="Rename" name="buttons">Rename </button>
     </div>
 </form>
-
+<script>
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Enter') {
+        event.preventDefault(); 
+        var changeButton = document.querySelector('button[value="Rename"]');
+        changeButton.click();
+      }
+    });
+</script>
 {% endblock %}

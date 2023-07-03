@@ -1,25 +1,27 @@
 {% extends 'base.html' %}
-<h1>{% block title %} Rooms {% endblock %}</h1>
+{% block title %} Room {% endblock %}
 {% block content %}
-<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
-<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}"/>
 <header class="header">
     <p class="number">#2</p>
-    <h1 style="font-family:verdana">Specify button's Room</h1>
+    <h1 style="font-family:verdana">Choose <br>Button's<br> room</h1>
   </header>
 <form name="roomForm" action="" method="post" onsubmit="">
     <section class="content">
         <ul class="list">
-        {% for i in messages %}
-        <li class="list__item">
-            <label class="label--radio">
-                <input style="font-family:verdana" type="radio" class="radio" name="rooms" id="{{ messages[i] }}" value="{{ messages[i] }}"> {{ messages[i] }} </input><br>
-            </label>
-        </li>
-        {% endfor %}
-        <br>
-        <button type="submit" class="button3">Next</button>
-    </form>
-</section>
+            {% for i in messages %}
+            <li class="list__item">
+                <label class="label--radio">
+                    <input style="font-family:verdana" type="radio" class="radio" name="rooms" id="{{ messages[i] }}" value="{{ messages[i] }}"> {{ messages[i] }} </input><br>
+                </label>
+            </li>
+            {% endfor %}
+        </ul>
+    </section>
+    <div class="button-container">
+        <button type="submit" value="Cancel" name="buttons"class="button3">Cancel</button>
+        <button type="submit" value="Next" name="buttons"class="button3">Next</button>
+    </div>
+</form>
 {% endblock %}
 

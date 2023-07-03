@@ -1,17 +1,16 @@
 {% extends 'base.html' %}
 <h1>{% block title %} Confirm Set-up {% endblock %}</h1>
 {% block content %}
-<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
-<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}"/>
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.0/css/line.css">
 <header class="header">
-    <p class="number">#1</p>
-    <h1 style="font-family:verdana">Confirm <br> Set-up</h1>
+    <p class="number">#4</p>
+    <h1 style="font-family:verdana">Confirm Button<br> Set-up</h1>
   </header>
     <section class="content">
         <ul class="list">
             <li class="list__item">
-                <h2 style="font-family:verdana">Button Name:</h2>
+                <h2 style="font-family:verdana;margin-top:-5px">Button Name:</h2>
                 <p style="font-family:verdana">{{ macAddress }}</p>
                 <h2 style="font-family:verdana">Selected Scenes:</h2>
                 <ul class="sortable-list">
@@ -26,10 +25,12 @@
                 </ul>
             </li>
         </ul>
-        <br>
+    </section> 
     <form name="home" action="" method="post" onsubmit="">
-        <button type="submit" class="button3" value="Cancel" name="buttons">Cancel </button>
-        <button type="submit" class="button3" value="Confirm" name="buttons">Confirm </button>
+        <div class="button-container">
+            <button type="submit" class="button3" value="Cancel" name="buttons">Cancel</button>
+            <button type="submit" class="button3" value="Confirm" name="buttons">Confirm</button>
+        </div>
     </form>
     <script>
         const urlParams = new URLSearchParams(window.location.search);
@@ -63,7 +64,8 @@
                 return e.clientY <= sibling.offsetTop + sibling.offsetHeight / 2;
             });
             sortableList.insertBefore(draggingItem, nextSibling);
-        }
+        } 
+
         function updateListsOrder() {
             const items = sortableList.querySelectorAll(".item");
             const updatedSceneCodeList = [];
@@ -85,5 +87,5 @@
         sortableList.addEventListener("dragover", initSortableList);
         sortableList.addEventListener("dragenter", e => e.preventDefault());
     </script>
-</section>
+</header>
 {% endblock %}

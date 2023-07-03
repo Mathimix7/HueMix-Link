@@ -12,7 +12,6 @@ def main():
 @app.route("/settings", methods=['POST', 'GET'])
 def settings():
     if request.method == 'POST':
-        print(request.form["buttons"])
         if request.form['buttons'] == 'Set-Up HueBridge':
             return redirect(url_for('bridges'))
         elif request.form['buttons'] == "Set-Up Ports":
@@ -38,7 +37,7 @@ def setupports():
             flash(u'Changes saved successfully!', 'success')
             return redirect(url_for('settings'))
         elif request.form['buttons'] == 'Cancel':
-            flash(u'Set-up cancelled successfully!', 'success')
+            flash(u'Set-up cancelled successfully!', 'info')
             return redirect(url_for('settings'))
     return render_template('setupports.html', tcpPort=tcpPort, websitePort=websitePort)
 
@@ -144,7 +143,7 @@ def serverRename():
                 flash(u'Name is too short!', 'error')
                 return redirect(url_for(f'setupRename', macAddress=macAddress))
         elif request.form['buttons'] == 'Cancel':
-            flash(u'Set-up cancelled successfully!', 'success')
+            flash(u'Set-up cancelled successfully!', 'info')
             return redirect(url_for('servers'))
     return render_template('setupRename.html')
 
@@ -196,7 +195,7 @@ def setupRename():
                 flash(u'Name is too short!', 'error')
                 return redirect(url_for(f'setupRename', macAddress=macAddress))
         elif request.form['buttons'] == 'Cancel':
-            flash(u'Set-up cancelled successfully!', 'success')
+            flash(u'Set-up cancelled successfully!', 'info')
             return redirect(url_for('home'))
     return render_template('setupRename.html')
 
@@ -214,6 +213,9 @@ def setupRoom():
     RoomList,RoomID = getRooms()
     try:
         if request.method == 'POST':
+            if request.form['buttons'] == 'Cancel':
+                flash(u'Set-up cancelled successfully!', 'info')
+                return redirect(url_for('home'))
             Room = request.form['rooms']
             return redirect(url_for(f'setupScenes', macAddress=macAddress, RoomID=RoomID[Room]))
     except: 
@@ -244,6 +246,9 @@ def setupScenes():
     SceneList, SceneCodeList = getScenes(RoomID)
     try:
         if request.method == 'POST': 
+            if request.form['buttons'] == 'Cancel':
+                flash(u'Set-up cancelled successfully!', 'info')
+                return redirect(url_for('home'))
             ScenesSelectedScenes = request.form.getlist('scenes')
             ScenesCode = ""
             if len(ScenesSelectedScenes) < 2:
@@ -286,7 +291,7 @@ def setupConfirm():
     SceneNamesList = ScenesIDtoName(SceneCodesList)
     if request.method == 'POST':
         if request.form['buttons'] == 'Cancel':
-            flash(u'Set-up cancelled successfully!', 'success')
+            flash(u'Set-up cancelled successfully!', 'info')
             return redirect(url_for('home'))
         elif request.form['buttons'] == 'Confirm':
             try:

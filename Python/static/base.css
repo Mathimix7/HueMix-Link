@@ -176,39 +176,15 @@ footer a {
   .responsive-menu.active {
     display: flex;
   }
-  
-  .nav-links li {
-    margin: 10px 0;
-  }
-}
 
-@media only screen and (max-width: 768px) {
-  .nav-links-big {
-    display: none;
+  .nav-links {
+    flex-direction: column;
+    margin: 0px;
   }
-  
-  .menu-icon {
+
+  .nav-links li {
     display: block;
-  }
-
-  .menu-icon.active span:nth-child(2) {
-    opacity: 0;
-  }
-  
-  .menu-icon.active span:nth-child(1) {
-    transform: rotate(45deg) translate(5.5px, 5.5px);
-  }
-  
-  .menu-icon.active span:nth-child(3) {
-    transform: rotate(-45deg) translate(5.5px, -5.5px);
-  }
-  
-  .responsive-menu.active {
-    display: flex;
-  }
-  
-  .nav-links li {
-    margin: 10px 0;
+    margin: 20px 0px;
   }
 }
 

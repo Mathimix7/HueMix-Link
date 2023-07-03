@@ -51,17 +51,14 @@ def bridges():
         except:
             ip = None
     if ip != None:
-        print(ip)
         return redirect(f"/setup?ip={ip}")
     return render_template('discoverBridge.html')
 
 @app.route("/discoverManual")
 def manualDiscover():
     ip = request.args.get("ip")
-    print(ip)
     try:
         a = requests.get(url=f"http://{ip}/api/newdeveloper").json()
-        print(a)
         if a == [{"error":{"type":1,"address":"/","description":"unauthorized user"}}]:
             return redirect(f"/setup?ip={ip}")
         else:
@@ -78,7 +75,6 @@ def createUser():
     ip = request.args.get("ip")
     try:
         a = requests.post(url=f"http://{ip}/api", json={"devicetype":"HueMixLink"}).json()
-        print(a)
     except:
         flash("Unexpected Error!", "error")
         return render_template(url_for("settings"))
@@ -86,7 +82,6 @@ def createUser():
         if a[0]['error']["description"] == "link button not pressed":
             return render_template("pressButton.html")
     except Exception as e:
-        print(e)
         if a[0]["success"]:
             token = a[0]["success"]["username"]
             saveBridge(ip, token)

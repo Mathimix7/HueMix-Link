@@ -1,11 +1,8 @@
 {% extends 'base.html' %}
-<h1>{% block title %} Buttons {% endblock %}</h1>
-{% block rawContent %}
+<h1>{% block title %} Hue Bridge {% endblock %}</h1>
+{% block content %}
 <body>
     <style>
-        /* body{
-            background: #333333;
-        } */
         h3{
             text-align: center;
             font-size: 30px;
@@ -17,8 +14,8 @@
             font-size: 50px;
             color: #000000
         }
-        img{
-            width: 20%;
+        img {
+            width: 250px;
             display: block;
             margin-left: auto;
             margin-right: auto;
@@ -122,7 +119,7 @@
     <div id="content">
         <h3>HueMix Link</h3>
         <h1>Not Found</h1>
-        <img src="./static/hueBridge.png"/>
+        <img src="{{ url_for('static', filename='hueBridge.png') }}"/>
         <div class="container">
             <h3 class="h3form">Starting manual configuration. Please enter Hue Bridge IP manually.</h3>
             <form action="/discoverManual">
@@ -135,7 +132,7 @@
     <div id="loading">
         <h3>HueMix Link</h3>
         <h1>Searching for Bridges...</h1>
-        <img src="./static/hueBridge.png"/>
+        <img src="{{ url_for('static', filename='hueBridge.png') }}"/>
         <div class="container">
             <div class="lds-dual-ring"></div>
         </div>

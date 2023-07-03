@@ -1,8 +1,7 @@
 {% extends 'base.html' %}
-<h1>{% block title %} Rooms {% endblock %}</h1>
+<h1>{% block title %} Ports {% endblock %}</h1>
 {% block content %}
-<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='buttonStyle.css') }}" />
-<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='button.css') }}" />
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}"/>
 <header class="header">
     <p class="number">#2</p>
     <h1 style="font-family:verdana">SPECIFY SERVER <br>PORTS</h1>
@@ -16,10 +15,12 @@
                 <input type="text" id="TCPPort" name="TCPPort" placeholder="{{ tcpPort }}"><br><br>
                 <label style="font-family:verdana" for="fname">New port Website:</label>
                 <input type="text" id="websitePort" name="websitePort" placeholder="{{ websitePort }}"><br><br>
-                <button type="submit" class="button3" value="Cancel" name="buttons">Cancel </button>
-                <button type="submit" class="button3" value="Save" name="buttons">Save </button>
-            </form>
         </li>
-</section>
+    </section>
+    <div class="button-container">
+        <button type="submit" class="button3" value="Cancel" name="buttons">Cancel </button>
+        <button type="submit" class="button3" value="Save" name="buttons">Save </button>
+    </div>
+</form>
 {% endblock %}
 

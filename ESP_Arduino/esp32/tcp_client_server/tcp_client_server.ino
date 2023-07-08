@@ -5,6 +5,10 @@
 #include <esp_system.h>
 #include <Ticker.h>
 #include <Bounce2.h>
+#include <TimeLib.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <ctime>
 
 #define LED_WIFI 18
 #define LED_SERIAL 19
@@ -32,6 +36,8 @@ unsigned long buttonHoldStartTime = 0;
 unsigned long holdingInterval = 500;
 unsigned long holdingIntervalUpdate = 0;
 unsigned long holdingThreshold = 1000;
+String onTime;
+String offTime;
 
 Ticker ticker;
 WiFiClient client;
@@ -40,11 +46,12 @@ Bounce button;
 
 WiFiManagerParameter custom_tcp_server("server", "TCP Server IP", "", 40);
 WiFiManagerParameter custom_tcp_port("port", "TCP Server Port", "7777", 6);
+WiFiManagerParameter custom_time_off("time", "LED off time", "22", 2);
+WiFiManagerParameter custom_time_on("time", "LED on time", "8", 2);
 
 void toggleLED() {
   ledState = !ledState;
   digitalWrite(LED_WIFI, ledState ? HIGH : LOW);
-  Serial.println(ledState);
 }
 
 void saveCustomParameters() {
@@ -55,8 +62,12 @@ void saveCustomParameters() {
   }
   serverIPString = custom_tcp_server.getValue();
   serverPortString = custom_tcp_port.getValue();
+  onTime = custom_time_off.getValue();
+  offTime = custom_time_on.getValue();
   configFile.println(serverIPString);
   configFile.println(serverPortString);
+  configFile.println(onTime);
+  configFile.println(offTime);
   configFile.close();
 }
 
@@ -68,6 +79,8 @@ void retrieveCustomParameters() {
   }
   serverIPString = configFile.readStringUntil('\n');
   serverPortString = configFile.readStringUntil('\n');
+  onTime = configFile.readStringUntil('\n');
+  offTime = configFile.readStringUntil('\n');
   Serial.println(serverIPString);
   Serial.println(serverPortString);
   configFile.close();
@@ -92,6 +105,8 @@ void setup() {
   button.interval(50);
   wifiManager.addParameter(&custom_tcp_server);
   wifiManager.addParameter(&custom_tcp_port);
+  wifiManager.addParameter(&custom_time_off);
+  wifiManager.addParameter(&custom_time_on);
   std::vector<const char *> wm_menu  = {"wifi"};
   wifiManager.setShowInfoUpdate(false);
   wifiManager.setShowInfoErase(false);
@@ -108,6 +123,22 @@ void setup() {
     Serial.println("retrieving custom param");
     retrieveCustomParameters();
   }
+
+  HTTPClient http;
+  http.begin("http://worldtimeapi.org/api/timezone/America/New_York");
+  int httpResponseCode = http.GET();
+    if (httpResponseCode == HTTP_CODE_OK) {
+      String payload = http.getString();
+      DynamicJsonDocument doc(1024);
+      deserializeJson(doc, payload);
+      const char* estTime = doc["datetime"];
+      Serial.println(estTime);
+      int year, month, day, hour, minute, second;
+      sscanf(estTime, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+      setTime(hour, minute, second, day, month, year);
+      Serial.println("Using api to fetch time");
+    }
+  http.end();
   ticker.detach();
   digitalWrite(LED_WIFI, HIGH);
   serverIP = serverIPString.c_str();
@@ -205,9 +236,26 @@ void sendData(const char* message) {
   } 
 }
 
+bool led_off_time() {
+  time_t currentTime = now();
+  struct tm *timeinfo;
+  timeinfo = localtime(&currentTime);
+  if (timeinfo) {
+    int currentHour = timeinfo->tm_hour;
+    if (currentHour >= offTime.toInt() || currentHour < onTime.toInt()) {
+      return false;
+    } else {
+      return true;
+    }
+  } else {
+    return true;
+  }
+}
+
 void loop() {
   digitalWrite(LED_SERIAL, LOW);
   buttonReset();
+  bool leds_status = led_off_time();
   while (WiFi.status() != WL_CONNECTED) {
     buttonReset();
     digitalWrite(LED_WIFI, LOW);
@@ -217,7 +265,11 @@ void loop() {
     wifiManager.autoConnect(ssidName, "HueMixLink");
     sleep(100);
   }
-  digitalWrite(LED_WIFI, HIGH);
+  if (leds_status) {
+    digitalWrite(LED_WIFI, HIGH);
+  } else {
+     digitalWrite(LED_WIFI, LOW);
+  }
   if (Serial2.available()) {
     String data = Serial2.readStringUntil('\n');
     data.trim();

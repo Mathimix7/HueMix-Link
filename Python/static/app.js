@@ -19,6 +19,10 @@ function closeMenuOnResize() {
 window.addEventListener('resize', closeMenuOnResize);
 
 function executeAlert(alertType, message){
+    var previousAlert = document.querySelector(".alert");
+    if (previousAlert) {
+      previousAlert.remove();
+    }
     var div = document.createElement("div")
     var span = document.createElement("span")
     div.className = "alert " + alertType
@@ -26,7 +30,8 @@ function executeAlert(alertType, message){
     span.className = "closebtn"
     span.innerHTML = "&times;"
     div.appendChild(span)
-    document.body.appendChild(div)
+    var navElement = document.querySelector("nav");
+    navElement.insertAdjacentElement("afterend", div);
     var close = document.getElementsByClassName("closebtn");
     if(close.length == 1){
         div.style.opacity = "0"
@@ -64,7 +69,6 @@ function closeButtonAlert(){
 function resetHeight() {
     const body = document.getElementsByTagName('body')[0];
     body.style.minHeight = window.innerHeight + "px";
-    console.log(window.innerHeight + "px")
 }
 window.addEventListener("load", resetHeight);
 window.addEventListener("resize", resetHeight);

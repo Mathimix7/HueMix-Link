@@ -9,6 +9,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <ctime>
+#include "OTAUpdate.h"
 
 #define LED_WIFI 18
 #define LED_SERIAL 19
@@ -38,6 +39,7 @@ unsigned long holdingIntervalUpdate = 0;
 unsigned long holdingThreshold = 1000;
 String onTime;
 String offTime;
+bool isBetween = false;
 
 Ticker ticker;
 WiFiClient client;
@@ -123,7 +125,7 @@ void setup() {
     Serial.println("retrieving custom param");
     retrieveCustomParameters();
   }
-
+  setupOTA(ssidName, "HueMixLink");
   HTTPClient http;
   http.begin("http://worldtimeapi.org/api/timezone/America/New_York");
   int httpResponseCode = http.GET();
@@ -241,18 +243,23 @@ bool led_off_time() {
   struct tm *timeinfo;
   timeinfo = localtime(&currentTime);
   if (timeinfo) {
+    isBetween = false;
     int currentHour = timeinfo->tm_hour;
-    if (currentHour >= offTime.toInt() || currentHour < onTime.toInt()) {
-      return false;
+    if (onTime.toInt() < offTime.toInt()) {
+      if (currentHour >= onTime.toInt() && currentHour < offTime.toInt()) {
+        isBetween = true;
+      }
     } else {
-      return true;
+      if (currentHour >= onTime.toInt() || currentHour <= offTime.toInt()) {
+        isBetween = true;
+      }
     }
-  } else {
-    return true;
   }
+  return isBetween;
 }
 
 void loop() {
+  handleOTA();
   digitalWrite(LED_SERIAL, LOW);
   buttonReset();
   bool leds_status = led_off_time();
@@ -266,9 +273,9 @@ void loop() {
     sleep(100);
   }
   if (leds_status) {
-    digitalWrite(LED_WIFI, HIGH);
+    digitalWrite(LED_WIFI, LOW);
   } else {
-     digitalWrite(LED_WIFI, LOW);
+     digitalWrite(LED_WIFI, HIGH);
   }
   if (Serial2.available()) {
     String data = Serial2.readStringUntil('\n');

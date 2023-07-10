@@ -1,6 +1,6 @@
 from flask import Flask, render_template, redirect, url_for, flash, request
 import requests
-from HueConfig import getRooms, getDevices, getScenes, checkRooms, checkMacAddress, ScenesIDtoName, confirmConfig, writeNewName, getServers, serversWriteNewName, removeServer, removeButton, discoverBridge, saveBridge, updateAPI, hueServer, getPorts, savePorts, getWebsitePort
+from HueConfig import getRooms, getDevices, getScenes, checkRooms, checkMacAddress, ScenesIDtoName, confirmConfig, writeNewName, getServers, serversWriteNewName, removeServer, removeButton, discoverBridge, saveBridge, updateAPI, hueServer, getPorts, savePorts, getWebsitePort, getServerData, time_ago, getServerStatus
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'vgvv sfsa hwuqhasjjk'
@@ -92,7 +92,6 @@ def createUser():
             flash("Unexpected Error!", "error")
             return render_template(url_for("settings"))
     
-
 @app.route("/servers", methods=['POST', 'GET'])
 def servers():
     try:
@@ -104,11 +103,31 @@ def servers():
             if request.form['buttons'] == 'Rename':
                 macAddress = request.form['rooms']
                 return redirect(url_for(f'serverRename', macAddress=macAddress))
+            if request.form['buttons'] == 'Information':
+                macAddress = request.form['rooms']
+                return redirect(url_for(f'serverinfo', macAddress=macAddress))
     except:
         flash(u'Please choose the server you want to modify!', 'error')
         return redirect(url_for('servers'))
     serversJSON = getServers()
     return render_template('servers.html', messages=serversJSON)
+
+@app.route("/serverinfo", methods=['POST', 'GET'])
+def serverinfo():
+    if request.method == 'POST':
+        if request.form['buttons'] == 'Back':
+            return redirect(url_for('servers'))
+    macAddress = request.args['macAddress']
+    onlyMacAddress = macAddress.split('- ')[1].split(' ')[0]
+    serverData = getServerData(onlyMacAddress)
+    serverData["lastUsed"] = time_ago(serverData["lastUsed"])
+    status = getServerStatus(serverData["ip"])
+    serverData.update(status)
+    try:
+        serverData["led_on_time"] = int(serverData["led_on_time"])
+        serverData["led_off_time"] = int(serverData["led_off_time"])
+    except: pass
+    return render_template('serverinfo.html', data=serverData)
 
 @app.route(f'/servers/rename', methods = ['POST', 'GET'])
 def serverRename():
@@ -299,4 +318,4 @@ def setupConfirm():
     return render_template('setupConfirm.html', messages=SceneNamesList, macAddress=macAddress, SceneNamesList=",".join(list(SceneNamesList.values())))
 
 
-app.run(host="0.0.0.0", port=getWebsitePort())
+app.run(host="0.0.0.0", port=getWebsitePort(), debug=True)

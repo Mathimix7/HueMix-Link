@@ -1,7 +1,7 @@
 import requests
 import json
 import os
-from datetime import datetime
+import datetime
 import socket
 
 PATH = os.path.join(os.getcwd()) + "/DataFiles/"
@@ -80,6 +80,46 @@ def discoverBridge():
     s.close()
     return IP
 
+def format_duration(seconds):
+    duration = datetime.timedelta(seconds=seconds)
+    days = duration.days
+    hours, remainder = divmod(duration.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    parts = []
+    if days > 0:
+        parts.append(f"{days} {'day' if days == 1 else 'days'}")
+    if hours > 0:
+        parts.append(f"{hours} {'hour' if hours == 1 else 'hours'}")
+    if minutes > 0:
+        parts.append(f"{minutes} {'minute' if minutes == 1 else 'minutes'}")
+    
+    if len(parts) == 0:
+        return "just now"
+    elif len(parts) == 1:
+        return f"{parts[0]} ago"
+    else:
+        return f"{', '.join(parts[:-1])} and {parts[-1]} ago"
+
+def getServerData(macAddress):
+    with open(os.path.join(PATH, "servers.json"), "r") as f:
+        servers = json.load(f)
+    for data in servers:
+        if data["macAddress"].lower() == macAddress.lower():
+            return data
+
+def getServerStatus(ip):
+    try:
+        data = requests.get(f"http://{ip}/status", timeout=5)
+    except:
+        return {"status": "Offline"}
+    if data.status_code == 200:
+        data = data.json()
+        data.update({"status":f"Online ({format_duration(data['uptime'])})"})
+        return data
+    else:
+        return {"status": "Offline"}
+
 def saveBridge(ip, token):
     with open(os.path.join(PATH, "settings.json"), "r") as f:
         data = json.load(f)
@@ -131,8 +171,8 @@ def getDevices():
     return DevicesList
 
 def time_ago(timestamp):
-    current_time = datetime.now()
-    time_difference = current_time - datetime.fromtimestamp(timestamp)
+    current_time = datetime.datetime.now()
+    time_difference = current_time - datetime.datetime.fromtimestamp(timestamp)
     days = time_difference.days
     hours = time_difference.seconds // 3600
     minutes = (time_difference.seconds // 60) % 60

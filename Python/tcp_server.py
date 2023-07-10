@@ -62,17 +62,20 @@ while True:
                         serversMacs.append(server["macAddress"])
                         if mac in server["macAddress"]:
                             server["lastUsed"] = round(datetime.timestamp(datetime.now()))
+                            server["ip"] = client_address[0]
                     if mac not in serversMacs:
                         if is_valid_mac_address(mac):
                             serversMacs.append(mac)
-                            servers.append({"deviceName": "UNKNOWN", "macAddress": mac, "lastUsed": round(datetime.timestamp(datetime.now()))})
+                            servers.append({"deviceName": "UNKNOWN", "macAddress": mac, "ip": client_address[0], "lastUsed": round(datetime.timestamp(datetime.now()))})
                             logger.info(f"Server not registered, {mac} succesfully added!")
                         else:
-                            logger.info(f"invalid mac: {mac} skipping...")
+                            logger.error(f"invalid mac: {mac} skipping...")
                     result = ",".join(serversMacs)
                     connection.sendall(result.encode())
                     with open(os.path.join(PATH, "servers.json"), "w") as f:
                         json.dump(servers, f)
+                elif data.decode().split(",")[0] == "time":
+                    connection.sendall(datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f%z').encode())
                 continue
             macAddress, mode, macSV = data.decode().split(',')
             connection.close()
@@ -81,9 +84,10 @@ while True:
             for server in servers:
                 if macSV == server["macAddress"]:
                     server["lastUsed"] = round(datetime.timestamp(datetime.now()))
+                    server["ip"] = client_address[0]
                     break
             else:
-                servers.append({"deviceName": "UNKNOWN", "macAddress": macSV, "lastUsed": round(datetime.timestamp(datetime.now()))})
+                servers.append({"deviceName": "UNKNOWN", "macAddress": macSV, "ip": client_address[0], "lastUsed": round(datetime.timestamp(datetime.now()))})
             with open(os.path.join(PATH, "servers.json"), "w") as f:
                 json.dump(servers, f)
             with open(os.path.join(PATH, "devices.json"), "r") as f:

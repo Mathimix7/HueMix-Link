@@ -9,6 +9,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <ctime>
+#include "OTAUpdate.h"
 
 #define LED_WIFI 18
 #define LED_SERIAL 19
@@ -38,6 +39,8 @@ unsigned long holdingIntervalUpdate = 0;
 unsigned long holdingThreshold = 1000;
 String onTime;
 String offTime;
+bool isBetween = false;
+bool ledFunctionoff = false;
 
 Ticker ticker;
 WiFiClient client;
@@ -46,8 +49,6 @@ Bounce button;
 
 WiFiManagerParameter custom_tcp_server("server", "TCP Server IP", "", 40);
 WiFiManagerParameter custom_tcp_port("port", "TCP Server Port", "7777", 6);
-WiFiManagerParameter custom_time_off("time", "LED off time", "22", 2);
-WiFiManagerParameter custom_time_on("time", "LED on time", "8", 2);
 
 void toggleLED() {
   ledState = !ledState;
@@ -62,8 +63,6 @@ void saveCustomParameters() {
   }
   serverIPString = custom_tcp_server.getValue();
   serverPortString = custom_tcp_port.getValue();
-  onTime = custom_time_off.getValue();
-  offTime = custom_time_on.getValue();
   configFile.println(serverIPString);
   configFile.println(serverPortString);
   configFile.println(onTime);
@@ -105,8 +104,6 @@ void setup() {
   button.interval(50);
   wifiManager.addParameter(&custom_tcp_server);
   wifiManager.addParameter(&custom_tcp_port);
-  wifiManager.addParameter(&custom_time_off);
-  wifiManager.addParameter(&custom_time_on);
   std::vector<const char *> wm_menu  = {"wifi"};
   wifiManager.setShowInfoUpdate(false);
   wifiManager.setShowInfoErase(false);
@@ -123,29 +120,14 @@ void setup() {
     Serial.println("retrieving custom param");
     retrieveCustomParameters();
   }
-
-  HTTPClient http;
-  http.begin("http://worldtimeapi.org/api/timezone/America/New_York");
-  int httpResponseCode = http.GET();
-    if (httpResponseCode == HTTP_CODE_OK) {
-      String payload = http.getString();
-      DynamicJsonDocument doc(1024);
-      deserializeJson(doc, payload);
-      const char* estTime = doc["datetime"];
-      Serial.println(estTime);
-      int year, month, day, hour, minute, second;
-      sscanf(estTime, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
-      setTime(hour, minute, second, day, month, year);
-      Serial.println("Using api to fetch time");
-    }
-  http.end();
+  setupOTA(ssidName, "HueMixLink");
   ticker.detach();
   digitalWrite(LED_WIFI, HIGH);
   serverIP = serverIPString.c_str();
   serverPort = serverPortString.toInt();
   Serial.println(serverIP);
   Serial.println(serverPort);
-
+  getTime();
   startHandshakeSerial();
   lastButtonState = digitalRead(BUTTON_RESET);
 }
@@ -196,6 +178,33 @@ void getServerMacAddresses() {
   Serial2.println(recievedData);
 }
 
+void getTime() {
+  String data = "none";
+  String prefix = "time,";
+  String suffix = ",-p";
+  String combinedString = prefix + macAddressString + suffix;
+  if (client.connect(serverIP, serverPort)) {
+    client.print(combinedString);
+    client.flush();
+    while(!client.available()){
+      delay(10);
+    }
+    if (client.available()) {
+      data = client.readStringUntil('\n');
+    }
+    client.stop();
+  }
+  if (data != "None") {
+    const char* estTime = data.c_str();
+    int year, month, day, hour, minute, second;
+    sscanf(estTime, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+    setTime(hour, minute, second, day, month, year);
+    ledFunctionoff = true;
+  } else {
+    ledFunctionoff = false;
+  }
+}
+
 void buttonReset() {
   buttonState = digitalRead(BUTTON_RESET);
   if (buttonState != lastButtonState) {
@@ -237,22 +246,32 @@ void sendData(const char* message) {
 }
 
 bool led_off_time() {
+  if (!ledFunctionoff) {
+    return false;
+  }
   time_t currentTime = now();
   struct tm *timeinfo;
   timeinfo = localtime(&currentTime);
   if (timeinfo) {
+    isBetween = false;
     int currentHour = timeinfo->tm_hour;
-    if (currentHour >= offTime.toInt() || currentHour < onTime.toInt()) {
+    if (onTime.toInt() == offTime.toInt()) {
       return false;
-    } else {
-      return true;
     }
-  } else {
-    return true;
+    if (onTime.toInt() < offTime.toInt()) {
+      if (currentHour >= onTime.toInt() && currentHour < offTime.toInt()) {
+      }
+    } else {
+      if (currentHour >= onTime.toInt() || currentHour <= offTime.toInt()) {
+        isBetween = true;
+      }
+    }
   }
+  return isBetween;
 }
 
 void loop() {
+  handleOTA();
   digitalWrite(LED_SERIAL, LOW);
   buttonReset();
   bool leds_status = led_off_time();
@@ -266,9 +285,9 @@ void loop() {
     sleep(100);
   }
   if (leds_status) {
-    digitalWrite(LED_WIFI, HIGH);
+    digitalWrite(LED_WIFI, LOW);
   } else {
-     digitalWrite(LED_WIFI, LOW);
+     digitalWrite(LED_WIFI, HIGH);
   }
   if (Serial2.available()) {
     String data = Serial2.readStringUntil('\n');

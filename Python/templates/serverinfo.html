@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %} Server Information {% endblock %}
 {% block content %}
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}"/>
 <style>
 .main-heading {
   text-align: center;
@@ -134,6 +135,7 @@ select {
           <th>Last Used:</th>
           <td>{{ data["lastUsed"] }}</td>
         </tr>
+        {% if data["status"] != "Offline" %}
         <tr>
           <th>LED off Time:</th>
           <td>
@@ -162,14 +164,20 @@ select {
             </div>
           </td>
         </tr>
+        {% endif %}
       </tbody>
     </table>  
 </div>
+<form name="home" action="" method="post" onsubmit="">
+  <div class="button-container">
+      <button type="submit" class="button3" value="Back" name="buttons">Back</button>
+  </div>
+</form>
 <script>
   document.addEventListener("DOMContentLoaded", function() {
     var uploadButton = document.getElementById("upload-button");
     uploadButton.addEventListener("click", function() {
-      var esp32IP = "{{ data['ip'] }}"; // Replace with the actual IP address
+      var esp32IP = "{{ data['ip'] }}";
       var firmwareFileInput = document.getElementById("file-upload");
       var firmwareFile = firmwareFileInput.files[0];
       if (!firmwareFile) {

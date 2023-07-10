@@ -114,15 +114,19 @@ def servers():
 
 @app.route("/serverinfo", methods=['POST', 'GET'])
 def serverinfo():
+    if request.method == 'POST':
+        if request.form['buttons'] == 'Back':
+            return redirect(url_for('servers'))
     macAddress = request.args['macAddress']
     onlyMacAddress = macAddress.split('- ')[1].split(' ')[0]
     serverData = getServerData(onlyMacAddress)
     serverData["lastUsed"] = time_ago(serverData["lastUsed"])
     status = getServerStatus(serverData["ip"])
-    print(status)
     serverData.update(status)
-    serverData["led_on_time"] = int(serverData["led_on_time"])
-    serverData["led_off_time"] = int(serverData["led_off_time"])
+    try:
+        serverData["led_on_time"] = int(serverData["led_on_time"])
+        serverData["led_off_time"] = int(serverData["led_off_time"])
+    except: pass
     return render_template('serverinfo.html', data=serverData)
 
 @app.route(f'/servers/rename', methods = ['POST', 'GET'])

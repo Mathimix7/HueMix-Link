@@ -2,11 +2,12 @@
 {% block title %} Servers {% endblock %}
 {% block content %}
 <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}"/>
+<div id="contentclass">
 <header class="header">
     <p class="number">#1</p>
     <h1 style="font-family:verdana">Servers information<br>and actions</h1>
 </header>
-<form name="home" action="" method="post" onsubmit="">
+<form name="home" action="" method="post" onsubmit=startLoading()>
     <section class="content">
         <ul class="list">
         {% for i in messages %}
@@ -23,13 +24,72 @@
         <button type="submit" class="button3" value="Rename" name="buttons">Rename </button>
     </div>
 </form>
+</div>
+<div id="loading">
+    <style>
+        .container { 
+            height: 200px;
+            position: relative;
+        }
+        .lds-dual-ring {
+            display: inline-block;
+            width: 80px;
+            height: 80px;
+            position: absolute;
+            left: 50%;
+            top: 120px;
+            transform: translate(-50%, -50%);
+        }
+        .lds-dual-ring:after {
+            content: " ";
+            display: block;
+            width: 64px;
+            height: 64px;
+            margin: 8px;
+            border-radius: 50%;
+            border: 6px solid #0D19A3;
+            border-color: #0D19A3 transparent #0D19A3 transparent;
+            animation: lds-dual-ring 1.2s linear infinite;
+        }
+        @keyframes lds-dual-ring {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+        div#loading {
+            display: none;
+        }
+        .text {
+            font-size: 35px;
+            position: absolute;
+            left: 50%;
+            top: 20px;
+            transform: translate(-50%, -50%);
+            font-family: Helvetica, Arial, sans-serif;
+        }
+    </style>
+    <div class="container">
+        <p class="text">Getting data from the server...</p>
+        <div class="lds-dual-ring"></div>
+    </div>
+</div>
 <script>
     document.addEventListener('keydown', function(event) {
       if (event.key === 'Enter') {
         event.preventDefault(); 
+        startLoading()
         var changeButton = document.querySelector('button[value="Information"]');
         changeButton.click();
       }
     });
+    function startLoading() {
+        var x = document.getElementById("contentclass")
+        x.style.display = "none"
+        var x = document.getElementById("loading")
+        x.style.display = "block"
+    }
 </script>
 {% endblock %}

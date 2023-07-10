@@ -110,7 +110,7 @@ def getServerData(macAddress):
 
 def getServerStatus(ip):
     try:
-        data = requests.get(f"http://{ip}/status")
+        data = requests.get(f"http://{ip}/status", timeout=5)
     except:
         return {"status": "Offline"}
     if data.status_code == 200:

@@ -74,6 +74,8 @@ while True:
                     connection.sendall(result.encode())
                     with open(os.path.join(PATH, "servers.json"), "w") as f:
                         json.dump(servers, f)
+                elif data.decode().split(",")[0] == "time":
+                    connection.sendall(datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f%z').encode())
                 continue
             macAddress, mode, macSV = data.decode().split(',')
             connection.close()

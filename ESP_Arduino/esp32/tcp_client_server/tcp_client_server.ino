@@ -40,6 +40,7 @@ unsigned long holdingThreshold = 1000;
 String onTime;
 String offTime;
 bool isBetween = false;
+bool ledFunctionoff = false;
 
 Ticker ticker;
 WiFiClient client;
@@ -120,28 +121,13 @@ void setup() {
     retrieveCustomParameters();
   }
   setupOTA(ssidName, "HueMixLink");
-  HTTPClient http;
-  http.begin("http://worldtimeapi.org/api/timezone/America/New_York");
-  int httpResponseCode = http.GET();
-    if (httpResponseCode == HTTP_CODE_OK) {
-      String payload = http.getString();
-      DynamicJsonDocument doc(1024);
-      deserializeJson(doc, payload);
-      const char* estTime = doc["datetime"];
-      Serial.println(estTime);
-      int year, month, day, hour, minute, second;
-      sscanf(estTime, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
-      setTime(hour, minute, second, day, month, year);
-      Serial.println("Using api to fetch time");
-    }
-  http.end();
   ticker.detach();
   digitalWrite(LED_WIFI, HIGH);
   serverIP = serverIPString.c_str();
   serverPort = serverPortString.toInt();
   Serial.println(serverIP);
   Serial.println(serverPort);
-
+  getTime();
   startHandshakeSerial();
   lastButtonState = digitalRead(BUTTON_RESET);
 }
@@ -192,6 +178,33 @@ void getServerMacAddresses() {
   Serial2.println(recievedData);
 }
 
+void getTime() {
+  String data = "none";
+  String prefix = "time,";
+  String suffix = ",-p";
+  String combinedString = prefix + macAddressString + suffix;
+  if (client.connect(serverIP, serverPort)) {
+    client.print(combinedString);
+    client.flush();
+    while(!client.available()){
+      delay(10);
+    }
+    if (client.available()) {
+      data = client.readStringUntil('\n');
+    }
+    client.stop();
+  }
+  if (data != "None") {
+    const char* estTime = data.c_str();
+    int year, month, day, hour, minute, second;
+    sscanf(estTime, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+    setTime(hour, minute, second, day, month, year);
+    ledFunctionoff = true;
+  } else {
+    ledFunctionoff = false;
+  }
+}
+
 void buttonReset() {
   buttonState = digitalRead(BUTTON_RESET);
   if (buttonState != lastButtonState) {
@@ -233,6 +246,9 @@ void sendData(const char* message) {
 }
 
 bool led_off_time() {
+  if (!ledFunctionoff) {
+    return false;
+  }
   time_t currentTime = now();
   struct tm *timeinfo;
   timeinfo = localtime(&currentTime);

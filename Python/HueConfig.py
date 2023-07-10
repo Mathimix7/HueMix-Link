@@ -105,7 +105,7 @@ def getServerData(macAddress):
     with open(os.path.join(PATH, "servers.json"), "r") as f:
         servers = json.load(f)
     for data in servers:
-        if data["macAddress"] == macAddress:
+        if data["macAddress"].lower() == macAddress.lower():
             return data
 
 def getServerStatus(ip):

@@ -48,8 +48,6 @@ Bounce button;
 
 WiFiManagerParameter custom_tcp_server("server", "TCP Server IP", "", 40);
 WiFiManagerParameter custom_tcp_port("port", "TCP Server Port", "7777", 6);
-WiFiManagerParameter custom_time_off("time", "LED off time", "22", 2);
-WiFiManagerParameter custom_time_on("time", "LED on time", "8", 2);
 
 void toggleLED() {
   ledState = !ledState;
@@ -64,8 +62,6 @@ void saveCustomParameters() {
   }
   serverIPString = custom_tcp_server.getValue();
   serverPortString = custom_tcp_port.getValue();
-  onTime = custom_time_off.getValue();
-  offTime = custom_time_on.getValue();
   configFile.println(serverIPString);
   configFile.println(serverPortString);
   configFile.println(onTime);
@@ -107,8 +103,6 @@ void setup() {
   button.interval(50);
   wifiManager.addParameter(&custom_tcp_server);
   wifiManager.addParameter(&custom_tcp_port);
-  wifiManager.addParameter(&custom_time_off);
-  wifiManager.addParameter(&custom_time_on);
   std::vector<const char *> wm_menu  = {"wifi"};
   wifiManager.setShowInfoUpdate(false);
   wifiManager.setShowInfoErase(false);
@@ -245,9 +239,11 @@ bool led_off_time() {
   if (timeinfo) {
     isBetween = false;
     int currentHour = timeinfo->tm_hour;
+    if (onTime.toInt() == offTime.toInt()) {
+      return false;
+    }
     if (onTime.toInt() < offTime.toInt()) {
       if (currentHour >= onTime.toInt() && currentHour < offTime.toInt()) {
-        isBetween = true;
       }
     } else {
       if (currentHour >= onTime.toInt() || currentHour <= offTime.toInt()) {

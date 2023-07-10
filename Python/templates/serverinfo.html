@@ -61,6 +61,18 @@ select {
   cursor: pointer;
 }
 
+input[type="text"] {
+  width: 50px;
+  padding: 8px;
+  font-size: 16px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  appearance: none;
+  -moz-appearance: none;
+  -webkit-appearance: none;
+  background-color: #fff;
+}
+
 .separator {
   margin: 0 5px;
   font-size: 20px;
@@ -73,6 +85,7 @@ select {
 
 .buttontable {
   padding: 8px 12px;
+  font-size: 17px;
   background-color: #0D19A3;
   color: white;
   border: none;
@@ -82,14 +95,13 @@ select {
 }
 
 #file-upload {
-  padding: 8px 12px;
+  padding: 10px;
   background-color: #0D19A3;
   color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   width: 105px;
-  margin-right: 50px;
 }
 
 #file-upload::file-selector-button {
@@ -107,6 +119,27 @@ select {
 @media (max-width: 420px) {
   #file-upload {
     margin-right: 35px;
+  }
+}
+.lds-dual-ring {
+  display: none;
+}
+.lds-dual-ring:after {
+  content: " ";
+  width: 10px;
+  height: 10px;
+  display: block;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  border-color: #fff transparent #fff transparent;
+  animation: lds-dual-ring 1.2s linear infinite;
+}
+@keyframes lds-dual-ring {
+  0% {
+      transform: rotate(0deg);
+  }
+  100% {
+      transform: rotate(360deg);
   }
 }
 </style>
@@ -151,17 +184,23 @@ select {
                 <option value="{{ hour }}" {% if data["led_off_time"] == hour %}selected="selected"{% endif %}>{{ hour }} h</option>
               {% endfor %}
             </select>
-            <button id="led-time-button" class="buttontable">Update</button>
+            <button id="led-time-button" class="buttontable"><div class="lds-dual-ring"></div> Update</button>
+          </div>
+          </td>
+        </tr>
+        <tr>
+          <th>TCP Port:</th>
+          <td>
+            <input type="text" id="port" name="port" value="{{ data["port"] }}">
+            <button id="port-button" class="buttontable"><div class="lds-dual-ring"></div> Update</button>
           </div>
           </td>
         </tr>
         <tr>
           <th>Upload File:</th>
           <td>
-            <div class="upload-container">
-              <input type="file" id="file-upload" name="file_upload" accept=".bin">
-              <button id="upload-button" class="buttontable">Update</button>
-            </div>
+            <input type="file" id="file-upload" name="file_upload" accept=".bin">
+            <button id="upload-button" class="buttontable"><div class="lds-dual-ring"></div> Update</button>
           </td>
         </tr>
         {% endif %}
@@ -174,63 +213,169 @@ select {
   </div>
 </form>
 <script>
-  document.addEventListener("DOMContentLoaded", function() {
-    var uploadButton = document.getElementById("upload-button");
-    uploadButton.addEventListener("click", function() {
-      var esp32IP = "{{ data['ip'] }}";
-      var firmwareFileInput = document.getElementById("file-upload");
-      var firmwareFile = firmwareFileInput.files[0];
-      if (!firmwareFile) {
-        executeAlert("error", "Select a file before uploading");
-        return;
-      }
-      if (firmwareFile.name.substr(-4).toLowerCase() !== ".bin") {
-        executeAlert("error", "Invalid file format, only .bin files are allowed");
-        return;
-      }
-      executeAlert("info", "New firmware update started")
-      var otaURL = "http://" + esp32IP + "/update";
-      var formData = new FormData();
-      formData.append("update", firmwareFile);
-      fetch(otaURL, {
-        method: "POST",
-        body: formData
-      }).then(function(response) {
+document.addEventListener("DOMContentLoaded", function() {
+  var uploadButton = document.getElementById("upload-button");
+  var ledTimeButton = document.getElementById("led-time-button");
+  var portButton = document.getElementById("port-button");
+  var isButtonDisabled = false;
+
+  function disableButtons(i) {
+    isButtonDisabled = true;
+    uploadButton.disabled = true;
+    ledTimeButton.disabled = true;
+    portButton.disabled = true;
+    var x = document.getElementsByClassName("lds-dual-ring")
+    x[i].style.display = "inline-block";
+  }
+
+  function enableButtonsWithDelay() {
+    setTimeout(enableButtons, 2000);
+  }
+
+  function enableButtons() {
+    isButtonDisabled = false;
+    uploadButton.disabled = false;
+    ledTimeButton.disabled = false;
+    portButton.disabled = false;
+    var x = document.getElementsByClassName("lds-dual-ring")
+    for (var i = 0; i < x.length; i++) {
+      x[i].style.display = "none";
+    }
+  }
+
+  function updateFirmware() {
+    var esp32IP = "{{ data['ip'] }}";
+    var firmwareFileInput = document.getElementById("file-upload");
+    var firmwareFile = firmwareFileInput.files[0];
+    if (!firmwareFile) {
+      executeAlert("error", "Select a file before uploading");
+      enableButtons();
+      return;
+    }
+    if (firmwareFile.name.substr(-4).toLowerCase() !== ".bin") {
+      executeAlert("error", "Invalid file format, only .bin files are allowed");
+      enableButtons();
+      return;
+    }
+    executeAlert("info", "New firmware update started");
+    var otaURL = "http://" + esp32IP + "/update";
+    var formData = new FormData();
+    formData.append("update", firmwareFile);
+    fetch(otaURL, {
+      method: "POST",
+      body: formData
+    })
+      .then(function(response) {
         if (response.ok) {
           return response.text();
         } else {
-          executeAlert("error", "Failed to update firmware")
+          executeAlert("error", "Failed to update firmware");
+          enableButtons();
         }
-      }).then(function(responseText) {
+      })
+      .then(function(responseText) {
         if (responseText === "OK") {
-          executeAlert("success", "New firmware was updated succesfully!")
+          executeAlert("success", "New firmware was updated successfully!");
         } else {
-          executeAlert("error", "Failed to update firmware")
+          executeAlert("error", "Failed to update firmware");
         }
-      }).catch(function(error) {
-          console.log(error.message);
-        });
-    });
-
-    var ledTimeButton = document.getElementById("led-time-button");
-    ledTimeButton.addEventListener("click", function() {
-      var esp32IP = "{{ data['ip'] }}";
-      var ledOnTimeSelect = document.getElementById("led-on-time");
-      var ledOnTimeValue = ledOnTimeSelect.value;
-      var ledOffTimeSelect = document.getElementById("led-off-time");
-      var ledOffTimeValue = ledOffTimeSelect.value;
-
-      var requestURL = "http://" + esp32IP + "/led_off_times?led_on_time=" + ledOnTimeValue + "&led_off_time=" + ledOffTimeValue;
-
-      fetch(requestURL)
-        .then(function(response) {
-          if (response.ok) {
-            executeAlert("success", "New led off time was updated succesfully!")
-          } else {
-            executeAlert("error", "Failed to update led off time")
-          }
-        })
-        });
+        enableButtonsWithDelay();
+      })
+      .catch(function(error) {
+        executeAlert("error", "Unexpected Error");
+        enableButtons();
       });
+  }
+
+  function updateLedOffTime() {
+    var esp32IP = "{{ data['ip'] }}";
+    var ledOnTimeSelect = document.getElementById("led-on-time");
+    var ledOnTimeValue = ledOnTimeSelect.value;
+    var ledOffTimeSelect = document.getElementById("led-off-time");
+    var ledOffTimeValue = ledOffTimeSelect.value;
+
+    var requestURL =
+      "http://" +
+      esp32IP +
+      "/led_off_times?led_on_time=" +
+      ledOnTimeValue +
+      "&led_off_time=" +
+      ledOffTimeValue;
+
+    fetch(requestURL)
+      .then(function(response) {
+        if (response.ok) {
+          return response.text();
+        } else {
+          executeAlert("error", "Failed to update led off time");
+          enableButtons();
+        }
+      })
+      .then(function(responseText) {
+        if (responseText === "OK") {
+          executeAlert("success", "New led off time was updated successfully!");
+        } else {
+          executeAlert("error", "Failed to update led off time");
+        }
+        enableButtonsWithDelay();
+      })
+      .catch(function(error) {
+        executeAlert("error", "Unexpected Error");
+        enableButtons();
+      });
+  }
+
+  function updatePort() {
+    var portInput = document.getElementById("port");
+    var portValue = parseInt(portInput.value);
+    if (isNaN(portValue) || portValue < 0 || portValue > 65535) {
+      executeAlert("error", "Invalid port number");
+      enableButtons();
+      return;
+    }
+    var esp32IP = "{{ data['ip'] }}";
+    var requestURL = "http://" + esp32IP + "/new_port?port=" + portValue;
+
+    fetch(requestURL)
+      .then(function(response) {
+        if (response.ok) {
+          return response.text();
+        } else {
+          executeAlert("error", "Failed to update port");
+          enableButtons();
+        }
+      })
+      .then(function(responseText) {
+        if (responseText === "OK") {
+          executeAlert("success", "New port was updated successfully!");
+        } else {
+          executeAlert("error", "Failed to update port");
+        }
+        enableButtonsWithDelay();
+      })
+      .catch(function(error) {
+        executeAlert("error", "Unexpected Error");
+        enableButtons();
+      });
+  }
+
+  ledTimeButton.addEventListener("click", function() {
+    if (isButtonDisabled) return;
+    disableButtons(0);
+    updateLedOffTime();
+  });
+
+  portButton.addEventListener("click", function() {
+    if (isButtonDisabled) return;
+    disableButtons(1);
+    updatePort();
+  });
+
+  uploadButton.addEventListener("click", function() {
+    if (isButtonDisabled) return;
+    disableButtons(2);
+    updateFirmware();
+  });
+});
 </script>
 {% endblock %}

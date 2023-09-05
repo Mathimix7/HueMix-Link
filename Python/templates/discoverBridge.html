@@ -122,7 +122,7 @@
         <img src="{{ url_for('static', filename='hueBridge.png') }}"/>
         <div class="container">
             <h3 class="h3form">Starting manual configuration. Please enter Hue Bridge IP manually.</h3>
-            <form action="/discoverManual">
+            <form action="/settings/discoverManual">
                 <input class="formInput" type="text" id="ip" name="ip" placeholder="Hue Bridge IP"><br>
                 
                 <input type="submit" value="Discover Manually" class="button" onclick=startLoading()></button>

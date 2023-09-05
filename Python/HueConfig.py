@@ -210,6 +210,32 @@ def getRooms():
             RoomNumber[group_name] = id
     return RoomList, RoomNumber
 
+def getRoomFromMacAddress(macAddress):
+    with open(os.path.join(PATH, "macAddresses.json"), "r") as f:
+        data = json.load(f)
+    for device in data:
+        if device["macAddress"] == macAddress:
+            return device["groupNumber"]
+    return None
+
+def getScenesFromMacAddress(macAddress):
+    if os.path.exists(os.path.join(PATH, f"{macAddress.replace(':', '-')}Scenes.json")):
+        with open(os.path.join(PATH, f"{macAddress.replace(':', '-')}Scenes.json")) as f:
+            data = json.load(f)
+            scene_names = [item["sceneName"] for item in data]
+            scene_ids = [item["sceneID"] for item in data]
+            return scene_names, scene_ids
+    return [], []
+
+def getNameFromMacAddress(macAddress):
+    with open(os.path.join(PATH, 'devices.json'), "r") as f:
+        obj = json.load(f)
+    for device in obj:
+        if device["macAddress"] == macAddress: 
+            deviceName = device["deviceName"]
+            return deviceName
+    return None
+
 def getRoomsNumber():
     groups = requests.get(GROUP_ENDPOINT).json()
     number = 0
@@ -254,14 +280,17 @@ def ScenesIDtoName(ScenesIDs):
     SceneList = {}
     number = 0
     for sceneCodes in ScenesIDs:
-        number += 1
         for id in scenes:
             if sceneCodes == id:
                 SceneList[number] = scenes[id].get('name')
+        number += 1
     return SceneList
 
 def confirmConfig(FullmacAddress, RoomNumber, listScene, listSceneName):
-    _, macAddress = FullmacAddress.split('- ')
+    if "- " in FullmacAddress:
+        _, macAddress = FullmacAddress.split('- ')
+    else:
+        macAddress = FullmacAddress
     new_data = {"macAddress":f"{macAddress}",
             "groupNumber":f"{RoomNumber}"}
     with open(os.path.join(PATH, 'macAddresses.json'), "r") as f:
@@ -295,7 +324,7 @@ def confirmConfig(FullmacAddress, RoomNumber, listScene, listSceneName):
             f.seek(0)
             json.dump(file_data, f, indent=1)
     for i in range(len(listScene)):
-        y = {"sceneName":f"{listSceneName[i+1]}",
+        y = {"sceneName":f"{listSceneName[i]}",
             "sceneID":f"{listScene[i]}"}
         write_json(y)
 

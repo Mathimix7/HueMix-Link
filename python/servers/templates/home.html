@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Hue Mix Link{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <!-- Hero Header -->
+    <div class="mb-12 text-center">
+        <div class="inline-block p-4 rounded-2xl">
+            <img src="{{ url_for('static', filename='logo.png') }}" alt="Hue Mix" class="w-24 h-24 object-contain">
+        </div>
+        <h1 class="text-5xl font-bold bg-gradient-to-r from-blue-700 via-blue-500 to-blue-700 bg-clip-text text-transparent mb-3">
+            Control Center
+        </h1>
+        <p class="text-gray-600 text-lg">Manage Controllers, Lights, and Hue Devices</p>
+    </div>
+
+    <!-- System Status Section -->
+    <div class="mb-12">
+        <div class="flex items-center mb-6">
+            <div class="h-px flex-1 bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+            <h2 class="px-4 text-sm font-semibold text-gray-600 uppercase tracking-wider">System Status</h2>
+            <div class="h-px flex-1 bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+            
+            <!-- Hue Bridge Status -->
+            <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-100">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center">
+                        <div class="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center mr-3">
+                            <i class="fas fa-network-wired text-blue-600"></i>
+                        </div>
+                        <h3 class="text-lg font-semibold text-gray-900">Hue Bridge</h3>
+                    </div>
+                    <span id="bridge-status" class="px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600">
+                        <i class="fas fa-spinner fa-spin mr-1"></i>Checking...
+                    </span>
+                </div>
+                <p id="bridge-info" class="text-sm text-gray-500">Loading...</p>
+            </div>
+
+            <!-- TCP Server Status -->
+            <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-100">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center">
+                        <div class="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center mr-3">
+                            <i class="fas fa-server text-purple-600"></i>
+                        </div>
+                        <h3 class="text-lg font-semibold text-gray-900">TCP Server</h3>
+                    </div>
+                    <span id="tcp-status" class="px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600">
+                        <i class="fas fa-spinner fa-spin mr-1"></i>Checking...
+                    </span>
+                </div>
+                <p id="tcp-info" class="text-sm text-gray-500">Loading...</p>
+            </div>
+
+            <!-- Flask Server Status -->
+            <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-100">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center">
+                        <div class="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center mr-3">
+                            <i class="fas fa-globe text-green-600"></i>
+                        </div>
+                        <h3 class="text-lg font-semibold text-gray-900">Web Server</h3>
+                    </div>
+                    <span id="web-status" class="px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-600">
+                        <i class="fas fa-check-circle mr-1"></i>Online
+                    </span>
+                </div>
+                <p id="web-info" class="text-sm text-gray-500">Port 5001</p>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Setup Section -->
+    <div class="mb-12">
+        <div class="flex items-center mb-6">
+            <div class="h-px flex-1 bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+            <h2 class="px-4 text-sm font-semibold text-gray-600 uppercase tracking-wider">Configuration</h2>
+            <div class="h-px flex-1 bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+            
+            <!-- Bridge Setup -->
+            <a href="/bridge" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-blue-500">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-blue-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
+                <div class="relative">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500/20 to-blue-500/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <i class="fas fa-network-wired text-2xl text-blue-500"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-2">Hue Bridge</h3>
+                    <p class="text-sm text-gray-500">Configure Hue Bridge connection</p>
+                </div>
+            </a>
+
+            <!-- Buttons Configuration -->
+            <a href="/buttons" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-pink-500">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-pink-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
+                <div class="relative">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-pink-500/20 to-pink-500/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <i class="fas fa-circle-dot text-2xl text-pink-500"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-2">Scene Buttons</h3>
+                    <p class="text-sm text-gray-500">Scene cycling configuration</p>
+                </div>
+            </a>
+
+            <!-- Button Servers -->
+            <a href="/servers" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-purple-500">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-purple-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
+                <div class="relative">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500/20 to-purple-500/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <i class="fas fa-microchip text-2xl text-purple-500"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-2">Button Servers</h3>
+                    <p class="text-sm text-gray-500">ESP-NOW receivers & TCP</p>
+                </div>
+            </a>
+
+            <!-- Lightstrips -->
+            <a href="/lightstrips" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-yellow-500">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-yellow-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
+                <div class="relative">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-yellow-500/20 to-yellow-500/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <i class="fas fa-grip-lines text-2xl text-yellow-500"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-2">Lightstrips</h3>
+                    <p class="text-sm text-gray-500">Automatic scene sync</p>
+                </div>
+            </a>
+
+        </div>
+    </div>
+
+    <!-- Bridge Info Section -->
+    <div>
+        <div class="flex items-center mb-6">
+            <div class="h-px flex-1 bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+            <h2 class="px-4 text-sm font-semibold text-gray-600 uppercase tracking-wider">Bridge Overview</h2>
+            <div class="h-px flex-1 bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+            
+            <!-- Rooms Overview -->
+            <a href="/rooms-overview" class="group bg-gradient-to-br from-purple-50 to-white p-6 rounded-2xl border-2 border-purple-100 hover:border-purple-400 hover:shadow-xl transition-all duration-300">
+                <div class="flex items-start justify-between mb-4">
+                    <div class="w-14 h-14 rounded-xl bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                        <i class="fas fa-th-large text-2xl text-white"></i>
+                    </div>
+                    <span class="text-2xl font-bold text-purple-600">
+                        <i class="fas fa-eye"></i>
+                    </span>
+                </div>
+                <h3 class="text-lg font-bold text-gray-900">Rooms Overview</h3>
+                <p class="text-sm text-gray-500 mt-1">Complete room details</p>
+            </a>
+            
+            <!-- Rooms -->
+            <a href="/rooms" class="group bg-gradient-to-br from-blue-50 to-white p-6 rounded-2xl border-2 border-blue-100 hover:border-blue-400 hover:shadow-xl transition-all duration-300">
+                <div class="flex items-start justify-between mb-4">
+                    <div class="w-14 h-14 rounded-xl bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                        <i class="fas fa-door-open text-2xl text-white"></i>
+                    </div>
+                    <span class="text-4xl font-bold text-blue-600" id="room-count">-</span>
+                </div>
+                <h3 class="text-lg font-bold text-gray-900">Rooms</h3>
+                <p class="text-sm text-gray-500 mt-1">View all rooms</p>
+            </a>
+
+            <!-- Lights -->
+            <a href="/lights" class="group bg-gradient-to-br from-amber-50 to-white p-6 rounded-2xl border-2 border-amber-100 hover:border-amber-400 hover:shadow-xl transition-all duration-300">
+                <div class="flex items-start justify-between mb-4">
+                    <div class="w-14 h-14 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                        <i class="fas fa-lightbulb text-2xl text-white"></i>
+                    </div>
+                    <span class="text-4xl font-bold text-amber-600" id="light-count">-</span>
+                </div>
+                <h3 class="text-lg font-bold text-gray-900">Lights</h3>
+                <p class="text-sm text-gray-500 mt-1">View all lights</p>
+            </a>
+
+            <!-- Scenes -->
+            <a href="/scenes" class="group bg-gradient-to-br from-pink-50 to-white p-6 rounded-2xl border-2 border-pink-100 hover:border-pink-400 hover:shadow-xl transition-all duration-300">
+                <div class="flex items-start justify-between mb-4">
+                    <div class="w-14 h-14 rounded-xl bg-gradient-to-br from-pink-400 to-pink-600 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                        <i class="fas fa-palette text-2xl text-white"></i>
+                    </div>
+                    <span class="text-4xl font-bold text-pink-600" id="scene-count">-</span>
+                </div>
+                <h3 class="text-lg font-bold text-gray-900">Scenes</h3>
+                <p class="text-sm text-gray-500 mt-1">View all scenes</p>
+            </a>
+
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Load status information on page load
+window.addEventListener('DOMContentLoaded', function() {
+    loadSystemStatus();
+});
+
+function loadSystemStatus() {
+    // Check Hue Bridge status
+    fetch('/api/status/bridge')
+        .then(response => response.json())
+        .then(data => {
+            const statusEl = document.getElementById('bridge-status');
+            const infoEl = document.getElementById('bridge-info');
+            
+            if (data.configured && data.connected) {
+                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-600';
+                statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>Connected';
+                infoEl.textContent = `${data.ip} - ${data.name || 'Hue Bridge'}`;
+                
+                // Load counts since bridge is connected
+                loadOverviewCounts();
+            } else if (data.configured && !data.connected) {
+                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-600';
+                statusEl.innerHTML = '<i class="fas fa-times-circle mr-1"></i>Offline';
+                infoEl.textContent = `${data.ip} - Bridge not responding`;
+            } else {
+                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-600';
+                statusEl.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i>Not Configured';
+                infoEl.textContent = 'Please configure bridge connection';
+            }
+        })
+        .catch(err => {
+            console.error('Error loading bridge status:', err);
+            document.getElementById('bridge-status').className = 'px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600';
+            document.getElementById('bridge-status').innerHTML = '<i class="fas fa-question-circle mr-1"></i>Unknown';
+            document.getElementById('bridge-info').textContent = 'Unable to check status';
+        });
+
+    // Check TCP Server status
+    fetch('/api/status/tcp')
+        .then(response => response.json())
+        .then(data => {
+            const statusEl = document.getElementById('tcp-status');
+            const infoEl = document.getElementById('tcp-info');
+            
+            if (data.running) {
+                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-600';
+                statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>Running';
+                infoEl.textContent = `Port ${data.port}`;
+            } else {
+                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-600';
+                statusEl.innerHTML = '<i class="fas fa-times-circle mr-1"></i>Stopped';
+                infoEl.textContent = 'TCP server is not running';
+            }
+        })
+        .catch(err => {
+            console.error('Error loading TCP status:', err);
+            document.getElementById('tcp-status').className = 'px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600';
+            document.getElementById('tcp-status').innerHTML = '<i class="fas fa-question-circle mr-1"></i>Unknown';
+            document.getElementById('tcp-info').textContent = 'Unable to check status';
+        });
+}
+
+function loadOverviewCounts() {
+    fetch('/api/overview/counts')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.counts) {
+                document.getElementById('room-count').textContent = data.counts.rooms;
+                document.getElementById('light-count').textContent = data.counts.lights;
+                document.getElementById('scene-count').textContent = data.counts.scenes;
+            }
+        })
+        .catch(err => {
+            console.error('Error loading overview counts:', err);
+        });
+}
+</script>
+{% endblock %}

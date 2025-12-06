@@ -1,0 +1,652 @@
+{% extends "base.html" %}
+
+{% block title %}Server Management - Hue Mix Link{% endblock %}
+
+{% block content %}
+<style>
+.rotate-360 {
+    transform: rotate(360deg);
+}
+.spinner {
+    border: 3px solid rgba(59, 130, 246, 0.3);
+    border-top: 3px solid #3b82f6;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+.skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: loading 1.5s ease-in-out infinite;
+    border-radius: 0.375rem;
+}
+@keyframes loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+</style>
+
+<!-- Toast Notification -->
+<div id="toast-notification" class="hidden fixed top-4 right-4 z-50 max-w-md">
+    <div id="toast-container" class="rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0">
+        <div class="flex-shrink-0">
+            <i id="toast-icon" class="fas fa-check-circle text-2xl text-green-600"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <p id="toast-title" class="text-sm font-semibold text-gray-900"></p>
+            <p id="toast-message" class="text-sm text-gray-700 mt-1"></p>
+        </div>
+        <button onclick="hideToast()" class="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-purple-700 to-purple-500 bg-clip-text text-transparent mb-1">
+                    Server Management
+                </h1>
+                <p class="text-gray-600">Manage your ESP-NOW TCP server devices</p>
+            </div>
+            <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                <i class="fas fa-arrow-left mr-2"></i>Back to Home
+            </a>
+        </div>
+    </div>
+
+    <!-- Servers List -->
+    <div class="bg-white rounded-2xl shadow-lg p-6 mb-6">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xl font-semibold text-gray-800">
+                <i class="fas fa-server mr-2 text-purple-600"></i>Available Servers
+            </h2>
+            <button onclick="refreshServers()" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
+                <i id="refresh-icon" class="fas fa-sync-alt mr-2 transition-transform duration-500"></i>Refresh
+            </button>
+        </div>
+
+        <!-- Servers Grid -->
+        <div id="servers-container" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Servers will be loaded here -->
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeDeleteModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="sm:flex sm:items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <i class="fas fa-exclamation-triangle text-red-600"></i>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">
+                            Delete Server
+                        </h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500">
+                                Are you sure you want to delete "<span id="delete-server-name" class="font-semibold text-gray-900"></span>"? This action cannot be undone.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="confirmDelete()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Delete
+                </button>
+                <button type="button" onclick="closeDeleteModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let servers = [];
+let deleteServerId = null;
+let deleteServerName = null;
+
+// Toast notification functions
+function showToast(title, message, type = 'success') {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    const icon = document.getElementById('toast-icon');
+    const titleEl = document.getElementById('toast-title');
+    const messageEl = document.getElementById('toast-message');
+    
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    
+    if (type === 'success') {
+        icon.className = 'fas fa-check-circle text-2xl text-green-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0';
+    } else if (type === 'error') {
+        icon.className = 'fas fa-exclamation-circle text-2xl text-red-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-red-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-red-50 translate-x-full opacity-0';
+    } else if (type === 'warning') {
+        icon.className = 'fas fa-exclamation-triangle text-2xl text-yellow-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-yellow-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-yellow-50 translate-x-full opacity-0';
+    } else if (type === 'info') {
+        icon.className = 'fas fa-info-circle text-2xl text-blue-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-blue-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-blue-50 translate-x-full opacity-0';
+    }
+    
+    toast.classList.remove('hidden');
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toastContainer.classList.remove('translate-x-full', 'opacity-0');
+            toastContainer.classList.add('translate-x-0', 'opacity-100');
+        });
+    });
+    
+    setTimeout(() => {
+        hideToast();
+    }, 4000);
+}
+
+function hideToast() {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    
+    toastContainer.classList.remove('translate-x-0', 'opacity-100');
+    toastContainer.classList.add('translate-x-full', 'opacity-0');
+    
+    setTimeout(() => {
+        toast.classList.add('hidden');
+    }, 300);
+}
+
+// Load servers on page load
+window.addEventListener('DOMContentLoaded', function() {
+    loadServers();
+});
+
+function showSkeletonLoaders() {
+    const container = document.getElementById('servers-container');
+    container.innerHTML = '';
+    
+    // Create 2 skeleton cards
+    for (let i = 0; i < 2; i++) {
+        const skeletonCard = document.createElement('div');
+        skeletonCard.className = 'border border-gray-200 rounded-xl p-6';
+        skeletonCard.innerHTML = `
+            <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center space-x-3">
+                    <div class="w-12 h-12 rounded-lg skeleton"></div>
+                    <div class="flex-1">
+                        <div class="h-5 w-32 skeleton mb-2"></div>
+                        <div class="h-4 w-40 skeleton"></div>
+                    </div>
+                </div>
+                <div class="h-6 w-20 skeleton rounded-full"></div>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                    <div class="h-4 w-20 skeleton mb-1"></div>
+                    <div class="h-4 w-28 skeleton"></div>
+                </div>
+                <div>
+                    <div class="h-4 w-16 skeleton mb-1"></div>
+                    <div class="h-4 w-24 skeleton"></div>
+                </div>
+                <div>
+                    <div class="h-4 w-20 skeleton mb-1"></div>
+                    <div class="h-4 w-28 skeleton"></div>
+                </div>
+                <div>
+                    <div class="h-4 w-16 skeleton mb-1"></div>
+                    <div class="h-4 w-16 skeleton"></div>
+                </div>
+            </div>
+            
+            <div class="border-t border-gray-200 pt-4 space-y-4">
+                <div>
+                    <div class="h-4 w-32 skeleton mb-2"></div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="h-10 skeleton"></div>
+                        <div class="h-10 skeleton"></div>
+                    </div>
+                    <div class="h-10 skeleton mt-2"></div>
+                </div>
+                
+                <div>
+                    <div class="h-4 w-24 skeleton mb-2"></div>
+                    <div class="h-10 skeleton"></div>
+                    <div class="h-10 skeleton mt-2"></div>
+                </div>
+                
+                <div>
+                    <div class="h-4 w-32 skeleton mb-2"></div>
+                    <div class="h-10 skeleton"></div>
+                    <div class="h-10 skeleton mt-2"></div>
+                </div>
+            </div>
+        `;
+        container.appendChild(skeletonCard);
+    }
+}
+
+function loadServers() {
+    showSkeletonLoaders();
+    
+    fetch('/servers/api/servers')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                servers = data.servers;
+                console.log(servers)
+                renderServers();
+            }
+        })
+        .catch(err => {
+            console.error('Error loading servers:', err);
+            showToast('Error', 'Failed to load servers', 'error');
+        });
+}
+
+function renderServers() {
+    const container = document.getElementById('servers-container');
+    container.innerHTML = '';
+
+    if (servers.length === 0) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-8 col-span-2">No servers configured</p>';
+        return;
+    }
+
+    servers.forEach(server => {
+        const serverCard = createServerCard(server);
+        container.appendChild(serverCard);
+    });
+}
+
+function formatTime24Hour(timeValue) {
+    if (!timeValue) return '';
+    
+    // If already in HH:MM or HH:MM:SS format, validate and return
+    if (typeof timeValue === 'string' && timeValue.includes(':')) {
+        const parts = timeValue.split(':');
+        const hours = parseInt(parts[0]);
+        const minutes = parseInt(parts[1] || 0);
+        
+        if (!isNaN(hours) && !isNaN(minutes) && hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) {
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+        }
+    }
+    
+    // If it's just a number (hour), format as HH:00
+    const numValue = parseInt(timeValue);
+    if (!isNaN(numValue) && numValue >= 0 && numValue <= 23) {
+        return `${String(numValue).padStart(2, '0')}:00`;
+    }
+    
+    // Invalid format, return empty
+    return '';
+}
+
+function createServerCard(server) {
+    const card = document.createElement('div');
+    card.className = 'border border-gray-200 rounded-xl p-6 hover:shadow-lg transition-shadow';
+    
+    const isOnline = server.status === 'online';
+    const statusBadge = isOnline 
+        ? '<span class="px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800 inline-flex items-center"><i class="fas fa-circle mr-1 text-xs"></i> Online</span>'
+        : '<span class="px-3 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800 inline-flex items-center"><i class="fas fa-circle mr-1 text-xs"></i> Offline</span>';
+    
+    // Format uptime if available
+    const uptime = server.uptime ? formatUptime(server.uptime) : 'N/A';
+    const lastUsed = server.last_used ? formatTimeAgo(server.last_used) : 'Never';
+    
+    // Format LED times to proper 24-hour HH:MM format
+    const ledOnTime = formatTime24Hour(server.led_on_time);
+    const ledOffTime = formatTime24Hour(server.led_off_time);
+    
+    card.innerHTML = `
+        <div class="flex items-start justify-between mb-4">
+            <div class="flex items-center space-x-3">
+                <div class="w-12 h-12 rounded-lg bg-purple-100 flex items-center justify-center">
+                    <i class="fas fa-server text-2xl text-purple-600"></i>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">${server.name}</h3>
+                    <p class="text-sm text-gray-500 font-mono">${server.mac_address}</p>
+                </div>
+            </div>
+            ${statusBadge}
+        </div>
+
+            <div class="grid grid-cols-2 gap-4 mb-4 text-sm">
+            <div>
+                <p class="text-gray-500">IP Address</p>
+                <p class="font-mono text-gray-900">${server.ip_address}</p>
+            </div>
+            ${isOnline ? `
+            <div>
+                <p class="text-gray-500">Uptime</p>
+                <p class="text-gray-900">${uptime}</p>
+            </div>`: ''}
+            <div>
+                <p class="text-gray-500">Last Used</p>
+                <p class="text-gray-900">${lastUsed}</p>
+            </div>
+            ${isOnline ? `
+            <div>
+                <p class="text-gray-500">TCP Port</p>
+                <p class="font-mono text-gray-900">${server.tcp_port !== undefined && server.tcp_port !== null ? server.tcp_port : ''}</p>
+            </div>` : ''}
+        </div>
+        ${isOnline ? `
+        <div class="border-t border-gray-200 pt-4 space-y-4">
+            <!-- LED Times -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    <i class="fas fa-lightbulb mr-1"></i>LED Schedule
+                </label>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs text-gray-500">Off Time</label>
+                        <input type="number" id="led-on-${server.id}" value="${ledOnTime ? parseInt(ledOnTime.split(':')[0]) : ''}" 
+                               placeholder="0-23" min="0" max="23"
+                               class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-purple-500 focus:border-purple-500 text-sm">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-500">On Time</label>
+                        <input type="number" id="led-off-${server.id}" value="${ledOffTime ? parseInt(ledOffTime.split(':')[0]) : ''}" 
+                               placeholder="0-23" min="0" max="23"
+                               class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-purple-500 focus:border-purple-500 text-sm">
+                    </div>
+                </div>
+                <button onclick="updateLedTimes('${server.id}')" id="led-btn-${server.id}" 
+                        class="mt-2 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors inline-flex items-center justify-center">
+                    <i class="fas fa-save mr-2"></i>Save LED Times
+                    <span id="led-spinner-${server.id}" class="spinner ml-2" style="display: none;"></span>
+                </button>
+            </div>
+
+            <!-- TCP Port -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    <i class="fas fa-network-wired mr-1"></i>TCP Port
+                </label>
+                <input type="number" id="port-${server.id}" value="${server.tcp_port !== undefined && server.tcp_port !== null ? server.tcp_port : ''}" min="0" max="65535"
+                       class="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-purple-500 focus:border-purple-500 text-sm">
+                <button onclick="updatePort('${server.id}')" id="port-btn-${server.id}"
+                        class="mt-2 w-full px-3 py-2 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors inline-flex items-center justify-center">
+                    <i class="fas fa-save mr-2"></i>Update Port
+                    <span id="port-spinner-${server.id}" class="spinner ml-2" style="display: none;"></span>
+                </button>
+            </div>
+
+            <!-- Firmware Upload -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    <i class="fas fa-upload mr-1"></i>Update Firmware
+                </label>
+                <input type="file" id="firmware-${server.id}" accept=".bin" 
+                       class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100">
+                <button onclick="uploadFirmware('${server.id}', '${server.ip_address}')" id="upload-btn-${server.id}"
+                        class="mt-2 w-full px-3 py-2 bg-purple-600 text-white text-sm rounded-md hover:bg-purple-700 transition-colors inline-flex items-center justify-center">
+                    <i class="fas fa-cloud-upload-alt mr-2"></i>Upload Firmware
+                    <span id="upload-spinner-${server.id}" class="spinner ml-2" style="display: none;"></span>
+                </button>
+            </div>
+        </div>
+        ` : '<div class="border-t border-gray-200 pt-4 text-center text-gray-500 text-sm">Server is offline - Configuration unavailable</div>'}
+        
+        <!-- Delete Button -->
+        <div class="border-t border-gray-200 pt-4 mt-4">
+            <button onclick="deleteServer('${server.id}', '${server.name.replace(/'/g, "\\'")}')" 
+                    class="w-full px-3 py-2 bg-red-600 text-white text-sm rounded-md hover:bg-red-700 transition-colors inline-flex items-center justify-center">
+                <i class="fas fa-trash mr-2"></i>Delete Server
+            </button>
+        </div>
+    `;
+    
+    return card;
+}
+
+function formatUptime(seconds) {
+    if (!seconds || seconds < 0) return 'N/A';
+    
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    
+    if (days > 0) {
+        return `${days}d ${hours}h`;
+    } else if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    } else {
+        return `${minutes}m`;
+    }
+}
+
+function formatTimeAgo(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
+}
+
+function refreshServers() {
+    const refreshIcon = document.getElementById('refresh-icon');
+    refreshIcon.classList.add('rotate-360');
+    loadServers();
+    setTimeout(() => {
+        refreshIcon.classList.remove('rotate-360');
+    }, 500);
+}
+
+function setButtonLoading(buttonId, spinnerId, isLoading) {
+    const button = document.getElementById(buttonId);
+    const spinner = document.getElementById(spinnerId);
+    
+    if (isLoading) {
+        button.disabled = true;
+        button.classList.add('opacity-75', 'cursor-not-allowed');
+        spinner.style.display = 'inline-block';
+    } else {
+        button.disabled = false;
+        button.classList.remove('opacity-75', 'cursor-not-allowed');
+        spinner.style.display = 'none';
+    }
+}
+
+function updateLedTimes(serverId) {
+    const ledOnInput = document.getElementById(`led-on-${serverId}`);
+    const ledOffInput = document.getElementById(`led-off-${serverId}`);
+    const ledOnTime = parseInt(ledOnInput.value);
+    const ledOffTime = parseInt(ledOffInput.value);
+    
+    if (isNaN(ledOnTime) || isNaN(ledOffTime) || ledOnTime < 0 || ledOnTime > 23 || ledOffTime < 0 || ledOffTime > 23) {
+        showToast('Validation Error', 'Please enter valid hours (0-23)', 'warning');
+        return;
+    }
+    
+    setButtonLoading(`led-btn-${serverId}`, `led-spinner-${serverId}`, true);
+    
+    fetch(`/servers/api/servers/${serverId}/led-times`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            led_on_time: ledOnTime,
+            led_off_time: ledOffTime
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Success!', 'LED schedule updated successfully', 'success');
+            // Don't reload immediately - let the loading state clear first
+        } else {
+            showToast('Error', data.error || 'Failed to update LED times', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error updating LED times:', err);
+        showToast('Error', 'Failed to update LED times', 'error');
+    })
+    .finally(() => {
+        setTimeout(() => {
+            setButtonLoading(`led-btn-${serverId}`, `led-spinner-${serverId}`, false);
+            // Reload servers after clearing the loading state
+            setTimeout(() => {
+                loadServers();
+            }, 500);
+        }, 1500);
+    });
+}
+
+function updatePort(serverId) {
+    const portInput = document.getElementById(`port-${serverId}`);
+    const port = parseInt(portInput.value);
+    
+    if (isNaN(port) || port < 0 || port > 65535) {
+        showToast('Validation Error', 'Invalid port number (0-65535)', 'warning');
+        return;
+    }
+    
+    setButtonLoading(`port-btn-${serverId}`, `port-spinner-${serverId}`, true);
+    
+    fetch(`/servers/api/servers/${serverId}/port`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ port: port })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Success!', `Port updated to ${port}`, 'success');
+            // Don't reload immediately - let the loading state clear first
+        } else {
+            showToast('Error', data.error || 'Failed to update port', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error updating port:', err);
+        showToast('Error', 'Failed to update port', 'error');
+    })
+    .finally(() => {
+        setTimeout(() => {
+            setButtonLoading(`port-btn-${serverId}`, `port-spinner-${serverId}`, false);
+            // Reload servers after clearing the loading state
+            setTimeout(() => {
+                loadServers();
+            }, 500);
+        }, 1500);
+    });
+}
+
+function uploadFirmware(serverId, ipAddress) {
+    const fileInput = document.getElementById(`firmware-${serverId}`);
+    const file = fileInput.files[0];
+    
+    if (!file) {
+        showToast('Validation Error', 'Please select a firmware file', 'warning');
+        return;
+    }
+    
+    if (!file.name.toLowerCase().endsWith('.bin')) {
+        showToast('Validation Error', 'Only .bin files are allowed', 'warning');
+        return;
+    }
+    
+    setButtonLoading(`upload-btn-${serverId}`, `upload-spinner-${serverId}`, true);
+    showToast('Uploading...', 'Firmware update started', 'info');
+    
+    const formData = new FormData();
+    formData.append('update', file);
+    
+    const otaURL = `http://${ipAddress}/update`;
+    
+    fetch(otaURL, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.text();
+        } else {
+            throw new Error('Upload failed');
+        }
+    })
+    .then(responseText => {
+        if (responseText === 'OK' || response.ok) {
+            showToast('Success!', 'Firmware updated successfully', 'success');
+            fileInput.value = '';
+        } else {
+            showToast('Error', 'Failed to update firmware', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error uploading firmware:', err);
+        showToast('Error', 'Failed to upload firmware. Check if device is reachable.', 'error');
+    })
+    .finally(() => {
+        setTimeout(() => {
+            setButtonLoading(`upload-btn-${serverId}`, `upload-spinner-${serverId}`, false);
+        }, 2000);
+    });
+}
+
+function deleteServer(serverId, serverName) {
+    deleteServerId = serverId;
+    deleteServerName = serverName;
+    document.getElementById('delete-server-name').textContent = serverName;
+    document.getElementById('delete-modal').classList.remove('hidden');
+}
+
+function closeDeleteModal() {
+    document.getElementById('delete-modal').classList.add('hidden');
+    deleteServerId = null;
+    deleteServerName = null;
+}
+
+function confirmDelete() {
+    if (!deleteServerId) return;
+    
+    fetch(`/servers/api/servers/${deleteServerId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Server Deleted', `${deleteServerName} has been removed`, 'success');
+            loadServers();
+            closeDeleteModal();
+        } else {
+            showToast('Error', data.error || 'Failed to delete server', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error deleting server:', err);
+        showToast('Error', 'Failed to delete server', 'error');
+    });
+}
+</script>
+{% endblock %}

@@ -1,0 +1,1129 @@
+{% extends "base.html" %}
+
+{% block title %}Lightstrip Management - Hue Mix Link{% endblock %}
+
+{% block content %}
+<style>
+.rotate-360 {
+    transform: rotate(360deg);
+}
+.spinner {
+    border: 3px solid rgba(59, 130, 246, 0.3);
+    border-top: 3px solid #3b82f6;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+.skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: loading 1.5s ease-in-out infinite;
+    border-radius: 0.375rem;
+}
+@keyframes loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+.color-preview {
+    width: 40px;
+    height: 40px;
+    border-radius: 0.5rem;
+    border: 2px solid #e5e7eb;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.color-preview:hover {
+    border-color: #9333ea;
+    transform: scale(1.1);
+}
+</style>
+
+<!-- Toast Notification -->
+<div id="toast-notification" class="hidden fixed top-4 right-4 z-50 max-w-md">
+    <div id="toast-container" class="rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0">
+        <div class="flex-shrink-0">
+            <i id="toast-icon" class="fas fa-check-circle text-2xl text-green-600"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <p id="toast-title" class="text-sm font-semibold text-gray-900"></p>
+            <p id="toast-message" class="text-sm text-gray-700 mt-1"></p>
+        </div>
+        <button onclick="hideToast()" class="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-yellow-500 to-yellow-400 bg-clip-text text-transparent mb-1">
+                    Lightstrip Management
+                </h1>
+                <p class="text-gray-600">Configure your LED lightstrips and scene overrides</p>
+            </div>
+            <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                <i class="fas fa-arrow-left mr-2"></i>Back to Home
+            </a>
+        </div>
+    </div>
+
+    <!-- Lightstrips List -->
+    <div class="bg-white rounded-2xl shadow-lg p-6 mb-6">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xl font-semibold text-gray-800">
+                <i class="fas fa-lightbulb mr-2 text-yellow-400"></i>Available Lightstrips
+            </h2>
+            <button onclick="refreshLightstrips()" class="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors">
+                <i id="refresh-icon" class="fas fa-sync-alt mr-2 transition-transform duration-500"></i>Refresh
+            </button>
+        </div>
+
+        <!-- Lightstrips Grid -->
+        <div id="lightstrips-container" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Lightstrips will be loaded here -->
+        </div>
+    </div>
+</div>
+
+<!-- Configure Lightstrip Modal -->
+<div id="lightstrip-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div class="p-6 border-b border-gray-200">
+            <div class="flex items-center justify-between">
+                <h3 class="text-2xl font-bold text-gray-900" id="modal-title">Configure Lightstrip</h3>
+                <button onclick="hideConfigModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+        </div>
+        
+        <div class="p-6 space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Name</label>
+                <input type="text" id="lightstrip-name" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent" placeholder="e.g., Living Room Strip">
+            </div>
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">MAC Address</label>
+                <input type="text" id="lightstrip-mac" disabled class="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100">
+            </div>
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">IP Address</label>
+                <input type="text" id="lightstrip-ip" disabled class="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100">
+            </div>
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Room</label>
+                
+                <!-- Error State -->
+                <div id="lightstrip-room-error-state" class="hidden mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <div class="flex items-start space-x-3">
+                        <i class="fas fa-exclamation-triangle text-red-600 mt-1"></i>
+                        <div class="flex-1">
+                            <h4 class="text-sm font-semibold text-red-900">Unable to Load Rooms</h4>
+                            <p id="lightstrip-room-error-message" class="text-sm text-red-700 mt-1"></p>
+                            <a href="/bridge" class="inline-block mt-2 px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors">
+                                <i class="fas fa-cog mr-1"></i>Configure Bridge
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Loading State -->
+                <div id="lightstrip-room-loading-state" class="hidden mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center space-x-3">
+                    <div class="spinner"></div>
+                    <span class="text-sm text-blue-700">Loading rooms from Hue Bridge...</span>
+                </div>
+                
+                <select id="lightstrip-room" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
+                    <option value="">Select a room</option>
+                </select>
+            </div>
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Color Type</label>
+                <select id="lightstrip-color-type" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
+                    <option value="rgb">RGB</option>
+                    <option value="rgbw">RGBW</option>
+                    <option value="rgbww">RGBWW</option>
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Number of LEDs</label>
+                <input type="number" id="lightstrip-number-colors" min="1" max="300" value="40" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
+            </div>
+            
+            <div>
+                <label class="flex items-center space-x-2">
+                    <input type="checkbox" id="lightstrip-single-color" checked class="w-4 h-4 text-yellow-500 border-gray-300 rounded focus:ring-yellow-500">
+                    <span class="text-sm font-medium text-gray-700">Single Color Mode</span>
+                </label>
+                <p class="text-xs text-gray-500 mt-1 ml-6">All LEDs show the same color</p>
+            </div>
+        </div>
+        
+        <div class="p-6 border-t border-gray-200 flex justify-end space-x-3">
+            <button onclick="hideConfigModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors">
+                Cancel
+            </button>
+            <button onclick="saveLightstrip()" class="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors">
+                <i class="fas fa-save mr-2"></i>Save
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Scene Overrides Modal -->
+<div id="overrides-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+        <div class="p-6 border-b border-gray-200">
+            <div class="flex items-center justify-between">
+                <h3 class="text-2xl font-bold text-gray-900">Scene Overrides</h3>
+                <button onclick="hideOverridesModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <p class="text-sm text-gray-600 mt-2">Configure custom behaviors for specific scenes</p>
+        </div>
+        
+        <div class="p-6">
+            <div id="scenes-list" class="space-y-4">
+                <!-- Scenes will be loaded here -->
+            </div>
+        </div>
+        
+        <div class="p-6 border-t border-gray-200 flex justify-end">
+            <button onclick="hideOverridesModal()" class="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors">
+                Done
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Color Picker Modal -->
+<div id="color-picker-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
+        <div class="p-6 border-b border-gray-200">
+            <div class="flex items-center justify-between">
+                <h3 class="text-xl font-bold text-gray-900" id="color-picker-title">Pick Color</h3>
+                <button onclick="hideColorPicker()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+        </div>
+        
+        <div class="p-6">
+            <div class="space-y-4">
+                <!-- Large Color Preview -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Preview</label>
+                    <div id="color-preview" class="w-full h-32 rounded-lg border-2 border-gray-300 shadow-inner"></div>
+                </div>
+                
+                <!-- HTML5 Color Picker -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Quick Pick</label>
+                    <input type="color" id="color-html5" class="w-full h-12 rounded-lg border-2 border-gray-300 cursor-pointer">
+                </div>
+                
+                <!-- RGB Sliders -->
+                <div class="grid grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-red-600 mb-2">Red</label>
+                        <input type="range" id="color-r" min="0" max="255" value="255" class="w-full accent-red-500">
+                        <input type="number" id="color-r-value" min="0" max="255" value="255" class="w-full mt-1 px-2 py-1 text-sm border border-gray-300 rounded">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-green-600 mb-2">Green</label>
+                        <input type="range" id="color-g" min="0" max="255" value="255" class="w-full accent-green-500">
+                        <input type="number" id="color-g-value" min="0" max="255" value="255" class="w-full mt-1 px-2 py-1 text-sm border border-gray-300 rounded">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-blue-600 mb-2">Blue</label>
+                        <input type="range" id="color-b" min="0" max="255" value="255" class="w-full accent-blue-500">
+                        <input type="number" id="color-b-value" min="0" max="255" value="255" class="w-full mt-1 px-2 py-1 text-sm border border-gray-300 rounded">
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="p-6 border-t border-gray-200 flex justify-end space-x-3">
+            <button onclick="hideColorPicker()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors">
+                Cancel
+            </button>
+            <button onclick="confirmColorPick()" class="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors">
+                Select
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Multi-Color Picker Modal -->
+<div id="multi-color-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div class="p-6 border-b border-gray-200">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-xl font-bold text-gray-900">Color Palette</h3>
+                    <p class="text-sm text-gray-600 mt-1">Create a palette of colors for the lightstrip to cycle through</p>
+                </div>
+                <button onclick="hideMultiColorPicker()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+        </div>
+        
+        <div class="p-6">
+            <div class="mb-4 flex items-center justify-between">
+                <label class="text-sm font-medium text-gray-700">Number of Colors in Palette:</label>
+                <input type="number" id="palette-color-count" min="0" max="10" value="0" class="w-20 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500" onchange="updatePaletteCount()">
+            </div>
+            <div id="multi-color-grid" class="space-y-3">
+                <!-- Color boxes will be added here -->
+            </div>
+        </div>
+        
+        <div class="p-6 border-t border-gray-200 flex justify-end space-x-3">
+            <button onclick="hideMultiColorPicker()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors">
+                Cancel
+            </button>
+            <button onclick="confirmMultiColorPick()" class="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors">
+                <i class="fas fa-check mr-2"></i>Save Palette
+            </button>
+        </div>
+    </div>
+</div>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeDeleteModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="sm:flex sm:items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <i class="fas fa-exclamation-triangle text-red-600"></i>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">
+                            Delete Lightstrip
+                        </h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500">
+                                Are you sure you want to delete "<span id="delete-lightstrip-name" class="font-semibold text-gray-900"></span>"? This action cannot be undone.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="confirmDelete()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Delete
+                </button>
+                <button type="button" onclick="closeDeleteModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let lightstrips = [];
+let rooms = [];
+let currentLightstrip = null;
+let currentScenes = [];
+let colorPickerCallback = null;
+let deleteLightstripId = null;
+let deleteLightstripName = null;
+
+// Toast notification functions
+function showToast(title, message, type = 'success') {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    const icon = document.getElementById('toast-icon');
+    const titleEl = document.getElementById('toast-title');
+    const messageEl = document.getElementById('toast-message');
+    
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    
+    if (type === 'success') {
+        icon.className = 'fas fa-check-circle text-2xl text-green-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0';
+    } else if (type === 'error') {
+        icon.className = 'fas fa-exclamation-circle text-2xl text-red-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-red-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-red-50 translate-x-full opacity-0';
+    } else if (type === 'warning') {
+        icon.className = 'fas fa-exclamation-triangle text-2xl text-yellow-500';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-yellow-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-yellow-50 translate-x-full opacity-0';
+    } else if (type === 'info') {
+        icon.className = 'fas fa-info-circle text-2xl text-blue-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-blue-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-blue-50 translate-x-full opacity-0';
+    }
+    
+    toast.classList.remove('hidden');
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toastContainer.classList.remove('translate-x-full', 'opacity-0');
+            toastContainer.classList.add('translate-x-0', 'opacity-100');
+        });
+    });
+    
+    setTimeout(() => {
+        hideToast();
+    }, 4000);
+}
+
+function hideToast() {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    
+    toastContainer.classList.remove('translate-x-0', 'opacity-100');
+    toastContainer.classList.add('translate-x-full', 'opacity-0');
+    
+    setTimeout(() => {
+        toast.classList.add('hidden');
+    }, 300);
+}
+
+// Load data on page load
+window.addEventListener('DOMContentLoaded', function() {
+    loadRooms();
+    loadLightstrips();
+    
+    // Color picker - RGB sliders and number inputs
+    ['r', 'g', 'b'].forEach(channel => {
+        const slider = document.getElementById(`color-${channel}`);
+        const numberInput = document.getElementById(`color-${channel}-value`);
+        
+        if (slider && numberInput) {
+            slider.addEventListener('input', function() {
+                numberInput.value = this.value;
+                updateColorPreview();
+            });
+            
+            numberInput.addEventListener('input', function() {
+                const value = Math.max(0, Math.min(255, parseInt(this.value) || 0));
+                this.value = value;
+                slider.value = value;
+                updateColorPreview();
+            });
+        }
+    });
+    
+    // HTML5 color picker
+    const html5ColorPicker = document.getElementById('color-html5');
+    if (html5ColorPicker) {
+        html5ColorPicker.addEventListener('input', function() {
+            const hex = this.value;
+            const r = parseInt(hex.substr(1, 2), 16);
+            const g = parseInt(hex.substr(3, 2), 16);
+            const b = parseInt(hex.substr(5, 2), 16);
+            
+            document.getElementById('color-r').value = r;
+            document.getElementById('color-r-value').value = r;
+            document.getElementById('color-g').value = g;
+            document.getElementById('color-g-value').value = g;
+            document.getElementById('color-b').value = b;
+            document.getElementById('color-b-value').value = b;
+            
+            updateColorPreview();
+        });
+    }
+});
+
+function showSkeletonLoaders() {
+    const container = document.getElementById('lightstrips-container');
+    container.innerHTML = '';
+    
+    for (let i = 0; i < 2; i++) {
+        const skeletonCard = document.createElement('div');
+        skeletonCard.className = 'border border-gray-200 rounded-xl p-6';
+        skeletonCard.innerHTML = `
+            <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center space-x-3">
+                    <div class="w-12 h-12 rounded-lg skeleton"></div>
+                    <div class="flex-1">
+                        <div class="h-5 w-32 skeleton mb-2"></div>
+                        <div class="h-4 w-40 skeleton"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4 mb-4">
+                <div class="h-4 skeleton"></div>
+                <div class="h-4 skeleton"></div>
+                <div class="h-4 skeleton"></div>
+                <div class="h-4 skeleton"></div>
+            </div>
+            <div class="flex space-x-2 mt-4">
+                <div class="h-10 skeleton flex-1"></div>
+                <div class="h-10 skeleton flex-1"></div>
+            </div>
+        `;
+        container.appendChild(skeletonCard);
+    }
+}
+
+function loadRooms() {
+    const roomSelect = document.getElementById('lightstrip-room');
+    const loadingState = document.getElementById('lightstrip-room-loading-state');
+    const errorState = document.getElementById('lightstrip-room-error-state');
+    
+    // Show loading state
+    if (loadingState) {
+        loadingState.classList.remove('hidden');
+    }
+    if (errorState) {
+        errorState.classList.add('hidden');
+    }
+    roomSelect.disabled = true;
+    
+    fetch('/api/rooms')
+        .then(response => response.json())
+        .then(data => {
+            if (loadingState) {
+                loadingState.classList.add('hidden');
+            }
+            roomSelect.disabled = false;
+            
+            if (data.success) {
+                rooms = data.rooms;
+                roomSelect.innerHTML = '<option value="">Select a room</option>';
+                rooms.forEach(room => {
+                    const option = document.createElement('option');
+                    option.value = room.id;
+                    option.textContent = room.name;
+                    roomSelect.appendChild(option);
+                });
+            } else if (data.needs_config) {
+                // Show error state
+                if (errorState) {
+                    errorState.classList.remove('hidden');
+                    document.getElementById('lightstrip-room-error-message').textContent = 
+                        'Hue Bridge is not configured. Please configure your bridge to load rooms.';
+                }
+                roomSelect.disabled = true;
+            } else {
+                // Show error state
+                if (errorState) {
+                    errorState.classList.remove('hidden');
+                    document.getElementById('lightstrip-room-error-message').textContent = 
+                        data.error || 'Failed to load rooms from Hue Bridge';
+                }
+                roomSelect.disabled = true;
+            }
+        })
+        .catch(err => {
+            console.error('Error loading rooms:', err);
+            if (loadingState) {
+                loadingState.classList.add('hidden');
+            }
+            if (errorState) {
+                errorState.classList.remove('hidden');
+                document.getElementById('lightstrip-room-error-message').textContent = 
+                    'Failed to connect to server. Please check your connection.';
+            }
+            roomSelect.disabled = true;
+        });
+}
+
+function loadLightstrips() {
+    showSkeletonLoaders();
+    
+    fetch('/lightstrips/api/lightstrips')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                lightstrips = data.lightstrips;
+                renderLightstrips();
+            }
+        })
+        .catch(err => {
+            console.error('Error loading lightstrips:', err);
+            showToast('Error', 'Failed to load lightstrips', 'error');
+        });
+}
+
+function renderLightstrips() {
+    const container = document.getElementById('lightstrips-container');
+    container.innerHTML = '';
+
+    if (lightstrips.length === 0) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-8 col-span-2">No lightstrips available. Lightstrips will appear here automatically once detected.</p>';
+        return;
+    }
+
+    lightstrips.forEach(strip => {
+        const card = createLightstripCard(strip);
+        container.appendChild(card);
+    });
+}
+
+function createLightstripCard(strip) {
+    const card = document.createElement('div');
+    card.className = 'border border-gray-200 rounded-xl p-6 hover:shadow-lg transition-shadow';
+    
+    const room = rooms.find(r => r.id === strip.room_id);
+    const roomName = room ? room.name : 'Not configured';
+    const overrideCount = Object.keys(strip.overrides || {}).length;
+    const isConfigured = strip.room_id && strip.room_id !== '';
+    
+    card.innerHTML = `
+        <div class="flex items-start justify-between mb-4">
+            <div class="flex items-center space-x-3">
+                <div class="w-12 h-12 rounded-lg bg-gradient-to-br from-yellow-400 to-amber-500 flex items-center justify-center">
+                    <i class="fas fa-lightbulb text-2xl text-white"></i>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">${strip.name}</h3>
+                    <p class="text-sm text-gray-500 font-mono">${strip.mac_address}</p>
+                </div>
+            </div>
+            ${isConfigured ? `<span class="px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">Configured</span>` : `<span class="px-3 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">Not Configured</span>`}
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 mb-4 text-sm">
+            <div>
+                <p class="text-gray-500">Room</p>
+                <p class="text-gray-900">${roomName}</p>
+            </div>
+            <div>
+                <p class="text-gray-500">IP Address</p>
+                <p class="font-mono text-gray-900">${strip.ip || 'Not Configured'}</p>
+            </div>
+            <div>
+                <p class="text-gray-500">Color Type</p>
+                <p class="text-gray-900">${strip.color_type || 'Not Configured'}</p>
+            </div>
+            <div>
+                <p class="text-gray-500">Number of LEDs</p>
+                <p class="text-gray-900">${strip.number_colors || 'Not Configured'}</p>
+            </div>
+            <div>
+                <p class="text-gray-500">Mode</p>
+                <p class="text-gray-900">${strip.single_color !== undefined ? (strip.single_color ? 'Single Color' : 'Multi Color') : 'Not Configured'}</p>
+            </div>
+            <div>
+                <p class="text-gray-500">Overrides</p>
+                <p class="text-gray-900">${overrideCount} scene${overrideCount !== 1 ? 's' : ''}</p>
+            </div>
+        </div>
+
+        <div class="border-t border-gray-200 pt-4 flex flex-col space-y-2">
+            <div class="flex space-x-2">
+                <button onclick="configureLightstrip('${strip.id}')" class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors inline-flex items-center justify-center">
+                    <i class="fas fa-cog mr-2"></i>Configure
+                </button>
+                ${isConfigured ? `
+                <button onclick="showOverrides('${strip.id}')" class="flex-1 px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors inline-flex items-center justify-center">
+                    <i class="fas fa-palette mr-2"></i>Overrides
+                </button>
+                ` : ''}
+            </div>
+            <button onclick="deleteLightstrip('${strip.id}', '${strip.name.replace(/'/g, "\\'")}')" class="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors inline-flex items-center justify-center">
+                <i class="fas fa-trash mr-2"></i>Delete
+            </button>
+        </div>
+    `;
+    
+    return card;
+}
+
+function refreshLightstrips() {
+    const refreshIcon = document.getElementById('refresh-icon');
+    refreshIcon.classList.add('rotate-360');
+    loadLightstrips();
+    setTimeout(() => {
+        refreshIcon.classList.remove('rotate-360');
+    }, 500);
+}
+
+function hideConfigModal() {
+    document.getElementById('lightstrip-modal').classList.add('hidden');
+}
+
+function configureLightstrip(stripId) {
+    const strip = lightstrips.find(s => s.id === stripId);
+    if (!strip) return;
+    
+    currentLightstrip = strip;
+    
+    document.getElementById('modal-title').textContent = 'Configure Lightstrip';
+    document.getElementById('lightstrip-name').value = strip.name;
+    document.getElementById('lightstrip-mac').value = strip.mac_address;
+    document.getElementById('lightstrip-ip').value = strip.ip;
+    document.getElementById('lightstrip-room').value = strip.room_id || '';
+    document.getElementById('lightstrip-color-type').value = strip.color_type || 'rgb';
+    document.getElementById('lightstrip-single-color').checked = strip.single_color !== undefined ? strip.single_color : true;
+    document.getElementById('lightstrip-number-colors').value = strip.number_colors || 40;
+    
+    document.getElementById('lightstrip-modal').classList.remove('hidden');
+}
+
+function saveLightstrip() {
+    const name = document.getElementById('lightstrip-name').value.trim();
+    const roomId = document.getElementById('lightstrip-room').value;
+    const colorType = document.getElementById('lightstrip-color-type').value;
+    const singleColor = document.getElementById('lightstrip-single-color').checked;
+    const numberColors = parseInt(document.getElementById('lightstrip-number-colors').value);
+    
+    if (!name || !roomId) {
+        showToast('Validation Error', 'Please fill in all required fields', 'warning');
+        return;
+    }
+    
+    const data = {
+        name: name,
+        room_id: roomId,
+        color_type: colorType,
+        single_color: singleColor,
+        number_colors: numberColors
+    };
+    
+    const url = `/lightstrips/api/lightstrips/${currentLightstrip.id}`;
+    
+    fetch(url, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Success!', 'Lightstrip configuration saved', 'success');
+            hideConfigModal();
+            loadLightstrips();
+        } else {
+            showToast('Error', data.error || 'Failed to save lightstrip', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error saving lightstrip:', err);
+        showToast('Error', 'Failed to save lightstrip', 'error');
+    });
+}
+
+function showOverrides(stripId) {
+    const strip = lightstrips.find(s => s.id === stripId);
+    if (!strip) return;
+    
+    currentLightstrip = strip;
+    
+    const scenesListContainer = document.getElementById('scenes-list');
+    scenesListContainer.innerHTML = '<div class="flex items-center justify-center p-8"><div class="spinner"></div><span class="ml-3 text-gray-600">Loading scenes...</span></div>';
+    
+    document.getElementById('overrides-modal').classList.remove('hidden');
+    
+    // Load scenes for the room
+    fetch(`/api/rooms/${strip.room_id}/scenes`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                currentScenes = data.scenes;
+                renderSceneOverrides();
+            } else if (data.needs_config) {
+                scenesListContainer.innerHTML = `
+                    <div class="p-6 bg-red-50 border border-red-200 rounded-lg">
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-exclamation-triangle text-red-600 text-2xl"></i>
+                            <div class="flex-1">
+                                <h4 class="text-lg font-semibold text-red-900 mb-2">Unable to Load Scenes</h4>
+                                <p class="text-sm text-red-700 mb-4">Hue Bridge is not configured. Please configure your bridge to load scenes.</p>
+                                <a href="/bridge" class="inline-block px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">
+                                    <i class="fas fa-cog mr-2"></i>Configure Bridge
+                                </a>
+                            </div>
+                        </div>
+                    </div>`;
+            } else {
+                scenesListContainer.innerHTML = `
+                    <div class="p-6 bg-red-50 border border-red-200 rounded-lg">
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-exclamation-circle text-red-600 text-2xl"></i>
+                            <div class="flex-1">
+                                <h4 class="text-lg font-semibold text-red-900 mb-2">Error Loading Scenes</h4>
+                                <p class="text-sm text-red-700">${data.error || 'Failed to load scenes from Hue Bridge'}</p>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+        })
+        .catch(err => {
+            console.error('Error loading scenes:', err);
+            scenesListContainer.innerHTML = `
+                <div class="p-6 bg-red-50 border border-red-200 rounded-lg">
+                    <div class="flex items-start space-x-3">
+                        <i class="fas fa-exclamation-circle text-red-600 text-2xl"></i>
+                        <div class="flex-1">
+                            <h4 class="text-lg font-semibold text-red-900 mb-2">Connection Error</h4>
+                            <p class="text-sm text-red-700">Failed to connect to server. Please check your connection.</p>
+                        </div>
+                    </div>
+                </div>`;
+        });
+}
+
+function hideOverridesModal() {
+    document.getElementById('overrides-modal').classList.add('hidden');
+    loadLightstrips(); // Refresh to show updated override counts
+}
+
+function renderSceneOverrides() {
+    const container = document.getElementById('scenes-list');
+    container.innerHTML = '';
+    
+    currentScenes.forEach(scene => {
+        const override = currentLightstrip.overrides[scene.id] || null;
+        const sceneCard = createSceneOverrideCard(scene, override);
+        container.appendChild(sceneCard);
+    });
+}
+
+function createSceneOverrideCard(scene, override) {
+    const card = document.createElement('div');
+    card.className = 'border border-gray-200 rounded-lg p-4';
+    
+    let overrideDisplay = '<span class="text-gray-400 text-sm">Automatic</span>';
+    
+    if (override) {
+        if (override.type === 'off') {
+            overrideDisplay = '<span class="text-red-600 text-sm font-medium"><i class="fas fa-power-off mr-1"></i>OFF</span>';
+        } else if (override.type === 'single_color') {
+            const colorStyle = `background-color: rgb(${override.color.r}, ${override.color.g}, ${override.color.b})`;
+            overrideDisplay = `<div class="color-preview" style="${colorStyle}"></div>`;
+        } else if (override.type === 'multi_color') {
+            overrideDisplay = '<div class="flex space-x-2">';
+            override.colors.forEach(color => {
+                const colorStyle = `background-color: rgb(${color.r}, ${color.g}, ${color.b})`;
+                overrideDisplay += `<div class="color-preview" style="${colorStyle}"></div>`;
+            });
+            overrideDisplay += '</div>';
+        }
+    }
+    
+    card.innerHTML = `
+        <div class="flex items-center justify-between mb-3">
+            <div>
+                <h4 class="font-semibold text-gray-900">${scene.name}</h4>
+                <p class="text-xs text-gray-500">${scene.id}</p>
+            </div>
+            <div class="flex items-center space-x-2">
+                ${overrideDisplay}
+            </div>
+        </div>
+        
+        <div class="flex space-x-2">
+            <button onclick="setOverrideOff('${scene.id}')" class="flex-1 px-3 py-2 text-sm ${override?.type === 'off' ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-700'} rounded hover:bg-red-700 hover:text-white transition-colors">
+                <i class="fas fa-power-off mr-1"></i>OFF
+            </button>
+            <button onclick="setOverrideSingleColor('${scene.id}')" class="flex-1 px-3 py-2 text-sm ${override?.type === 'single_color' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'} rounded hover:bg-blue-700 hover:text-white transition-colors">
+                <i class="fas fa-palette mr-1"></i>Color
+            </button>
+            ${!currentLightstrip.single_color ? `
+            <button onclick="setOverrideMultiColor('${scene.id}')" class="flex-1 px-3 py-2 text-sm ${override?.type === 'multi_color' ? 'bg-yellow-500 text-white' : 'bg-gray-100 text-gray-700'} rounded hover:bg-yellow-600 hover:text-white transition-colors">
+                <i class="fas fa-brush mr-1"></i>Multi
+            </button>
+            ` : ''}
+            ${override ? `
+            <button onclick="clearOverride('${scene.id}')" class="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-300 transition-colors">
+                <i class="fas fa-undo"></i>
+            </button>
+            ` : ''}
+        </div>
+    `;
+    
+    return card;
+}
+
+function setOverrideOff(sceneId) {
+    saveOverride(sceneId, { type: 'off' });
+}
+
+function setOverrideSingleColor(sceneId) {
+    const override = currentLightstrip.overrides[sceneId];
+    const existingColor = override?.type === 'single_color' ? override.color : { r: 255, g: 255, b: 255 };
+    
+    showColorPicker(existingColor, currentLightstrip.color_type, (color) => {
+        saveOverride(sceneId, { type: 'single_color', color: color });
+    });
+}
+
+function setOverrideMultiColor(sceneId) {
+    const override = currentLightstrip.overrides[sceneId];
+    const numColors = currentLightstrip.number_colors;
+    const existingColors = override?.type === 'multi_color' ? override.colors : [];
+    
+    showMultiColorPicker(sceneId, numColors, existingColors);
+}
+
+function clearOverride(sceneId) {
+    saveOverride(sceneId, null);
+}
+
+function saveOverride(sceneId, override) {
+    fetch(`/lightstrips/api/lightstrips/${currentLightstrip.id}/overrides`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            scene_id: sceneId,
+            override: override
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            currentLightstrip = data.lightstrip;
+            // Update in main list
+            const index = lightstrips.findIndex(s => s.id === currentLightstrip.id);
+            if (index !== -1) {
+                lightstrips[index] = currentLightstrip;
+            }
+            renderSceneOverrides();
+            showToast('Success!', 'Override saved', 'success');
+        } else {
+            showToast('Error', data.error || 'Failed to save override', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error saving override:', err);
+        showToast('Error', 'Failed to save override', 'error');
+    });
+}
+
+function showColorPicker(initialColor, colorType, callback) {
+    colorPickerCallback = callback;
+    
+    // Set initial values
+    document.getElementById('color-r').value = initialColor.r || 255;
+    document.getElementById('color-g').value = initialColor.g || 255;
+    document.getElementById('color-b').value = initialColor.b || 255;
+    document.getElementById('color-r-value').value = initialColor.r || 255;
+    document.getElementById('color-g-value').value = initialColor.g || 255;
+    document.getElementById('color-b-value').value = initialColor.b || 255;
+    
+    // Set HTML5 color picker
+    const hexColor = `#${((initialColor.r || 255).toString(16).padStart(2, '0'))}${((initialColor.g || 255).toString(16).padStart(2, '0'))}${((initialColor.b || 255).toString(16).padStart(2, '0'))}`;
+    document.getElementById('color-html5').value = hexColor;
+    
+    updateColorPreview();
+    document.getElementById('color-picker-modal').classList.remove('hidden');
+}
+
+function hideColorPicker() {
+    document.getElementById('color-picker-modal').classList.add('hidden');
+    colorPickerCallback = null;
+}
+
+function updateColorPreview() {
+    const r = parseInt(document.getElementById('color-r').value);
+    const g = parseInt(document.getElementById('color-g').value);
+    const b = parseInt(document.getElementById('color-b').value);
+    
+    const preview = document.getElementById('color-preview');
+    preview.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+    
+    // Update HTML5 color picker to match RGB only
+    const hexColor = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+    document.getElementById('color-html5').value = hexColor;
+}
+
+function confirmColorPick() {
+    if (!colorPickerCallback) return;
+    
+    const color = {
+        r: parseInt(document.getElementById('color-r').value),
+        g: parseInt(document.getElementById('color-g').value),
+        b: parseInt(document.getElementById('color-b').value)
+    };
+    
+    colorPickerCallback(color);
+    hideColorPicker();
+}
+
+// Multi-Color Picker Functions (Palette Mode)
+let multiColorSceneId = null;
+let multiColorArray = [];
+
+function showMultiColorPicker(sceneId, numLeds, existingColors) {
+    multiColorSceneId = sceneId;
+    
+    // Initialize palette with existing colors or start empty
+    if (existingColors && existingColors.length > 0) {
+        multiColorArray = existingColors.map(c => ({ ...c }));
+    } else {
+        // Start with empty palette
+        multiColorArray = [];
+    }
+    
+    document.getElementById('palette-color-count').value = multiColorArray.length || 0;
+    renderMultiColorGrid();
+    document.getElementById('multi-color-modal').classList.remove('hidden');
+}
+
+function hideMultiColorPicker() {
+    document.getElementById('multi-color-modal').classList.add('hidden');
+    multiColorSceneId = null;
+    multiColorArray = [];
+}
+
+function renderMultiColorGrid() {
+    const grid = document.getElementById('multi-color-grid');
+    grid.innerHTML = '';
+    
+    multiColorArray.forEach((color, index) => {
+        const colorRow = document.createElement('div');
+        colorRow.className = 'flex items-center space-x-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors';
+        
+        const rgbColor = `rgb(${color.r}, ${color.g}, ${color.b})`;
+        
+        colorRow.innerHTML = `
+            <div class="flex items-center space-x-3 flex-1">
+                <div class="w-16 h-16 rounded-lg border-2 border-gray-300 shadow-sm cursor-pointer hover:border-yellow-500 transition-all" 
+                     style="background-color: ${rgbColor}"
+                     onclick="editPaletteColor(${index})">
+                </div>
+                <div class="flex-1">
+                    <div class="text-sm font-medium text-gray-700">Color ${index + 1}</div>
+                    <div class="text-xs text-gray-500 font-mono">RGB(${color.r}, ${color.g}, ${color.b})</div>
+                </div>
+            </div>
+            <button onclick="removePaletteColor(${index})" class="px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                <i class="fas fa-trash"></i>
+            </button>
+        `;
+        
+        grid.appendChild(colorRow);
+    });
+    
+    // Add "Add Color" button
+    const addButton = document.createElement('div');
+    addButton.className = 'flex items-center justify-center p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-yellow-500 hover:bg-yellow-50 cursor-pointer transition-all';
+    addButton.innerHTML = `
+        <i class="fas fa-plus mr-2 text-gray-400"></i>
+        <span class="text-gray-600">Add Color to Palette</span>
+    `;
+    addButton.onclick = addPaletteColor;
+    grid.appendChild(addButton);
+}
+
+function updatePaletteCount() {
+    const newCount = parseInt(document.getElementById('palette-color-count').value);
+    
+    if (newCount < 0) {
+        document.getElementById('palette-color-count').value = 0;
+        return;
+    }
+    
+    if (newCount > 10) {
+        document.getElementById('palette-color-count').value = 10;
+        return;
+    }
+    
+    // Adjust array size
+    if (newCount > multiColorArray.length) {
+        // Add more colors
+        while (multiColorArray.length < newCount) {
+            multiColorArray.push({ r: 255, g: 255, b: 255 });
+        }
+    } else if (newCount < multiColorArray.length) {
+        // Remove colors
+        multiColorArray = multiColorArray.slice(0, newCount);
+    }
+    
+    renderMultiColorGrid();
+}
+
+function editPaletteColor(index) {
+    const currentColor = multiColorArray[index];
+    
+    showColorPicker(currentColor, currentLightstrip.color_type, (newColor) => {
+        multiColorArray[index] = newColor;
+        renderMultiColorGrid();
+    });
+}
+
+function addPaletteColor() {
+    if (multiColorArray.length >= 10) {
+        showToast('Limit Reached', 'Maximum 10 colors in palette', 'warning');
+        return;
+    }
+    
+    showColorPicker({ r: 255, g: 255, b: 255 }, currentLightstrip.color_type, (newColor) => {
+        multiColorArray.push(newColor);
+        document.getElementById('palette-color-count').value = multiColorArray.length;
+        renderMultiColorGrid();
+    });
+}
+
+function removePaletteColor(index) {
+    multiColorArray.splice(index, 1);
+    document.getElementById('palette-color-count').value = multiColorArray.length;
+    renderMultiColorGrid();
+}
+
+function confirmMultiColorPick() {
+    if (!multiColorSceneId) return;
+    
+    saveOverride(multiColorSceneId, {
+        type: 'multi_color',
+        colors: multiColorArray
+    });
+    
+    hideMultiColorPicker();
+}
+
+function deleteLightstrip(lightstripId, lightstripName) {
+    deleteLightstripId = lightstripId;
+    deleteLightstripName = lightstripName;
+    document.getElementById('delete-lightstrip-name').textContent = lightstripName;
+    document.getElementById('delete-modal').classList.remove('hidden');
+}
+
+function closeDeleteModal() {
+    document.getElementById('delete-modal').classList.add('hidden');
+    deleteLightstripId = null;
+    deleteLightstripName = null;
+}
+
+function confirmDelete() {
+    if (!deleteLightstripId) return;
+    
+    fetch(`/lightstrips/api/lightstrips/${deleteLightstripId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Lightstrip Deleted', `${deleteLightstripName} has been removed`, 'success');
+            loadLightstrips();
+            closeDeleteModal();
+        } else {
+            showToast('Error', data.error || 'Failed to delete lightstrip', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error deleting lightstrip:', err);
+        showToast('Error', 'Failed to delete lightstrip', 'error');
+    });
+}
+</script>
+{% endblock %}
+

@@ -1,0 +1,882 @@
+{% extends "base.html" %}
+
+{% block title %}Button Configuration - Hue Mix Link{% endblock %}
+
+{% block content %}
+<style>
+.spinner {
+    border: 3px solid rgba(219, 39, 119, 0.3);
+    border-top: 3px solid #db2777;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+</style>
+
+<!-- Toast Notification -->
+<div id="toast-notification" class="hidden fixed top-4 right-4 z-50 max-w-md">
+    <div id="toast-container" class="rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0">
+        <div class="flex-shrink-0">
+            <i id="toast-icon" class="fas fa-check-circle text-2xl text-green-600"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <p id="toast-title" class="text-sm font-semibold text-gray-900"></p>
+            <p id="toast-message" class="text-sm text-gray-700 mt-1"></p>
+        </div>
+        <button onclick="hideToast()" class="flex-shrink-0 inline-flex items-center text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-pink-600 to-pink-400 bg-clip-text text-transparent mb-1">
+                    Button Configuration
+                </h1>
+                <p class="text-gray-600">Configure your ESP-NOW button devices with rooms and scenes</p>
+            </div>
+            <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                <i class="fas fa-arrow-left mr-2"></i>Back to Home
+            </a>
+        </div>
+    </div>
+
+    <!-- Devices List -->
+    <div class="bg-white rounded-2xl shadow-lg p-6 mb-6">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xl font-semibold text-gray-800">
+                <i class="fas fa-microchip mr-2 text-pink-600"></i>Available Devices
+            </h2>
+            <button onclick="refreshDevices()" class="px-4 py-2 bg-pink-600 text-white rounded-lg hover:bg-pink-700 transition-colors">
+                <i id="refresh-icon" class="fas fa-sync-alt mr-2 transition-transform duration-500"></i>Refresh
+            </button>
+        </div>
+
+        <!-- Devices Table -->
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device Name</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">MAC Address</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="devices-table-body" class="bg-white divide-y divide-gray-200">
+                    <!-- Devices will be loaded here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Rename Modal -->
+<div id="rename-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeRenameModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                    <i class="fas fa-edit mr-2 text-pink-600"></i>Rename Device
+                </h3>
+                <div class="mt-2">
+                    <label for="device-name" class="block text-sm font-medium text-gray-700">Device Name</label>
+                    <input type="text" id="device-name" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-pink-500 focus:border-pink-500">
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="saveDeviceName()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-pink-600 text-base font-medium text-white hover:bg-pink-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Save
+                </button>
+                <button type="button" onclick="closeRenameModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Configuration Modal -->
+<div id="config-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeConfigModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">
+                        <i class="fas fa-cog mr-2 text-pink-600"></i>Configure Button: <span id="config-device-name" class="text-pink-600"></span>
+                    </h3>
+                    <button onclick="closeConfigModal()" class="text-gray-400 hover:text-gray-500">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <!-- Step 1: Select Room -->
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        <i class="fas fa-door-open mr-1"></i>Step 1: Select Room
+                    </label>
+                    
+                    <!-- Error State -->
+                    <div id="room-error-state" class="hidden mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-exclamation-triangle text-red-600 mt-1"></i>
+                            <div class="flex-1">
+                                <h4 class="text-sm font-semibold text-red-900">Unable to Load Rooms</h4>
+                                <p id="room-error-message" class="text-sm text-red-700 mt-1"></p>
+                                <a href="/bridge" class="inline-block mt-2 px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors">
+                                    <i class="fas fa-cog mr-1"></i>Configure Bridge
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Loading State -->
+                    <div id="room-loading-state" class="hidden mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center space-x-3">
+                        <div class="spinner"></div>
+                        <span class="text-sm text-blue-700">Loading rooms from Hue Bridge...</span>
+                    </div>
+                    
+                    <select id="room-select" onchange="loadScenesForRoom()" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-pink-500 focus:border-pink-500">
+                        <option value="">-- Select a room --</option>
+                    </select>
+                </div>
+
+                <!-- Step 2: Select Scenes -->
+                <div id="scenes-section" class="mb-6 hidden">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        <i class="fas fa-palette mr-1"></i>Step 2: Select Scenes
+                    </label>
+                    <div class="relative mb-2 w-full">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                            <i class="fas fa-search text-gray-400"></i>
+                        </span>
+                        <input type="text" id="search-scene" placeholder="Search scenes..." onkeyup="filterScenes()" class="w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 pl-10 focus:outline-none focus:ring-pink-500 focus:border-pink-500 w-full">
+                    </div>
+                    <div id="available-scenes" class="grid grid-cols-2 gap-3 mb-4 max-h-80 overflow-y-auto p-2 border border-gray-200 rounded-lg">
+                        <!-- Available scenes will be loaded here -->
+                    </div>
+                </div>
+
+                <!-- Step 3: Organize Selected Scenes -->
+                <div id="selected-section" class="mb-6 hidden">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        <i class="fas fa-list-ol mr-1"></i>Step 3: Organize Scene Order (Drag to reorder)
+                    </label>
+                    <div id="selected-scenes" class="space-y-2 min-h-[100px] border-2 border-dashed border-gray-300 rounded-lg p-4">
+                        <p class="text-gray-400 text-center py-4">No scenes selected yet</p>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="saveConfiguration()" class="w-full inline-flex items-center justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-pink-600 text-base font-medium text-white hover:bg-pink-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    <i class="fas fa-save mr-2"></i>Save Configuration
+                </button>
+                <button type="button" onclick="closeConfigModal()" class="mt-3 w-full inline-flex items-centerjustify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeDeleteModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="sm:flex sm:items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <i class="fas fa-exclamation-triangle text-red-600"></i>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">
+                            Delete Device
+                        </h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500">
+                                Are you sure you want to delete "<span id="delete-device-name" class="font-semibold text-gray-900"></span>"? This action cannot be undone.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="confirmDelete()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Delete
+                </button>
+                <button type="button" onclick="closeDeleteModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let devices = [];
+let rooms = [];
+let currentDeviceId = null;
+let selectedScenes = [];
+let draggedElement = null;
+let deleteDeviceId = null;
+let deleteDeviceName = null;
+
+// Toast notification functions
+function showToast(title, message, type = 'success') {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    const icon = document.getElementById('toast-icon');
+    const titleEl = document.getElementById('toast-title');
+    const messageEl = document.getElementById('toast-message');
+    
+    // Set content
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    
+    // Set icon, color, and background based on type
+    if (type === 'success') {
+        icon.className = 'fas fa-check-circle text-2xl text-green-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0';
+    } else if (type === 'error') {
+        icon.className = 'fas fa-exclamation-circle text-2xl text-red-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-red-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-red-50 translate-x-full opacity-0';
+    } else if (type === 'warning') {
+        icon.className = 'fas fa-exclamation-triangle text-2xl text-yellow-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-yellow-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-yellow-50 translate-x-full opacity-0';
+    }
+    
+    // Show toast and animate in
+    toast.classList.remove('hidden');
+    // Small delay to ensure the DOM has updated
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toastContainer.classList.remove('translate-x-full', 'opacity-0');
+            toastContainer.classList.add('translate-x-0', 'opacity-100');
+        });
+    });
+    
+    // Auto hide after 4 seconds
+    setTimeout(() => {
+        hideToast();
+    }, 4000);
+}
+
+function hideToast() {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    
+    // Animate out
+    toastContainer.classList.remove('translate-x-0', 'opacity-100');
+    toastContainer.classList.add('translate-x-full', 'opacity-0');
+    
+    // Hide after animation completes
+    setTimeout(() => {
+        toast.classList.add('hidden');
+    }, 300);
+}
+
+// Load devices on page load
+window.addEventListener('DOMContentLoaded', function() {
+    loadDevices();
+    loadRooms();
+});
+
+function loadDevices() {
+    showDevicesSkeleton();
+    
+    fetch('/buttons/api/devices')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                devices = data.devices;
+                renderDevices();
+            }
+        })
+        .catch(err => console.error('Error loading devices:', err));
+}
+
+function showDevicesSkeleton() {
+    const tbody = document.getElementById('devices-table-body');
+    tbody.innerHTML = '';
+    
+    // Create 3 skeleton rows
+    for (let i = 0; i < 3; i++) {
+        const row = document.createElement('tr');
+        row.className = 'animate-pulse';
+        row.innerHTML = `
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="flex items-center">
+                    <div class="w-4 h-4 bg-gray-200 rounded mr-2"></div>
+                    <div class="h-4 bg-gray-200 rounded w-32"></div>
+                </div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="h-4 bg-gray-200 rounded w-40"></div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="h-5 bg-gray-200 rounded-full w-24"></div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="flex space-x-2">
+                    <div class="h-4 bg-gray-200 rounded w-16"></div>
+                    <div class="h-4 bg-gray-200 rounded w-20"></div>
+                </div>
+            </td>
+        `;
+        tbody.appendChild(row);
+    }
+}
+
+function renderDevices() {
+    const tbody = document.getElementById('devices-table-body');
+    tbody.innerHTML = '';
+
+    devices.forEach(device => {
+        const row = document.createElement('tr');
+        row.className = 'hover:bg-gray-50';
+        row.innerHTML = `
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="flex items-center">
+                    <i class="fas fa-microchip mr-2 text-pink-500 flex-shrink-0"></i>
+                    <span class="text-sm font-medium text-gray-900">${device.name}</span>
+                </div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <span class="text-sm text-gray-500 font-mono">${device.mac_address}</span>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                ${device.configured 
+                    ? '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center"><i class="fas fa-check-circle mr-1"></i> Configured</span>'
+                    : '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 items-center"><i class="fas fa-circle mr-1"></i> Not Configured</span>'}
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                <button onclick="openRenameModal('${device.id}')" class="text-pink-600 hover:text-pink-900 inline-flex items-center">
+                    <i class="fas fa-edit mr-1"></i> Rename
+                </button>
+                <button onclick="openConfigModal('${device.id}')" class="text-green-600 hover:text-green-900 inline-flex items-center">
+                    <i class="fas fa-cog mr-1"></i> Configure
+                </button>
+                <button onclick="deleteDevice('${device.id}', '${device.name.replace(/'/g, "\\'")}')" class="text-red-600 hover:text-red-900 inline-flex items-center">
+                    <i class="fas fa-trash mr-1"></i> Delete
+                </button>
+            </td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+function loadRooms() {
+    const roomSelect = document.getElementById('room-select');
+    const loadingState = document.getElementById('room-loading-state');
+    const errorState = document.getElementById('room-error-state');
+    
+    // Show loading state
+    loadingState.classList.remove('hidden');
+    errorState.classList.add('hidden');
+    roomSelect.disabled = true;
+    
+    fetch('/api/rooms')
+        .then(response => response.json())
+        .then(data => {
+            loadingState.classList.add('hidden');
+            roomSelect.disabled = false;
+            
+            if (data.success) {
+                rooms = data.rooms;
+                roomSelect.innerHTML = '<option value="">-- Select a room --</option>';
+                rooms.forEach(room => {
+                    const option = document.createElement('option');
+                    option.value = room.id;
+                    option.textContent = room.name;
+                    roomSelect.appendChild(option);
+                });
+            } else if (data.needs_config) {
+                // Show error state
+                errorState.classList.remove('hidden');
+                document.getElementById('room-error-message').textContent = 
+                    'Hue Bridge is not configured. Please configure your bridge to load rooms and scenes.';
+                roomSelect.disabled = true;
+            } else {
+                // Show error state
+                errorState.classList.remove('hidden');
+                document.getElementById('room-error-message').textContent = 
+                    data.error || 'Failed to load rooms from Hue Bridge';
+                roomSelect.disabled = true;
+            }
+        })
+        .catch(err => {
+            console.error('Error loading rooms:', err);
+            loadingState.classList.add('hidden');
+            errorState.classList.remove('hidden');
+            document.getElementById('room-error-message').textContent = 
+                'Failed to connect to server. Please check your connection.';
+            roomSelect.disabled = true;
+        });
+}
+
+function refreshDevices() {
+    const refreshIcon = document.getElementById('refresh-icon');
+    
+    // Add spinning animation
+    let current = parseInt(refreshIcon.dataset.rot || '0', 10);
+    current += 360;
+    refreshIcon.dataset.rot = current;
+    refreshIcon.style.transform = `rotate(${current}deg)`;
+    
+    // Load devices
+    loadDevices();
+}
+
+// Rename Modal Functions
+function openRenameModal(deviceId) {
+    currentDeviceId = deviceId;
+    const device = devices.find(d => d.id === deviceId);
+    document.getElementById('device-name').value = device.name;
+    document.getElementById('rename-modal').classList.remove('hidden');
+}
+
+function closeRenameModal() {
+    document.getElementById('rename-modal').classList.add('hidden');
+    currentDeviceId = null;
+}
+
+function saveDeviceName() {
+    const newName = document.getElementById('device-name').value.trim();
+    if (!newName) {
+        showToast('Validation Error', 'Please enter a device name', 'warning');
+        return;
+    }
+
+    fetch(`/buttons/api/devices/${currentDeviceId}/rename`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: newName})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            loadDevices();
+            closeRenameModal();
+            showToast('Success!', `Device renamed to "${newName}"`, 'success');
+        }
+    })
+    .catch(err => {
+        console.error('Error renaming device:', err);
+        showToast('Error', 'Failed to rename device', 'error');
+    });
+}
+
+// Configuration Modal Functions
+function openConfigModal(deviceId) {
+    currentDeviceId = deviceId;
+    selectedScenes = [];
+    const device = devices.find(d => d.id === deviceId);
+    document.getElementById('config-device-name').textContent = device.name;
+    
+    // Populate room select
+    const roomSelect = document.getElementById('room-select');
+    roomSelect.innerHTML = '<option value="">-- Select a room --</option>';
+    rooms.forEach(room => {
+        const option = document.createElement('option');
+        option.value = room.id;
+        option.textContent = room.name;
+        roomSelect.appendChild(option);
+    });
+
+    document.getElementById('config-modal').classList.remove('hidden');
+    document.getElementById('scenes-section').classList.add('hidden');
+    document.getElementById('selected-section').classList.add('hidden');
+    
+    // Load existing configuration if device is configured
+    if (device.configured) {
+        loadExistingConfig(deviceId);
+    }
+}
+
+function loadExistingConfig(deviceId) {
+    fetch(`/buttons/api/${deviceId}/config`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const config = data.config;
+                
+                // Set the room
+                document.getElementById('room-select').value = config.room_id;
+                
+                // Load scenes for that room
+                fetch(`/api/rooms/${config.room_id}/scenes`)
+                    .then(response => response.json())
+                    .then(scenesData => {
+                        if (scenesData.success) {
+                            renderAvailableScenes(scenesData.scenes);
+                            document.getElementById('scenes-section').classList.remove('hidden');
+                            document.getElementById('selected-section').classList.remove('hidden');
+                            
+                            // Pre-select the configured scenes in order
+                            selectedScenes = [];
+                            config.scenes.forEach(sceneId => {
+                                const scene = scenesData.scenes.find(s => s.id === sceneId);
+                                if (scene) {
+                                    selectedScenes.push(scene);
+                                }
+                            });
+                            
+                            renderSelectedScenes();
+                            updateSceneCardStates();
+                        }
+                    });
+            }
+        })
+        .catch(err => console.error('Error loading config:', err));
+}
+
+function closeConfigModal() {
+    document.getElementById('config-modal').classList.add('hidden');
+    currentDeviceId = null;
+    selectedScenes = [];
+    document.getElementById('search-scene').value = '';
+}
+
+function loadScenesForRoom() {
+    const roomId = document.getElementById('room-select').value;
+    if (!roomId) {
+        document.getElementById('scenes-section').classList.add('hidden');
+        document.getElementById('selected-section').classList.add('hidden');
+        selectedScenes = []; // Clear selected scenes
+        return;
+    }
+
+    // Clear selected scenes when changing rooms
+    selectedScenes = [];
+
+    fetch(`/api/rooms/${roomId}/scenes`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                renderAvailableScenes(data.scenes);
+                renderSelectedScenes(); // Update selected section to show empty
+                document.getElementById('scenes-section').classList.remove('hidden');
+                document.getElementById('selected-section').classList.remove('hidden');
+            } else if (data.needs_config) {
+                showToast('Bridge Configuration Required', 
+                    'Please configure your Hue Bridge first.', 
+                    'warning');
+                closeConfigModal();
+                setTimeout(() => {
+                    window.location.href = '/bridge';
+                }, 2000);
+            } else {
+                showToast('Error Loading Scenes', 
+                    data.error || 'Failed to load scenes', 
+                    'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error loading scenes:', err);
+            showToast('Connection Error', 
+                'Failed to load scenes from server', 
+                'error');
+        });
+}
+
+function renderAvailableScenes(scenes) {
+    const container = document.getElementById('available-scenes');
+    container.innerHTML = '';
+
+    if (scenes.length === 0) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-4 col-span-2">No scenes available for this room</p>';
+        return;
+    }
+
+    scenes.forEach(scene => {
+        const sceneCard = document.createElement('div');
+        sceneCard.className = 'border-2 border-gray-200 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors scene-card';
+        sceneCard.onclick = () => toggleScene(scene);
+        sceneCard.id = `scene-${scene.id}`;
+        sceneCard.dataset.sceneName = scene.name.toLowerCase();
+        sceneCard.innerHTML = `
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium flex-1">${scene.name}</span>
+                <i class="fas fa-plus-circle text-pink-600 flex-shrink-0"></i>
+            </div>
+        `;
+        container.appendChild(sceneCard);
+    });
+}
+
+function filterScenes() {
+    const searchTerm = document.getElementById('search-scene').value.toLowerCase();
+    const sceneCards = document.querySelectorAll('.scene-card');
+    
+    sceneCards.forEach(card => {
+        const sceneName = card.dataset.sceneName;
+        if (sceneName.includes(searchTerm)) {
+            card.style.display = 'block';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    const container = document.getElementById('available-scenes');
+    const sceneCardsList = Array.from(sceneCards);
+
+    // If there are no scene cards at all, keep whatever message is already shown by renderAvailableScenes
+    if (sceneCardsList.length === 0) return;
+
+    const anyVisible = sceneCardsList.some(card => card.style.display !== 'none');
+    const existingMsg = container.querySelector('#no-scenes-found-msg');
+
+    if (!anyVisible) {
+        if (!existingMsg) {
+            const msg = document.createElement('p');
+            msg.id = 'no-scenes-found-msg';
+            msg.className = 'text-gray-400 text-center py-4 col-span-2';
+            msg.textContent = 'No scenes found';
+            container.appendChild(msg);
+        }
+    } else {
+        if (existingMsg) existingMsg.remove();
+    }
+}
+
+function toggleScene(scene) {
+    const index = selectedScenes.findIndex(s => s.id === scene.id);
+    if (index > -1) {
+        selectedScenes.splice(index, 1);
+    } else {
+        selectedScenes.push(scene);
+    }
+    renderSelectedScenes();
+    updateSceneCardStates();
+}
+
+function updateSceneCardStates() {
+    // Reset all cards first
+    document.querySelectorAll('[id^="scene-"]').forEach(card => {
+        card.className = 'border-2 border-gray-200 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors scene-card';
+        const icon = card.querySelector('i');
+        if (icon) {
+            icon.className = 'fas fa-plus-circle text-pink-600 flex-shrink-0';
+        }
+    });
+
+    // Update selected cards
+    selectedScenes.forEach(scene => {
+        const card = document.getElementById(`scene-${scene.id}`);
+        if (card) {
+            card.className = 'border-2 border-pink-500 bg-pink-50 rounded-lg p-3 cursor-pointer transition-colors scene-card';
+            const icon = card.querySelector('i');
+            if (icon) {
+                icon.className = 'fas fa-check-circle text-pink-600 flex-shrink-0';
+            }
+        }
+    });
+}
+
+function renderSelectedScenes() {
+    const container = document.getElementById('selected-scenes');
+    if (selectedScenes.length === 0) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes selected yet</p>';
+        return;
+    }
+
+    container.innerHTML = '';
+    selectedScenes.forEach((scene, index) => {
+        const sceneItem = document.createElement('div');
+        sceneItem.className = 'bg-white border border-gray-300 rounded-lg p-3 cursor-move hover:shadow-md transition-shadow';
+        sceneItem.draggable = true;
+        sceneItem.dataset.index = index;
+        sceneItem.innerHTML = `
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <i class="fas fa-grip-vertical text-gray-400"></i>
+                    <span class="font-medium">${scene.name}</span>
+                </div>
+                <button onclick="event.stopPropagation(); removeScene(${index})" class="text-red-600 hover:text-red-800">
+                    <i class="fas fa-times-circle"></i>
+                </button>
+            </div>
+        `;
+
+        // Drag events
+        sceneItem.addEventListener('dragstart', handleDragStart);
+        sceneItem.addEventListener('dragover', handleDragOver);
+        sceneItem.addEventListener('drop', handleDrop);
+        sceneItem.addEventListener('dragend', handleDragEnd);
+        sceneItem.addEventListener('dragenter', handleDragEnter);
+        sceneItem.addEventListener('dragleave', handleDragLeave);
+
+        container.appendChild(sceneItem);
+    });
+}
+
+function removeScene(index) {
+    selectedScenes.splice(index, 1);
+    renderSelectedScenes();
+    updateSceneCardStates();
+}
+
+// Drag and Drop handlers
+function handleDragStart(e) {
+    draggedElement = this;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', this.innerHTML);
+    this.classList.add('opacity-40');
+}
+
+function handleDragOver(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+    e.dataTransfer.dropEffect = 'move';
+    
+    // Remove border from all items first
+    document.querySelectorAll('#selected-scenes > div').forEach(item => {
+        if (item !== draggedElement) {
+            item.classList.remove('border-pink-500', 'bg-pink-50');
+        }
+    });
+    
+    // Add visual feedback to current item
+    if (this !== draggedElement) {
+        this.classList.add('border-pink-500', 'bg-pink-50');
+    }
+    
+    return false;
+}
+
+function handleDragEnter(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+}
+
+function handleDragLeave(e) {
+    // Handled in dragover now
+}
+
+function handleDrop(e) {
+    if (e.stopPropagation) {
+        e.stopPropagation();
+    }
+    e.preventDefault();
+
+    // Remove all highlighting
+    document.querySelectorAll('#selected-scenes > div').forEach(item => {
+        item.classList.remove('border-pink-500', 'bg-pink-50');
+    });
+
+    if (draggedElement !== this) {
+        const draggedIndex = parseInt(draggedElement.dataset.index);
+        const targetIndex = parseInt(this.dataset.index);
+
+        const draggedScene = selectedScenes[draggedIndex];
+        selectedScenes.splice(draggedIndex, 1);
+        selectedScenes.splice(targetIndex, 0, draggedScene);
+
+        renderSelectedScenes();
+    }
+
+    return false;
+}
+
+function handleDragEnd(e) {
+    this.classList.remove('opacity-40');
+    // Remove border highlighting from all items
+    document.querySelectorAll('#selected-scenes > div').forEach(item => {
+        item.classList.remove('border-pink-500', 'bg-pink-50');
+    });
+}
+
+function saveConfiguration() {
+    if (!currentDeviceId) return;
+
+    const roomId = document.getElementById('room-select').value;
+    if (!roomId) {
+        showToast('Validation Error', 'Please select a room', 'warning');
+        return;
+    }
+
+    if (selectedScenes.length === 0) {
+        showToast('Validation Error', 'Please select at least one scene', 'warning');
+        return;
+    }
+
+    const config = {
+        device_id: currentDeviceId,
+        room_id: roomId,
+        scenes: selectedScenes.map(s => s.id)
+    };
+
+    fetch('/buttons/api/configure', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(config)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const device = devices.find(d => d.id === currentDeviceId);
+            showToast('Configuration Saved!', `${device.name} has been configured with ${selectedScenes.length} scene(s)`, 'success');
+            loadDevices();
+            closeConfigModal();
+        }
+    })
+    .catch(err => {
+        console.error('Error saving configuration:', err);
+        showToast('Error', 'Failed to save configuration', 'error');
+    });
+}
+
+function deleteDevice(deviceId, deviceName) {
+    deleteDeviceId = deviceId;
+    deleteDeviceName = deviceName;
+    document.getElementById('delete-device-name').textContent = deviceName;
+    document.getElementById('delete-modal').classList.remove('hidden');
+}
+
+function closeDeleteModal() {
+    document.getElementById('delete-modal').classList.add('hidden');
+    deleteDeviceId = null;
+    deleteDeviceName = null;
+}
+
+function confirmDelete() {
+    if (!deleteDeviceId) return;
+    
+    fetch(`/buttons/api/devices/${deleteDeviceId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Device Deleted', `${deleteDeviceName} has been removed`, 'success');
+            loadDevices();
+            closeDeleteModal();
+        } else {
+            showToast('Error', data.error || 'Failed to delete device', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error deleting device:', err);
+        showToast('Error', 'Failed to delete device', 'error');
+    });
+}
+</script>
+{% endblock %}

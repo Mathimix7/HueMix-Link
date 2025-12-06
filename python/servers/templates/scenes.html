@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+
+{% block title %}Scenes - Hue Mix Link{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-pink-700 via-pink-500 to-pink-700 bg-clip-text text-transparent mb-1">
+                    All Scenes
+                </h1>
+                <p class="text-gray-600">Browse all scenes across your Hue Bridge</p>
+            </div>
+            <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                <i class="fas fa-arrow-left mr-2"></i>Back to Home
+            </a>
+        </div>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading-state" class="bg-white rounded-2xl shadow-lg p-12 text-center">
+        <div class="flex flex-col items-center">
+            <div class="spinner mb-4"></div>
+            <p class="text-gray-600 text-lg">Loading scenes...</p>
+        </div>
+    </div>
+
+    <!-- Error State -->
+    <div id="error-state" class="hidden bg-red-50 border-2 border-red-200 rounded-2xl shadow-lg p-8 text-center">
+        <i class="fas fa-exclamation-circle text-5xl text-red-500 mb-4"></i>
+        <h2 class="text-2xl font-bold text-gray-900 mb-2">Unable to Load Scenes</h2>
+        <p id="error-message" class="text-gray-600 mb-4">Please check your bridge connection</p>
+        <a href="/bridge" class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+            <i class="fas fa-network-wired mr-2"></i>Configure Bridge
+        </a>
+    </div>
+
+    <!-- Scenes List -->
+    <div id="scenes-container" class="hidden">
+        <div id="scenes-list" class="grid grid-cols-1 gap-6">
+            <!-- Scenes will be loaded here organized by room -->
+        </div>
+    </div>
+</div>
+
+<style>
+.spinner {
+    border: 3px solid rgba(236, 72, 153, 0.3);
+    border-top: 3px solid #ec4899;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+</style>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.addEventListener('DOMContentLoaded', function() {
+    loadScenes();
+});
+
+function loadScenes() {
+    fetch('/api/scenes/all')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('loading-state').classList.add('hidden');
+            
+            if (data.success && data.scenes && data.scenes.length > 0) {
+                displayScenes(data.scenes);
+            } else if (data.needs_config) {
+                showError('Hue Bridge not configured');
+            } else {
+                showError('No scenes found');
+            } })
+        .catch(err => {
+            console.error('Error loading scenes:', err);
+            document.getElementById('loading-state').classList.add('hidden');
+            showError('Connection error - Please check your bridge');
+        });
+}
+
+function displayScenes(scenes) {
+    const container = document.getElementById('scenes-list');
+    container.innerHTML = '';
+    
+    // Group scenes by room
+    const scenesByRoom = {};
+    scenes.forEach(scene => {
+        const roomName = scene.room_name || 'Unknown Room';
+        if (!scenesByRoom[roomName]) {
+            scenesByRoom[roomName] = [];
+        }
+        scenesByRoom[roomName].push(scene);
+    });
+    
+    // Sort room names
+    const sortedRoomNames = Object.keys(scenesByRoom).sort();
+    
+    // Create sections for each room
+    sortedRoomNames.forEach(roomName => {
+        const roomSection = document.createElement('div');
+        roomSection.className = 'col-span-full mb-6';
+        
+        const roomScenes = scenesByRoom[roomName];
+        const roomHeader = document.createElement('div');
+        roomHeader.className = 'flex items-center mb-4';
+        roomHeader.innerHTML = `
+            <h2 class="text-xl font-bold text-gray-900 mr-3">
+                <i class="fas fa-door-open text-pink-600 mr-2"></i>${roomName}
+            </h2>
+            <span class="px-3 py-1 text-xs font-semibold rounded-full bg-pink-100 text-pink-800">
+                ${roomScenes.length} scene${roomScenes.length !== 1 ? 's' : ''}
+            </span>
+        `;
+        roomSection.appendChild(roomHeader);
+        
+        const scenesGrid = document.createElement('div');
+        scenesGrid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4';
+        
+        roomScenes.forEach(scene => {
+            const sceneCard = document.createElement('div');
+            sceneCard.className = 'bg-white rounded-xl p-6 shadow-lg hover:shadow-xl transition-all duration-300 border-2 border-pink-100 hover:border-pink-400 cursor-pointer';
+            sceneCard.setAttribute('data-scene-id', scene.id);
+            
+            sceneCard.innerHTML = `
+                <div class="flex items-start justify-between mb-4">
+                    <div class="w-12 h-12 rounded-lg bg-gradient-to-br from-pink-400 to-pink-600 flex items-center justify-center shadow-lg">
+                        <i class="fas fa-palette text-xl text-white"></i>
+                    </div>
+                </div>
+                <h3 class="text-lg font-bold text-gray-900 mb-3">${scene.name}</h3>
+                <button onclick="activateScene('${scene.id}', '${scene.name.replace(/'/g, "\\'")}', event)" class="w-full px-4 py-2 bg-pink-600 text-white text-sm rounded-lg hover:bg-pink-700 transition-colors">
+                    <i class="fas fa-play mr-2"></i>Activate Scene
+                </button>
+            `;
+            
+            scenesGrid.appendChild(sceneCard);
+        });
+        
+        roomSection.appendChild(scenesGrid);
+        container.appendChild(roomSection);
+    });
+    
+    document.getElementById('scenes-container').classList.remove('hidden');
+}
+
+function activateScene(sceneId, sceneName, event) {
+    event.stopPropagation();
+    
+    const btn = event.target.closest('button');
+    const originalContent = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Activating...';
+    
+    fetch(`/api/scenes/${sceneId}/activate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            btn.innerHTML = '<i class="fas fa-check mr-2"></i>Activated!';
+            btn.classList.remove('bg-pink-600', 'hover:bg-pink-700');
+            btn.classList.add('bg-green-600');
+            
+            setTimeout(() => {
+                btn.innerHTML = originalContent;
+                btn.classList.remove('bg-green-600');
+                btn.classList.add('bg-pink-600', 'hover:bg-pink-700');
+                btn.disabled = false;
+            }, 2000);
+        } else {
+            btn.innerHTML = originalContent;
+            btn.disabled = false;
+            alert('Failed to activate scene: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(err => {
+        console.error('Error activating scene:', err);
+        btn.innerHTML = originalContent;
+        btn.disabled = false;
+        alert('Failed to activate scene');
+    });
+}
+
+function showError(message) {
+    document.getElementById('error-message').textContent = message;
+    document.getElementById('error-state').classList.remove('hidden');
+}
+</script>
+{% endblock %}

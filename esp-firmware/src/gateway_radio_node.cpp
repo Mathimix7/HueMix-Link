@@ -170,7 +170,10 @@ void loop() {
     pktReady = false;
   }
 
-  while (Serial2.available() > 0) {
-    parseSerialByte(Serial2.read());
+  if (!waitingForDelivery) {
+    while (Serial2.available() > 0) {
+      parseSerialByte(Serial2.read());
+      if (waitingForDelivery) break;
+    }
   }
 }

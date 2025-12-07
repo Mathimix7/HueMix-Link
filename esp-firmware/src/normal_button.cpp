@@ -1,5 +1,5 @@
 /* 
-   HUEMIXLINK V2 - BATTERY BUTTON (EAGER SYNC EDITION)
+   HUEMIXLINK V2 - BATTERY BUTTON (NON-BLOCKING FAST CLICK FIX)
 */
 
 #include "HueMixLink.h"
@@ -19,11 +19,12 @@
   #define PIN_AUX  D1
   #define PIN_LED  D4
 #else  // ESP32
-  #define PIN_BTN  27
-  #define PIN_AUX  16
-  #define PIN_LED  2
+  #define PIN_BTN  12
+  #define PIN_AUX  13
+  #define PIN_LED  18
 #endif
-#define HOLD_TIME   1000
+
+#define HOLD_TIME     500
 #define HOLD_INTERVAL 500
 #define SLEEP_TIMEOUT 2000 
 
@@ -44,10 +45,19 @@ bool isHolding = false;
 unsigned long btnPressTime = 0;
 bool btnState = HIGH; 
 bool homeSetupDone = false;
+
+unsigned long ledTimer = 0;
+bool ledActive = false;
+
 #if defined(ESP32)
   esp_now_peer_info_t peerInfo;
 #endif
 
+void triggerLed(int duration) {
+  digitalWrite(PIN_LED, HIGH);
+  ledActive = true;
+  ledTimer = millis() + duration;
+}
 
 void ledBlink(int times, int delayMs) {
   for(int i=0; i<times; i++) {
@@ -147,9 +157,10 @@ void sendPacket(uint8_t type, uint8_t action) {
         }
       #endif
     }
-    // Visual feedback only for actual clicks, not hidden syncs
+    
     if (action != ACT_SYNC) {
-      if (sent) ledBlink(1, 200); else ledBlink(2, 200);
+      if (sent) triggerLed(50);
+      else ledBlink(2, 100);
     }
   }
   
@@ -172,7 +183,8 @@ void sendPacket(uint8_t type, uint8_t action) {
 
 #if defined(ESP32)
 void goToSleep() {
-  delay(500);
+  delay(100);
+  digitalWrite(PIN_LED, LOW);
   pinMode(PIN_LED, INPUT);
   WiFi.mode(WIFI_OFF);
   btStop();
@@ -188,6 +200,7 @@ void setup() {
   pinMode(PIN_BTN, INPUT_PULLUP);
   pinMode(PIN_AUX, INPUT_PULLUP);
   pinMode(PIN_LED, OUTPUT);
+  digitalWrite(PIN_LED, LOW);
   
   Serial.begin(115200);
   Serial.println("\n--- BUTTON WAKE ---");
@@ -207,21 +220,20 @@ void setup() {
   esp_now_register_recv_cb(OnDataRecv);
 
   button.attach(PIN_BTN, INPUT_PULLUP);
-  button.interval(50);
+  button.interval(25); 
   auxButton.attach(PIN_AUX, INPUT_PULLUP);
-  auxButton.interval(50);
+  auxButton.interval(25);
 
   lastActivityTime = millis();
 
   #if defined(ESP32)
   esp_sleep_wakeup_cause_t wakeupReason = esp_sleep_get_wakeup_cause();
-  switch (wakeupReason) {
-    case ESP_SLEEP_WAKEUP_EXT0:
+  if(wakeupReason == ESP_SLEEP_WAKEUP_EXT0) {
       wakeupExt0 = true;
-      Serial.println("Wakeup caused by EXT0 (button). Marking wakeupExt0=true");
-      break;
-    default:
-      Serial.println("Cold boot or other wakeup reason -> going to sleep (OLD behavior)");
+      Serial.println("Wakeup caused by Button");
+  } else {
+      Serial.println("Cold boot");
+      ledBlink(5, 100);
       goToSleep();
   }
   #endif
@@ -234,6 +246,13 @@ unsigned long holdingIntervalUpdate = 0;
 void loop() {
   button.update();
   auxButton.update();
+
+  if (ledActive) {
+    if (millis() > ledTimer) {
+      digitalWrite(PIN_LED, LOW);
+      ledActive = false;
+    }
+  }
 
   if (button.fell() || wakeupExt0) {
     wakeupExt0 = false; 
@@ -307,5 +326,5 @@ void loop() {
   }
   #endif
 
-  delay(10);
+  delay(5);
 }

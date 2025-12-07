@@ -42,11 +42,12 @@ uint8_t radioNodeMAC[6] = {0,0,0,0,0,0};
 
 Bounce btnMain = Bounce();
 Bounce btnAux = Bounce();
-bool buttonHeld = false;
+bool buttonPressed = false;
+bool isHolding = false;
 unsigned long buttonHoldStartTime = 0;
 unsigned long holdingIntervalUpdate = 0;
-const int holdingThreshold = 400; 
-const int holdingInterval = 200;  
+const int HOLD_TIME = 500;
+const int HOLD_INTERVAL = 500;  
 
 // --- SERIAL STATE MACHINE ---
 enum SerialState { S_IDLE, S_READING, S_FOOTER };
@@ -63,6 +64,7 @@ void setWifiLedState(int state) {
   else if (state == 3) wifiTicker.attach(0.2, tickWifiLed); 
 }
 void flashDataLED(int times) {
+  if (nightMode) return;
   for(int i=0; i<times; i++) {
     digitalWrite(PIN_LED_DATA, !digitalRead(PIN_LED_DATA)); delay(50);
     digitalWrite(PIN_LED_DATA, !digitalRead(PIN_LED_DATA)); delay(50);
@@ -256,26 +258,35 @@ void loop() {
       // Read partial packet from UDP
       int len = udp.read(udpBuffer, 512);
       if (len > 0) {
-        
-        // --- CRITICAL FIX: PAD PACKET TO FULL SIZE ---
         memset(&txPkt, 0, sizeof(HueMixLinkPacket));
         memcpy(&txPkt, udpBuffer, len);
         
         Serial.printf("[NET] UDP Recv Type 0x%02X (Len %d)\n", txPkt.type, len);
 
         if (txPkt.type == PKT_PAIR_CONFIRM) {
-           uint32_t incomingSig = txPkt.signature;
-           uint32_t expectedSig = calculateHash((uint8_t*)&txPkt.payload, sizeof(Payload_Pairing), 0);
-           if (incomingSig == expectedSig) {
-             uint32_t newID = txPkt.payload.pair.newHomeID;
-             if (newID != HOME_ID && newID != 0) { 
-               Serial.printf("!!! UPDATING HOME ID: 0x%X !!!\n", newID);
-               HOME_ID = newID; prefs.putUInt("hid", HOME_ID);
-               digitalWrite(PIN_LED_DATA, HIGH); delay(1000); digitalWrite(PIN_LED_DATA, LOW);
-               sendGatewayHello();
-             }
-           }
-        } 
+          uint32_t incomingSig = txPkt.signature;
+          uint32_t expectedSig = calculateHash((uint8_t*)&txPkt.payload, sizeof(Payload_Pairing), 0);
+          if (incomingSig == expectedSig) {
+            uint32_t newID = txPkt.payload.pair.newHomeID;
+            if (newID != HOME_ID && newID != 0) { 
+              Serial.printf("!!! UPDATING HOME ID: 0x%X !!!\n", newID);
+              HOME_ID = newID; prefs.putUInt("hid", HOME_ID);
+              digitalWrite(PIN_LED_DATA, HIGH); delay(1000); digitalWrite(PIN_LED_DATA, LOW);
+              sendGatewayHello();
+            }
+          }
+        } else if (txPkt.type == PKT_SYS_CMD) {
+          if (txPkt.signature == calculateHash((uint8_t*)&txPkt.payload, sizeof(Payload_SysCmd), HOME_ID)) {
+            bool oldMode = nightMode;
+            if (txPkt.payload.sys.cmd == 1) nightMode = true;
+            if (txPkt.payload.sys.cmd == 2) nightMode = false;
+            
+            if (oldMode != nightMode) {
+              Serial.printf("Night Mode: %s\n", nightMode ? "ON" : "OFF");
+              setWifiLedState(1); 
+            }
+          }
+        }
         
         // --- SEND FULL STRUCTURE TO RADIO ---
         Serial2.write(SERIAL_START); 
@@ -289,8 +300,32 @@ void loop() {
   // 2. SERIAL IN
   while (Serial2.available() > 0) parseSerialByte(Serial2.read());
 
-  if (btnMain.fell()) { buttonHoldStartTime = millis(); }
-  if (btnMain.read() == LOW && !buttonHeld) { if (millis() - buttonHoldStartTime >= holdingThreshold) buttonHeld = true; }
-  if (buttonHeld && btnMain.read() == LOW) { if (millis() - holdingIntervalUpdate >= holdingInterval) { sendBtnEvent(ACT_HOLDING); holdingIntervalUpdate = millis(); }}
-  if (btnMain.rose()) { if (buttonHeld) { buttonHeld = false; sendBtnEvent(ACT_RELEASE); } else { sendBtnEvent(ACT_CLICK); }}
+  // 3. BUTTON HANDLING
+  if (btnMain.fell()) {
+    buttonHoldStartTime = millis();
+    buttonPressed = true;
+  }
+
+  if (btnMain.read() == LOW && buttonPressed && !isHolding) {
+    if (millis() - buttonHoldStartTime >= HOLD_TIME) {
+      isHolding = true;
+      sendBtnEvent(ACT_HOLDING);
+      holdingIntervalUpdate = millis();
+    }
+  }
+
+  if (millis() - holdingIntervalUpdate >= HOLD_INTERVAL && isHolding) {
+    sendBtnEvent(ACT_HOLDING);
+    holdingIntervalUpdate = millis();
+  }
+
+  if (btnMain.rose()) {
+    if (isHolding) {
+      isHolding = false;
+      sendBtnEvent(ACT_RELEASE);
+    } else {
+      sendBtnEvent(ACT_CLICK);
+    }
+    buttonPressed = false;
+  }
 }

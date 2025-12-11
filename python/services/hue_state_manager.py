@@ -36,7 +36,8 @@ class HueStateManager:
     
     def update_light(self, light_id: str, is_on: Optional[bool] = None, 
                     brightness: Optional[float] = None, color: Optional[Dict] = None, 
-                    room_id: Optional[str] = None, name: Optional[str] = None):
+                    room_id: Optional[str] = None, name: Optional[str] = None,
+                    model_id: Optional[str] = None):
         """
         Update the state of a specific light.
         
@@ -47,6 +48,7 @@ class HueStateManager:
             color: Color dict with r, g, b
             room_id: Room this light belongs to
             name: Light name
+            model_id: Light model ID for determining color gamut
         """
         with self._lock:
             # Build state dict from provided values
@@ -61,6 +63,8 @@ class HueStateManager:
                 state['room_id'] = room_id
             if name is not None:
                 state['name'] = name
+            if model_id is not None:
+                state['model_id'] = model_id
             
             # Skip empty updates
             if not state:
@@ -317,13 +321,17 @@ class HueStateManager:
             
             # Build device to light mapping
             device_to_light = {}
+            light_to_model = {}
             for device in devices_data:
                 device_id = device.get('id')
+                product_data = device.get('product_data', {})
+                model_id = product_data.get('model_id', 'LCT001')  # Default to gamut C
                 for service in device.get('services', []):
                     if service.get('rtype') == 'light':
                         light_id = service.get('rid')
                         if light_id:
                             device_to_light[device_id] = light_id
+                            light_to_model[light_id] = model_id
             
             # Process rooms
             for room in rooms_data:
@@ -364,6 +372,7 @@ class HueStateManager:
                 is_on = light.get('on', {}).get('on', False)
                 brightness = light.get('dimming', {}).get('brightness')
                 light_name = light.get('metadata', {}).get('name', f'Light {light_id[:8]}')
+                model_id = light_to_model.get(light_id, 'LCT001')  # Default to gamut C
                 
                 # Find room for this light
                 room_id = None
@@ -392,7 +401,8 @@ class HueStateManager:
                     brightness=brightness,
                     color=color,
                     room_id=room_id,
-                    name=light_name
+                    name=light_name,
+                    model_id=model_id
                 )
             
             # Process scenes

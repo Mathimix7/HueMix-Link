@@ -57,6 +57,7 @@ def get_rooms_overview_data():
                 light_is_on = light_state.get('on', False)
                 light_brightness = light_state.get('brightness', 0)
                 light_name = light_state.get('name', f'Light {light_id[:8]}')
+                model_id = light_state.get('model_id', 'LCT001')  # Default to gamut C
                 
                 # Get color information
                 color_info = None
@@ -77,7 +78,7 @@ def get_rooms_overview_data():
                         # Check if it's XY coordinates
                         elif 'x' in color and 'y' in color:
                             x, y = color['x'], color['y']
-                            rgb = color_controller.xy_to_rgb(x, y, light_brightness or 100)
+                            rgb = color_controller.xy_to_rgb(x, y, model_id)
                             color_hex = color_controller.rgb_to_hex(rgb['r'], rgb['g'], rgb['b'])
                             color_name = color_controller.get_color_name(rgb['r'], rgb['g'], rgb['b'])
                             color_mode = 'xy'
@@ -86,17 +87,16 @@ def get_rooms_overview_data():
                     xy = light_state['xy']
                     if isinstance(xy, dict) and 'x' in xy and 'y' in xy:
                         x, y = xy['x'], xy['y']
-                        rgb = color_controller.xy_to_rgb(x, y, light_brightness or 100)
+                        rgb = color_controller.xy_to_rgb(x, y, model_id)
                         color_hex = color_controller.rgb_to_hex(rgb['r'], rgb['g'], rgb['b'])
                         color_name = color_controller.get_color_name(rgb['r'], rgb['g'], rgb['b'])
                         color_mode = 'xy'
                 elif 'ct' in light_state:
                     # Color temperature
                     ct = light_state['ct']
-                    x, y = color_controller.ct_to_xy(ct)
-                    rgb = color_controller.xy_to_rgb(x, y, light_brightness or 100)
-                    color_hex = color_controller.rgb_to_hex(rgb['r'], rgb['g'], rgb['b'])
-                    kelvin = color_controller.xy_to_ct(x, y)
+                    r, g, b = color_controller.ct_to_xy(ct)
+                    color_hex = color_controller.rgb_to_hex(r, g, b)
+                    kelvin = int(round(1e6/ct)) - 600
                     color_name = f"{kelvin}K"
                     color_mode = 'ct'
                 
@@ -136,7 +136,7 @@ def get_rooms_overview_data():
                 'lights_on': on_count,
                 'avg_brightness': avg_brightness,
                 'lights': room_lights,
-                'colors': colors[:10]  # Limit to 10 colors for display
+                'colors': colors
             })
         
         # Sort by room name

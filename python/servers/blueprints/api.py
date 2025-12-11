@@ -228,7 +228,8 @@ def get_all_lights():
                 "on": light_state.get('on', False),
                 "brightness": light_state.get('brightness'),
                 "room_id": room_id,
-                "room_name": room_name
+                "room_name": room_name,
+                "model_id": light_state.get('model_id', 'LCT001')
             })
         
         # Sort by room name, then light name

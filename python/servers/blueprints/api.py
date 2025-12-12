@@ -514,3 +514,131 @@ def get_tcp_status():
         "running": running,
         "port": port
     })
+
+
+# ===== Pairing Mode Endpoints =====
+
+@api_bp.route('/pairing/start', methods=['POST'])
+def start_pairing():
+    """Start device pairing mode.
+    
+    Request body:
+        {
+            "duration": 60,  # seconds, optional, default 60
+            "types": ["button", "light"]  # optional, default all
+        }
+    """
+    try:
+        from network.pairing_manager import pairing_manager
+        
+        data = request.get_json() or {}
+        duration = data.get('duration', 60)
+        device_types = data.get('types')  # None = all types
+        
+        # Validate duration
+        if not isinstance(duration, int) or duration < 10 or duration > 300:
+            return jsonify({
+                "success": False,
+                "error": "Duration must be between 10 and 300 seconds"
+            }), 400
+        
+        # Validate device types
+        if device_types is not None:
+            if not isinstance(device_types, list):
+                return jsonify({
+                    "success": False,
+                    "error": "Types must be an array"
+                }), 400
+            
+            valid_types = ['gateway', 'button', 'light']
+            for t in device_types:
+                if t not in valid_types:
+                    return jsonify({
+                        "success": False,
+                        "error": f"Invalid device type: {t}. Must be one of {valid_types}"
+                    }), 400
+        
+        # Start pairing
+        pairing_manager.start_pairing(duration, device_types)
+        
+        return jsonify({
+            "success": True,
+            "duration": duration,
+            "types": device_types if device_types else ['all']
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@api_bp.route('/pairing/stop', methods=['POST'])
+def stop_pairing():
+    """Stop device pairing mode."""
+    try:
+        from network.pairing_manager import pairing_manager
+        
+        pairing_manager.stop_pairing()
+        
+        return jsonify({
+            "success": True
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@api_bp.route('/pairing/status', methods=['GET'])
+def get_pairing_status():
+    """Get current pairing mode status."""
+    try:
+        from network.pairing_manager import pairing_manager
+        
+        status = pairing_manager.get_status()
+        
+        return jsonify({
+            "success": True,
+            **status
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@api_bp.route('/pairing/devices', methods=['GET'])
+def get_pairing_devices():
+    """Get devices found during pairing session."""
+    try:
+        from network.pairing_manager import pairing_manager
+        
+        devices = pairing_manager.get_devices_found()
+        
+        # Add type names for display
+        type_names = {
+            1: 'Gateway',
+            2: 'Button',
+            3: 'Light'
+        }
+        
+        for device in devices:
+            device['type_name'] = type_names.get(device.get('type'), 'Unknown')
+        
+        return jsonify({
+            "success": True,
+            "devices": devices
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "devices": []
+        }), 500

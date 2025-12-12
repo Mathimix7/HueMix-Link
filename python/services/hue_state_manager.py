@@ -109,7 +109,7 @@ class HueStateManager:
     
     def update_room(self, room_id: str, is_on: Optional[bool] = None, 
                    brightness: Optional[float] = None, name: Optional[str] = None,
-                   lights: Optional[List[str]] = None):
+                   lights: Optional[List[str]] = None, grouped_light_id: Optional[str] = None):
         """
         Update room information and state.
         
@@ -119,6 +119,7 @@ class HueStateManager:
             brightness: Average brightness
             name: Room name
             lights: List of light IDs in room
+            grouped_light_id: Grouped light ID for this room
         """
         with self._lock:
             if room_id not in self._rooms:
@@ -137,6 +138,8 @@ class HueStateManager:
                 self._rooms[room_id]['name'] = name
             if lights is not None:
                 self._rooms[room_id]['lights'] = lights
+            if grouped_light_id is not None:
+                self._rooms[room_id]['grouped_light_id'] = grouped_light_id
             
             self._rooms[room_id]['last_update'] = datetime.now().isoformat()
             
@@ -144,26 +147,31 @@ class HueStateManager:
             if lights is not None:
                 self._update_room_aggregate(room_id)
     
-    def set_room_scene(self, room_id: str, scene_id: Optional[str]):
+    def set_room_scene(self, room_id: str, scene_id: Optional[str], old_scene_id: Optional[str] = None, source: str = 'sse'):
         """
         Set the active scene for a room.
         
         Args:
             room_id: Hue room ID
             scene_id: Hue scene ID being activated (None to clear)
+            old_scene_id: Previous scene ID (if known, otherwise will be looked up)
+            source: Source of the change ('sse', 'button', 'web')
         """
         with self._lock:
             if room_id not in self._rooms:
                 self._rooms[room_id] = {'lights': [], 'is_on': False}
             
-            old_scene = self._rooms[room_id].get('current_scene_id')
+            # Use provided old_scene_id or look it up
+            if old_scene_id is None:
+                old_scene_id = self._rooms[room_id].get('current_scene_id')
+            
             self._rooms[room_id]['current_scene_id'] = scene_id
             self._rooms[room_id]['last_scene_change'] = datetime.now().isoformat()
             
-            logger.info(f"Room {room_id} scene changed from {old_scene} to {scene_id}")
+            logger.info(f"Room {room_id} scene changed from {old_scene_id} to {scene_id} (source: {source})")
             
             # Notify subscribers
-            self._notify_scene_change(room_id, scene_id, old_scene)
+            self._notify_scene_change(room_id, scene_id, old_scene_id, source)
     
     def get_room_state(self, room_id: str) -> Optional[Dict]:
         """Get the current state of a room."""
@@ -201,12 +209,13 @@ class HueStateManager:
         
         # Update room aggregate state
         old_is_on = room.get('is_on', False)
+        old_brightness = room.get('avg_brightness', 0)
         room['is_on'] = any_on
         room['on_count'] = on_count
         room['avg_brightness'] = total_brightness / on_count if on_count > 0 else 0
         
-        # Notify if room on/off changed
-        if old_is_on != any_on:
+        # Notify if room on/off or brightness changed
+        if old_is_on != any_on or old_brightness != room['avg_brightness']:
             self._notify_room_change(room_id, room)
     
     # ===== Scene Management =====
@@ -279,11 +288,11 @@ class HueStateManager:
             except Exception as e:
                 logger.error(f"Error in light change callback {callback.__name__}: {e}")
     
-    def _notify_scene_change(self, room_id: str, scene_id: Optional[str], old_scene_id: Optional[str]):
+    def _notify_scene_change(self, room_id: str, scene_id: Optional[str], old_scene_id: Optional[str], source: str = 'sse'):
         """Notify all subscribers of scene change."""
         for callback in self._scene_change_callbacks[:]:
             try:
-                callback(room_id, scene_id, old_scene_id)
+                callback(room_id, scene_id, old_scene_id, source)
             except Exception as e:
                 logger.error(f"Error in scene change callback {callback.__name__}: {e}")
     
@@ -340,6 +349,7 @@ class HueStateManager:
                 
                 # Get room on/off state from grouped_light and map grouped_light_id to room_id
                 is_on = False
+                grouped_light_id = None
                 for service in room.get('services', []):
                     if service.get('rtype') == 'grouped_light':
                         grouped_light_id = service.get('rid')
@@ -351,12 +361,17 @@ class HueStateManager:
                                 break
                         break
                 
-                self.update_room(
-                    room_id=room_id,
-                    name=room_name,
-                    lights=light_ids,
-                    is_on=is_on
-                )
+                # Store room state with grouped_light_id
+                if room_id not in self._rooms:
+                    self._rooms[room_id] = {}
+                
+                self._rooms[room_id].update({
+                    'name': room_name,
+                    'lights': light_ids,
+                    'is_on': is_on,
+                    'grouped_light_id': grouped_light_id,
+                    'last_update': datetime.now().isoformat()
+                })
             
             # Process lights
             for light in lights_data:

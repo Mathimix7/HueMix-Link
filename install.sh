@@ -340,7 +340,7 @@ setup_local_domain() {
   [ ! -f "$OLD_HOSTNAME_FILE" ] && hostnamectl --static > "$OLD_HOSTNAME_FILE"
 
   # Install Avahi
-  command -v avahi-daemon >/dev/null 2>&1 || run apt update -y && run apt install -y avahi-daemon avahi-utils
+  command -v avahi-daemon >/dev/null 2>&1 || run apt update -y >/dev/null 2>&1 && run apt install -y avahi-daemon avahi-utils >/dev/null 2>&1
 
   run hostnamectl set-hostname huemixlink
   run systemctl enable avahi-daemon --now
@@ -406,6 +406,22 @@ main_install() {
       log "Installing v${SOURCE}"
     else
       [ "$FORCE" -eq 1 ] && warn "Reinstalling v${SOURCE}" || { log "Already installed. Use --force"; return; }
+    fi
+  fi
+  WAS_ACTIVE=0
+  SERVICE_EXISTS=0
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-unit-files | grep -q "^${SERVICE_NAME}.service"; then
+      SERVICE_EXISTS=1
+    fi
+    if [ "$SERVICE_EXISTS" -eq 1 ] && systemctl is-active --quiet "${SERVICE_NAME}.service"; then
+      WAS_ACTIVE=1
+      if [ "$NO_RESTART" -eq 0 ]; then
+        log "Stopping existing service ${SERVICE_NAME}.service for update"
+        run systemctl stop "${SERVICE_NAME}.service" || true
+      else
+        log "--no-restart specified; leaving service running"
+      fi
     fi
   fi
 

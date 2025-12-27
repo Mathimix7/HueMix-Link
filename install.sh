@@ -16,30 +16,35 @@ ASSUME_YES=0
 LOCAL=0
 
 # Colors for nicer output
-white=$(echo -en "\e[39m")
+bold=$(echo -en "\e[1m")
+white=$(echo -en "\e[97m")
+blue=$(echo -en "\e[94m")
 green=$(echo -en "\e[92m")
 red=$(echo -en "\e[91m")
-magenta=$(echo -en "\e[35m")
+magenta=$(echo -en "\e[95m")
 cyan=$(echo -en "\e[96m")
 yellow=$(echo -en "\e[93m")
+gray=$(echo -en "\e[90m")
 reset=$(echo -en "\e[0m")
 
-log() { printf '%b\n' "${cyan}$*${reset}" >&2; }
-die() { printf '%b\n' "${red}ERROR: $*${reset}" >&2; exit 1; }
+# Message helpers with visual markers and distinct colors
+log()  { printf '%b\n' "${blue}● ${reset}${white}$*${reset}" >&2; }
+die()  { printf '%b\n' "${bold}${red}✖ ERROR:${reset} ${red}$*${reset}" >&2; exit 1; }
 
-success() { printf '%b\n' "${green}$*${reset}" >&2; }
-warn() { printf '%b\n' "${yellow}$*${reset}" >&2; }
+success() { printf '%b\n' "${green}✔ ${reset}${white}$*${reset}" >&2; }
+warn()    { printf '%b\n' "${yellow}⚠ ${reset}${white}$*${reset}" >&2; }
+debug()   { printf '%b\n' "${gray}$*${reset}" >&2; }
 
 print_header() {
   local src_ver
   src_ver=$(get_repo_version 2>/dev/null || echo "")
-  printf '%b\n' "${magenta}=====================================================${reset}"
+  printf '%b\n' "${yellow}=====================================================${reset}"
   if [ -n "$src_ver" ]; then
-    printf '%b\n' "${magenta}  HueMix-Link Installer${reset} ${cyan}v${src_ver}${reset}"
+    printf '%b\n' "${yellow}         HueMix-Link Installer${reset} ${yellow}v${src_ver}${reset}"
   else
-    printf '%b\n' "${magenta}  HueMix-Link Installer${reset}"
+    printf '%b\n' "${yellow}         HueMix-Link Installer${reset}"
   fi
-  printf '%b\n' "${magenta}=====================================================${reset}"
+  printf '%b\n' "${yellow}=====================================================${reset}"
 }
 run() {
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -99,13 +104,13 @@ show_versions() {
   fi
   SOURCE=$(get_repo_version)
   if [ -n "$INSTALLED" ]; then
-    printf '%b\n' "${magenta}Installed:${reset} ${cyan}${INSTALLED}${reset}"
+    printf '%b\n' "${blue}${bold}Installed:${reset} ${magenta}v${INSTALLED}${reset}"
   fi
   if [ -n "$SOURCE" ]; then
-    printf '%b\n' "${magenta}Source:${reset} ${cyan}${SOURCE}${reset}"
+    printf '%b\n' "${blue}${bold}Source:${reset} ${magenta}v${SOURCE}${reset}"
   fi
   if [ -z "$INSTALLED" ] && [ -z "$SOURCE" ]; then
-    printf '%b\n' "${magenta}Version:${reset} ${cyan}none${reset}"
+    printf '%b\n' "${blue}${bold}Version:${reset} ${gray}none${reset}"
   fi
 }
 
@@ -135,7 +140,7 @@ detect_python() {
 
 ensure_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    die "This installer must be run as root (use sudo)."
+    die "This installer must be run using sudo (e.g., 'sudo bash install.sh')."
   fi
 
   if [ -z "${SUDO_USER-}" ]; then
@@ -174,7 +179,7 @@ copy_files() {
     if [ -d "./python" ]; then
       run rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" ./python/ "$APP_DIR/"
     else
-      log "Warning: ./python directory not found; nothing to copy"
+      warn "Warning: ./python directory not found; nothing to copy"
     fi
     [ -f ./LICENSE ] && run rsync "${RSYNC_OPTS[@]}" ./LICENSE "$APP_DIR/"
     [ -f ./README.md ] && run rsync "${RSYNC_OPTS[@]}" ./README.md "$APP_DIR/"
@@ -189,7 +194,7 @@ copy_files() {
         run cp -a ./python/. "$APP_DIR/" || true
       fi
     else
-      log "Warning: ./python directory not found; nothing to copy"
+      warn "Warning: ./python directory not found; nothing to copy"
     fi
     [ -f ./LICENSE ] && run cp -a ./LICENSE "$APP_DIR/" || true
     [ -f ./README.md ] && run cp -a ./README.md "$APP_DIR/" || true
@@ -343,14 +348,14 @@ main_install() {
   fi
   if [ -n "$SOURCE" ]; then
     if [ -n "$INSTALLED" ] && [ "$INSTALLED" != "$SOURCE" ]; then
-      log "Updating from version ${INSTALLED} to ${SOURCE}"
+      log "Updating from version ${magenta}v${INSTALLED}${reset} to ${magenta}v${SOURCE}${reset}"
     elif [ -z "$INSTALLED" ]; then
-      log "Installing version ${SOURCE}"
+      log "Installing version ${magenta}v${SOURCE}${reset}"
     else
       if [ "$FORCE" -eq 1 ]; then
-        log "Version ${SOURCE} already installed — forcing reinstall"
+        warn "Version ${magenta}v${SOURCE}${reset} already installed — forcing reinstall"
       else
-        log "Version ${SOURCE} already installed; use --force to reinstall"
+        log "Version ${magenta}v${SOURCE}${reset} already installed; use ${gray}--force${reset} to reinstall"
         return 0
       fi
     fi

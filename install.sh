@@ -14,7 +14,7 @@ DELETE=0
 NO_RESTART=0
 ASSUME_YES=0
 LOCAL=0
-EXT_PORT=5001
+EXT_PORT=5000
 OLD_HOSTNAME_FILE="$APP_DIR/.prev-hostname"
 
 # Colors for nicer output
@@ -274,7 +274,6 @@ EOF
 }
 
 setup_proxy() {
-  # Ensure external port is forwarded to internal Flask port 5001 using iptables NAT
   TARGET_PORT=5001
 
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -284,21 +283,21 @@ setup_proxy() {
 
   log "Setting up local port forward: ${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
 
-  command -v iptables >/dev/null 2>&1 || { warn "iptables not found"; return; }
+  # Check that iptables exists
+  command -v iptables >/dev/null 2>&1 || { warn "iptables not found; skipping port forwarding"; return; }
 
-  iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports "${TARGET_PORT}" 2>/dev/null || \
-    run iptables -t nat -A PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports "${TARGET_PORT}"
+  run iptables -t nat -A PREROUTING -p tcp --dport "$EXT_PORT" -j REDIRECT --to-ports "$TARGET_PORT"
+  run iptables -t nat -A OUTPUT -p tcp -o lo --dport "$EXT_PORT" -j REDIRECT --to-ports "$TARGET_PORT"
 
   # Ensure persistence
   if ! dpkg -s iptables-persistent >/dev/null 2>&1; then
-    export DEBIAN_FRONTEND=noninteractive
-    run apt-get update -y
-    run apt-get install -y iptables-persistent
+    log "Installing iptables-persistent for saving rules"
+    run apt update -y
+    run apt install -y iptables-persistent
   fi
-  if [ -f /etc/iptables/rules.v4 ]; then
-    log "Backing up existing iptables rules to /etc/iptables/rules.v4.bak"
-    run cp /etc/iptables/rules.v4 /etc/iptables/rules.v4.bak
-  fi
+
+  # Ensure rules file exists before saving
+  [ ! -f /etc/iptables/rules.v4 ] && run touch /etc/iptables/rules.v4
   run iptables-save > /etc/iptables/rules.v4
   success "iptables NAT rules saved and persistent"
 }
@@ -338,10 +337,15 @@ setup_local_domain() {
   [ ! -f "$OLD_HOSTNAME_FILE" ] && hostnamectl --static > "$OLD_HOSTNAME_FILE"
 
   # Install Avahi
-  command -v avahi-daemon >/dev/null 2>&1 || run apt update -y >/dev/null 2>&1 && run apt install -y avahi-daemon avahi-utils >/dev/null 2>&1
+  if ! command -v avahi-daemon >/dev/null 2>&1; then
+    log "Installing Avahi daemon..."
+    run apt update -y >/dev/null 2>&1
+    run apt install -y avahi-daemon avahi-utils >/dev/null 2>&1
+  fi
 
-  run hostnamectl set-hostname huemixlink
-  run systemctl enable avahi-daemon --now
+  run systemctl enable avahi-daemon.service avahi-daemon.socket
+  run systemctl restart avahi-daemon.service avahi-daemon.socket
+  
   success "huemixlink.local advertised via mDNS"
 }
 
@@ -354,8 +358,10 @@ cleanup_local_domain() {
   [ -f "$OLD_HOSTNAME_FILE" ] && { run hostnamectl set-hostname "$(cat "$OLD_HOSTNAME_FILE")"; rm -f "$OLD_HOSTNAME_FILE"; success "Hostname restored"; }
 
   # Stop Avahi
-  systemctl list-unit-files | grep -q avahi-daemon && run systemctl stop avahi-daemon || true
-  run systemctl disable avahi-daemon || true
+  if systemctl list-unit-files | grep -q avahi-daemon; then
+    run systemctl stop avahi-daemon.service avahi-daemon.socket || true
+    run systemctl disable avahi-daemon.service avahi-daemon.socket || true
+  fi
 }
 
 uninstall() {
@@ -382,8 +388,12 @@ uninstall() {
 
   if command -v iptables >/dev/null 2>&1; then
     iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null && \
-      run iptables -t nat -D PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 && \
-      [ -f /etc/iptables/rules.v4 ] && run iptables-save > /etc/iptables/rules.v4
+      run iptables -t nat -D PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001
+
+    iptables -t nat -C OUTPUT -p tcp -o lo --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null && \
+      run iptables -t nat -D OUTPUT -p tcp -o lo --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001
+
+    [ -f /etc/iptables/rules.v4 ] && run iptables-save > /etc/iptables/rules.v4
   fi
   log "Uninstall complete"
 }

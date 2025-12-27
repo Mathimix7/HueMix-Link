@@ -343,15 +343,26 @@ service_update_finish() {
 setup_local_domain() {
   [ "$DRY_RUN" -eq 1 ] && { log "DRY-RUN: would setup Avahi"; return; }
 
-  [ ! -d "$APP_DIR" ] && mkdir -p "$APP_DIR"
-  [ ! -f "$OLD_HOSTNAME_FILE" ] && hostnamectl --static > "$OLD_HOSTNAME_FILE"
-
   # Install Avahi
   if ! command -v avahi-daemon >/dev/null 2>&1; then
     log "Installing Avahi daemon..."
     run apt update -y >/dev/null 2>&1
     run apt install -y avahi-daemon avahi-utils >/dev/null 2>&1
   fi
+
+  SERVICE_FILE="/etc/avahi/services/huemixlink.service"
+
+  cat > "$SERVICE_FILE" <<EOF
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">HueMix-Link</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>${EXT_PORT}</port>
+  </service>
+</service-group>
+EOF
 
   run systemctl enable avahi-daemon.service avahi-daemon.socket
   run systemctl restart avahi-daemon.service avahi-daemon.socket
@@ -360,18 +371,19 @@ setup_local_domain() {
 }
 
 cleanup_local_domain() {
-  CURRENT_HOST=$(hostnamectl --static)
-  [ "$CURRENT_HOST" != "huemixlink" ] && return
-  confirm "Remove huemixlink.local (Avahi) and restore hostname?" || { log "Skipping"; return; }
+  SERVICE_FILE="/etc/avahi/services/huemixlink.service"
+  [ ! -f "$SERVICE_FILE" ] && return
 
-  # Restore old hostname
-  [ -f "$OLD_HOSTNAME_FILE" ] && { run hostnamectl set-hostname "$(cat "$OLD_HOSTNAME_FILE")"; rm -f "$OLD_HOSTNAME_FILE"; success "Hostname restored"; }
+  confirm "Remove huemixlink.local mDNS advertisement?" || return
+
+  run rm -f "$SERVICE_FILE"
 
   # Stop Avahi
   if systemctl list-unit-files | grep -q avahi-daemon; then
-    run systemctl stop avahi-daemon.service avahi-daemon.socket || true
-    run systemctl disable avahi-daemon.service avahi-daemon.socket || true
+    run systemctl restart avahi-daemon.service avahi-daemon.socket || true
   fi
+
+  success "huemixlink.local removed"
 }
 
 uninstall() {

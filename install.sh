@@ -29,10 +29,10 @@ reset=$(echo -en "\e[0m")
 
 # Message helpers with visual markers and distinct colors
 log()  { printf '%b\n' "${blue}● ${reset}${white}$*${reset}" >&2; }
-die()  { printf '%b\n' "${bold}${red}✖ ERROR:${reset} ${red}$*${reset}" >&2; exit 1; }
+die()  { printf '%b\n' "${bold}${red}ERROR:${reset} ${red}$*${reset}" >&2; exit 1; }
 
-success() { printf '%b\n' "${green}✔ ${reset}${white}$*${reset}" >&2; }
-warn()    { printf '%b\n' "${yellow}⚠ ${reset}${white}$*${reset}" >&2; }
+success() { printf '%b\n' "${green}${reset}${white}$*${reset}" >&2; }
+warn()    { printf '%b\n' "${yellow}${reset}${white}$*${reset}" >&2; }
 debug()   { printf '%b\n' "${gray}$*${reset}" >&2; }
 
 print_header() {

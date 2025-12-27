@@ -27,6 +27,7 @@ Payload_GatewayList activeGateways;
 
 uint8_t lastMsgID = 0;
 bool waitingForDelivery = false;
+uint8_t lastTargetMAC[6] = {0}; // Store the actual target MAC for delivery reports
 
 volatile bool pktReady = false;
 HueMixLinkPacket bufferPkt;
@@ -43,6 +44,23 @@ void sendSerialHandshake() {
   Serial2.write((uint8_t*)&h, sizeof(h));
 }
 
+void saveGateways() {
+  prefs.putBytes("gw", &activeGateways, sizeof(activeGateways));
+  Serial.printf("[RADIO] Saved %d gateways to NVS\n", activeGateways.count);
+}
+
+void loadGateways() {
+  size_t len = prefs.getBytes("gw", &activeGateways, sizeof(activeGateways));
+  if (len == sizeof(activeGateways) && activeGateways.count > 0) {
+    Serial.printf("[RADIO] Loaded %d gateways from NVS\n", activeGateways.count);
+  } else {
+    // No saved gateways, initialize with self
+    activeGateways.count = 1;
+    esp_read_mac(activeGateways.macs[0], ESP_MAC_WIFI_STA);
+    Serial.println("[RADIO] No saved gateways, initialized with self");
+  }
+}
+
 // --- HANDLE PACKET FROM NET NODE ---
 void handleSerialPacket(uint8_t* data) {
   memcpy(&radioTx, data, sizeof(HueMixLinkPacket));
@@ -51,10 +69,44 @@ void handleSerialPacket(uint8_t* data) {
 
   if (radioTx.type == PKT_SYS_CMD) {
     if (radioTx.payload.sys.cmd == 1) nightMode = true;
-    if (radioTx.payload.sys.cmd == 2) nightMode = false;
+    else if (radioTx.payload.sys.cmd == 2) nightMode = false;
+    else {
+      esp_now_peer_info_t peer = {};
+      memcpy(peer.peer_addr, radioTx.targetMAC, 6);
+      peer.channel = HUEMIXLINK_CHANNEL;
+      peer.encrypt = false;
+      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      lastMsgID = radioTx.msgID;
+      memcpy(lastTargetMAC, radioTx.targetMAC, 6);
+      waitingForDelivery = true;
+      esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
+    }
   } else if (radioTx.type == PKT_GW_LIST_UPD) {
     activeGateways = radioTx.payload.gwList;
+    saveGateways();
     Serial.printf("[RADIO] Updated Gateways List (%d nodes)\n", activeGateways.count);
+    
+    // Check if this update is targeted to a specific device (not broadcast)
+    bool isBroadcast = true;
+    for(int i=0; i<6; i++) {
+      if (radioTx.targetMAC[i] != 0xFF) {
+        isBroadcast = false;
+        break;
+      }
+    }
+    
+    // If targeted, forward to the device via ESP-NOW
+    if (!isBroadcast) {      
+      esp_now_peer_info_t peer = {};
+      memcpy(peer.peer_addr, radioTx.targetMAC, 6);
+      peer.channel = HUEMIXLINK_CHANNEL;
+      peer.encrypt = false;
+      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      lastMsgID = radioTx.msgID;
+      memcpy(lastTargetMAC, radioTx.targetMAC, 6);
+      waitingForDelivery = true;
+      esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
+    }
   } else if (radioTx.type == PKT_PAIR_CONFIRM) {
     HOME_ID = radioTx.payload.pair.newHomeID;
     prefs.putUInt("hid", HOME_ID);
@@ -62,13 +114,17 @@ void handleSerialPacket(uint8_t* data) {
     esp_now_peer_info_t peer = {}; memcpy(peer.peer_addr, radioTx.targetMAC, 6);
     peer.channel = HUEMIXLINK_CHANNEL; peer.encrypt = false;
     if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
-    lastMsgID = radioTx.msgID; waitingForDelivery = true;
+    lastMsgID = radioTx.msgID;
+    memcpy(lastTargetMAC, radioTx.targetMAC, 6);
+    waitingForDelivery = true;
     esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
   } else {
     esp_now_peer_info_t peer = {}; memcpy(peer.peer_addr, radioTx.targetMAC, 6);
     peer.channel = HUEMIXLINK_CHANNEL; peer.encrypt = false;
     if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
-    lastMsgID = radioTx.msgID; waitingForDelivery = true;
+    lastMsgID = radioTx.msgID;
+    memcpy(lastTargetMAC, radioTx.targetMAC, 6);
+    waitingForDelivery = true;
     esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
   }
 }
@@ -105,14 +161,17 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 
     rpt.payload.report.originalMsgID = lastMsgID;
     rpt.payload.report.success = (status == ESP_NOW_SEND_SUCCESS);
-    memcpy(rpt.payload.report.targetMAC, mac_addr, 6);
+    memcpy(rpt.payload.report.targetMAC, lastTargetMAC, 6); // Use stored target MAC instead of callback parameter
 
     rpt.signature = calculateHash((uint8_t*)&rpt.payload, 8, HOME_ID);
 
     Serial2.write(SERIAL_START); Serial2.write((uint8_t*)&rpt, sizeof(rpt)); Serial2.write(SERIAL_END);
     waitingForDelivery = false;
-    digitalWrite(PIN_LED_STATUS, (status == ESP_NOW_SEND_SUCCESS) ? HIGH : LOW);
-    delay(10); digitalWrite(PIN_LED_STATUS, LOW);
+    
+    if (!nightMode) {
+      digitalWrite(PIN_LED_STATUS, (status == ESP_NOW_SEND_SUCCESS) ? HIGH : LOW);
+      delay(10); digitalWrite(PIN_LED_STATUS, LOW);
+    }
   }
 }
 
@@ -122,11 +181,22 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
 
   memcpy(&radioRx, data, sizeof(HueMixLinkPacket));
   memcpy(radioRx.sourceMAC, info->src_addr, 6);
-  if (radioRx.type == PKT_HELLO) { radioRx.payload.raw[1] = (uint8_t)info->rx_ctrl->rssi; }
+  
+  // Record RSSI for HELLO and PING_DEVICE responses
+  if (radioRx.type == PKT_HELLO) { 
+    radioRx.payload.raw[1] = (uint8_t)info->rx_ctrl->rssi; 
+  }
+  else if (radioRx.type == PKT_PING_DEVICE) {
+    // Store RSSI in first byte of payload for Python to read
+    radioRx.payload.raw[0] = (uint8_t)info->rx_ctrl->rssi;
+  }
   
   memcpy(&bufferPkt, &radioRx, sizeof(HueMixLinkPacket));
   pktReady = true;
-  digitalWrite(PIN_LED_STATUS, HIGH); 
+  
+  if (!nightMode) {
+    digitalWrite(PIN_LED_STATUS, HIGH);
+  }
 }
 
 void setup() {
@@ -135,6 +205,7 @@ void setup() {
   Serial2.setRxBufferSize(4096);
   Serial2.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX); 
   WiFi.mode(WIFI_STA); 
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   if (esp_now_init() != ESP_OK) ESP.restart();
 
   if(!prefs.begin("huemixlink", false)) {
@@ -146,8 +217,25 @@ void setup() {
   esp_now_register_send_cb((esp_now_send_cb_t)OnDataSent);
   esp_now_register_recv_cb(OnDataRecv);
   
-  activeGateways.count = 1;
-  esp_read_mac(activeGateways.macs[0], ESP_MAC_WIFI_STA);
+  // Load saved gateways from NVS, or initialize with self
+  loadGateways();
+  
+  // Ensure self is in the list
+  uint8_t myMac[6];
+  esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+  bool selfInList = false;
+  for(int i=0; i<activeGateways.count; i++) {
+    if(memcmp(activeGateways.macs[i], myMac, 6) == 0) {
+      selfInList = true;
+      break;
+    }
+  }
+  if(!selfInList && activeGateways.count < MAX_GATEWAYS) {
+    memcpy(activeGateways.macs[activeGateways.count], myMac, 6);
+    activeGateways.count++;
+    saveGateways();
+    Serial.println("[RADIO] Added self to gateway list");
+  }
   
   Serial.println("--- RADIO NODE READY ---");
 }

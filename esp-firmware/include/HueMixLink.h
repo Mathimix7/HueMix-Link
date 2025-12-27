@@ -25,7 +25,8 @@ enum PacketType {
   PKT_DELIVERY_RPT = 0x13, 
 
   PKT_ACK_TO_BTN   = 0xAA, 
-  PKT_PING         = 0xFF  
+  PKT_PING         = 0xFF,
+  PKT_PING_DEVICE  = 0xFE
 };
 
 // --- ACTION CODES ---

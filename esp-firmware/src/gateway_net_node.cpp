@@ -273,8 +273,16 @@ void loop() {
               HOME_ID = newID; prefs.putUInt("hid", HOME_ID);
               digitalWrite(PIN_LED_DATA, HIGH); delay(1000); digitalWrite(PIN_LED_DATA, LOW);
               sendGatewayHello();
+            } else if (newID == HOME_ID) {
+              Serial.println("Re-sending Gateway Hello...");
+              sendGatewayHello();
             }
           }
+          
+          Serial2.write(SERIAL_START); 
+          Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
+          Serial2.write(SERIAL_END);
+          flashDataLED(1);
         } else if (txPkt.type == PKT_SYS_CMD) {
           if (txPkt.signature == calculateHash((uint8_t*)&txPkt.payload, sizeof(Payload_SysCmd), HOME_ID)) {
             bool oldMode = nightMode;
@@ -283,16 +291,36 @@ void loop() {
             
             if (oldMode != nightMode) {
               Serial.printf("Night Mode: %s\n", nightMode ? "ON" : "OFF");
-              setWifiLedState(1); 
+              setWifiLedState(1);
             }
+            
+            // Forward to radio node
+            Serial2.write(SERIAL_START); 
+            Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
+            Serial2.write(SERIAL_END);
           }
+        } else if (txPkt.type == PKT_PING) {
+          // Respond with uptime
+          HueMixLinkPacket pong;
+          memset(&pong, 0, sizeof(HueMixLinkPacket));
+          pong.type = PKT_PING;
+          WiFi.macAddress(pong.sourceMAC);
+          uint32_t uptime_seconds = millis() / 1000;
+          memcpy(pong.payload.raw, &uptime_seconds, sizeof(uint32_t));
+          pong.signature = calculateHash(pong.payload.raw, sizeof(uint32_t), HOME_ID);
+          
+          udp.beginPacket(server_ip, server_port);
+          udp.write((uint8_t*)&pong, sizeof(HueMixLinkPacket));
+          udp.endPacket();
+          Serial.printf("[NET] PING Response: Uptime %d seconds\n", uptime_seconds);
+          flashDataLED(1);
+        } else {
+          // Forward other packet types to radio node
+          Serial2.write(SERIAL_START); 
+          Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
+          Serial2.write(SERIAL_END);
+          flashDataLED(1);
         }
-        
-        // --- SEND FULL STRUCTURE TO RADIO ---
-        Serial2.write(SERIAL_START); 
-        Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
-        Serial2.write(SERIAL_END);
-        flashDataLED(1);
       }
     }
   }

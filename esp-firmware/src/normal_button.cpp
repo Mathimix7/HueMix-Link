@@ -108,12 +108,52 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
     }
   }
   else if (rx->type == PKT_ACK_TO_BTN) {
-    ackReceived = true;
-    
+    ackReceived = true;    
     if (rx->payload.gwList.count > 0) {
-       gateways = rx->payload.gwList;
+       Serial.printf("[BTN] Server sent %d gateways:\n", rx->payload.gwList.count);
+       for(int i=0; i<rx->payload.gwList.count; i++) {
+         Serial.printf("  [%d] %02X:%02X:%02X:%02X:%02X:%02X\n", i,
+           rx->payload.gwList.macs[i][0], rx->payload.gwList.macs[i][1],
+           rx->payload.gwList.macs[i][2], rx->payload.gwList.macs[i][3],
+           rx->payload.gwList.macs[i][4], rx->payload.gwList.macs[i][5]);
+       }
+       
+       // Merge new gateway list while preserving successful order
+       Payload_GatewayList newList;
+       newList.count = 0;
+       
+       // First, add existing gateways that are still in the new list (preserve order)
+       for(int i=0; i<gateways.count && newList.count < MAX_GATEWAYS; i++) {
+         bool stillExists = false;
+         for(int j=0; j<rx->payload.gwList.count; j++) {
+           if (memcmp(gateways.macs[i], rx->payload.gwList.macs[j], 6) == 0) {
+             stillExists = true;
+             break;
+           }
+         }
+         if (stillExists) {
+           memcpy(newList.macs[newList.count], gateways.macs[i], 6);
+           newList.count++;
+         }
+       }
+       
+       // Then, add any new gateways from server that we don't have yet
+       for(int i=0; i<rx->payload.gwList.count && newList.count < MAX_GATEWAYS; i++) {
+         bool isNew = true;
+         for(int j=0; j<newList.count; j++) {
+           if (memcmp(rx->payload.gwList.macs[i], newList.macs[j], 6) == 0) {
+             isNew = false;
+             break;
+           }
+         }
+         if (isNew) {
+           memcpy(newList.macs[newList.count], rx->payload.gwList.macs[i], 6);
+           newList.count++;
+         }
+       }
+       
+       gateways = newList;
        saveGateways();
-       Serial.printf("Updated Gateway List. Count: %d\n", gateways.count);
     }
   }
 }
@@ -134,16 +174,26 @@ void sendPacket(uint8_t type, uint8_t action) {
 
   ackReceived = false;
   bool sent = false;
+  int successfulGatewayIndex = -1;
 
   // A. PAIRED MODE
   if (HOME_ID != 0 && gateways.count > 0) {
+    Serial.printf("[BTN] Trying %d gateways for packet type 0x%02X action %d\n", gateways.count, type, action);
+    
     for(int i=0; i<gateways.count; i++) {
+      Serial.printf("[BTN] Attempt %d/%d: %02X:%02X:%02X:%02X:%02X:%02X\n", i+1, gateways.count,
+        gateways.macs[i][0], gateways.macs[i][1], gateways.macs[i][2],
+        gateways.macs[i][3], gateways.macs[i][4], gateways.macs[i][5]);
+      
       #if defined(ESP8266)
         if(!esp_now_is_peer_exist(gateways.macs[i])) esp_now_add_peer(gateways.macs[i], WiFi.channel(), ESP_NOW_ROLE_COMBO, NULL, 0);
         if (esp_now_send(gateways.macs[i], (uint8_t*)&pkt, sizeof(pkt)) == 0) {
           unsigned long w = millis();
-          while(millis() - w < 50 && !ackReceived) delay(1);
-          if (ackReceived) { sent = true; break; }
+          while(millis() - w < 75 && !ackReceived) delay(1);
+          if (ackReceived) { 
+            Serial.println("[BTN]   ACK received!");
+            sent = true; successfulGatewayIndex = i; break; 
+          }
         }
       #else
         memcpy(peerInfo.peer_addr,gateways.macs[i],6);
@@ -152,15 +202,34 @@ void sendPacket(uint8_t type, uint8_t action) {
         if(!esp_now_is_peer_exist(gateways.macs[i])) esp_now_add_peer(&peerInfo);
         if (esp_now_send(gateways.macs[i], (uint8_t*)&pkt, sizeof(pkt)) == ESP_OK) {
           unsigned long w = millis();
-          while(millis() - w < 50 && !ackReceived) delay(1);
-          if (ackReceived) { sent = true; break; }
+          while(millis() - w < 75 && !ackReceived) delay(1);
+          if (ackReceived) { 
+            sent = true; successfulGatewayIndex = i; break; 
+          }
         }
       #endif
     }
     
+    // Move successful gateway to front of list
+    if (successfulGatewayIndex > 0) {
+      Serial.printf("[BTN] Moving gateway %d to front\n", successfulGatewayIndex);
+      uint8_t tempMac[6];
+      memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
+      // Shift all entries before it down by one
+      for(int j = successfulGatewayIndex; j > 0; j--) {
+        memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+      }
+      // Place successful gateway at index 0
+      memcpy(gateways.macs[0], tempMac, 6);
+      saveGateways();
+    }
+    
     if (action != ACT_SYNC) {
-      if (sent) triggerLed(50);
-      else ledBlink(2, 100);
+      if (sent) {
+        triggerLed(50);
+      } else {
+        ledBlink(2, 100);
+      }
     }
   }
   
@@ -211,6 +280,7 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   #if defined(ESP32) 
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
     if (esp_now_init() != ESP_OK) ESP.restart();
   #else 
     if(esp_now_init() != 0) ESP.restart();

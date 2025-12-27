@@ -13,6 +13,7 @@ FORCE=0
 DELETE=0
 NO_RESTART=0
 ASSUME_YES=0
+LOCAL=0
 
 # Colors for nicer output
 white=$(echo -en "\e[39m")
@@ -58,6 +59,7 @@ Usage: $0 [install|uninstall] [--yes] [--dry-run] [--force] [--delete] [--no-res
   --delete        When installing, delete config files in app dir
   --no-restart    Do not stop or restart the service during update
   --show-version  Show installed and source version information and exit
+  --local         Create huemixlink.local host entry
   -h|--help       Show this help message
 EOF
 }
@@ -72,6 +74,7 @@ parse_args() {
       --delete) DELETE=1; shift ;;
       --no-restart) NO_RESTART=1; shift ;;
       --show-version) SHOW_VERSION=1; shift ;;
+      --local) LOCAL=1; shift ;;
       --yes|-y) ASSUME_YES=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "Unknown argument: $1" ;;
@@ -286,6 +289,24 @@ service_update_finish() {
   fi
 }
 
+setup_local_domain() {
+  # Add a local /etc/hosts entry for huemixlink.local
+  HOSTNAME=huemixlink.local
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "DRY-RUN: would add /etc/hosts entry for ${HOSTNAME}"
+    return 0
+  fi
+
+  # Add /etc/hosts entry if not present
+  if grep -qi "\b${HOSTNAME//./\.}\b" /etc/hosts 2>/dev/null; then
+    log "/etc/hosts already contains ${HOSTNAME}; skipping host entry"
+  else
+    log "Adding /etc/hosts entry: 127.0.0.1 ${HOSTNAME}"
+    printf '%s\n' "127.0.0.1 ${HOSTNAME}" >> /etc/hosts
+  fi
+}
+
 uninstall() {
   log "Uninstalling ${SERVICE_NAME}"
   if command -v systemctl >/dev/null 2>&1; then
@@ -358,6 +379,9 @@ main_install() {
   create_venv_and_deps
   setup_permissions
   install_systemd_unit
+  if [ "$LOCAL" -eq 1 ]; then
+    setup_local_domain
+  fi
   service_update_finish
   log "Installation complete. Check status with: systemctl status ${SERVICE_NAME}"
 }

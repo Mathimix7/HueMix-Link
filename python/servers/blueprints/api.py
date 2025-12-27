@@ -6,6 +6,7 @@ from services.hue_state_manager import hue_state_manager
 from network.network_server import network_server
 from network.device_manager import device_manager
 from network.pairing_manager import pairing_manager
+from services.automation_service import automation_service
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -476,6 +477,36 @@ def get_udp_status():
             "port": 7777,
             "gateways": 0
         })
+
+
+@api_bp.route('/status/automation', methods=['GET'])
+def get_automation_status():
+    """Get Automation Engine status."""
+    try:
+        initialized = automation_service.is_initialized()
+        engine = automation_service.get_engine()
+        running = bool(engine.running) if engine else False
+
+        info = None
+        if initialized and running:
+            info = 'Engine initialized and running'
+        elif initialized and not running:
+            info = 'Engine initialized but stopped'
+        else:
+            info = 'Engine not initialized'
+
+        return jsonify({
+            "initialized": initialized,
+            "running": running,
+            "info": info
+        })
+
+    except Exception as e:
+        return jsonify({
+            "initialized": False,
+            "running": False,
+            "info": str(e)
+        }), 500
 
 
 # ===== Pairing Mode Endpoints =====

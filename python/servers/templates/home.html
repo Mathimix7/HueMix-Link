@@ -56,22 +56,21 @@
                 <p id="udp-info" class="text-sm text-gray-500">Loading...</p>
             </div>
 
-            <!-- Flask Server Status -->
+            <!-- Automation Engine Status -->
             <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-100">
                 <div class="flex items-center justify-between mb-3">
                     <div class="flex items-center">
-                        <div class="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center mr-3">
-                            <i class="fas fa-globe text-green-600"></i>
+                        <div class="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center mr-3">
+                            <i class="fas fa-robot text-indigo-600"></i>
                         </div>
-                        <h3 class="text-lg font-semibold text-gray-900">Web Server</h3>
+                        <h3 class="text-lg font-semibold text-gray-900">Automation Engine</h3>
                     </div>
-                    <span id="web-status" class="px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-600">
-                        <i class="fas fa-check-circle mr-1"></i>Online
+                    <span id="automation-status" class="px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600">
+                        <i class="fas fa-spinner fa-spin mr-1"></i>Checking...
                     </span>
                 </div>
-                <p id="web-info" class="text-sm text-gray-500">Accessible via proxy (external port configured by installer)</p>
+                <p id="automation-info" class="text-sm text-gray-500">Loading...</p>
             </div>
-
         </div>
     </div>
 
@@ -285,6 +284,34 @@ function loadSystemStatus() {
             document.getElementById('udp-status').className = 'px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600';
             document.getElementById('udp-status').innerHTML = '<i class="fas fa-question-circle mr-1"></i>Unknown';
             document.getElementById('udp-info').textContent = 'Unable to check status';
+        });
+
+    // Check Automation Engine status
+    fetch('/api/status/automation')
+        .then(response => response.json())
+        .then(data => {
+            const statusEl = document.getElementById('automation-status');
+            const infoEl = document.getElementById('automation-info');
+
+            if (data.initialized && data.running) {
+                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-600';
+                statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>Running';
+                infoEl.textContent = data.info || 'Automation engine running';
+            } else if (data.initialized && !data.running) {
+                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-600';
+                statusEl.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i>Initialized';
+                infoEl.textContent = data.info || 'Initialized but stopped';
+            } else {
+                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-600';
+                statusEl.innerHTML = '<i class="fas fa-times-circle mr-1"></i>Inactive';
+                infoEl.textContent = data.info || 'Automation engine not initialized';
+            }
+        })
+        .catch(err => {
+            console.error('Error loading automation engine status:', err);
+            document.getElementById('automation-status').className = 'px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600';
+            document.getElementById('automation-status').innerHTML = '<i class="fas fa-question-circle mr-1"></i>Unknown';
+            document.getElementById('automation-info').textContent = 'Unable to check status';
         });
 }
 

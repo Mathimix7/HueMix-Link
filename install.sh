@@ -55,17 +55,19 @@ run() {
 
 usage() {
   cat <<EOF
-Usage: $0 [install|uninstall] [--yes] [--dry-run] [--force] [--delete] [--no-restart] [--show-version] [--help]
-  install         Install or update the application (default)
-  uninstall       Remove service and application files
-  --yes           Non-interactive; assume yes to prompts
-  --dry-run       Show actions without making changes
-  --force         Force recreate venv and overwrite files
-  --delete        When installing, delete config files in app dir
-  --no-restart    Do not stop or restart the service during update
-  --show-version  Show installed and source version information and exit
-  --local         Create huemixlink.local host entry
-  -h|--help       Show this help message
+${blue}${bold}Usage:${reset} $0 [${magenta}install${reset}|${magenta}uninstall${reset}] [${gray}--yes${reset}] [${gray}--dry-run${reset}] [${gray}--force${reset}] [${gray}--delete${reset}] [${gray}--no-restart${reset}] [${gray}--show-version${reset}] [${gray}--help${reset}]
+
+  ${green}install${reset}         Install or update the application (${magenta}default${reset})
+  ${green}uninstall${reset}       Remove service and application files
+
+  ${gray}--yes${reset}           Non-interactive; assume yes to prompts
+  ${gray}--dry-run${reset}       Show actions without making changes
+  ${gray}--force${reset}         Force recreate venv and overwrite files
+  ${gray}--delete${reset}        When installing, delete config files in app dir
+  ${gray}--no-restart${reset}    Do not stop or restart the service during update
+  ${gray}--show-version${reset}  Show installed and source version information and exit
+  ${gray}--local${reset}         Create huemixlink.local host entry
+  ${gray}-h|--help${reset}       Show this help message
 EOF
 }
 

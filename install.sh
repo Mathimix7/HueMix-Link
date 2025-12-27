@@ -275,31 +275,41 @@ EOF
 
 setup_proxy() {
   TARGET_PORT=5001
+  HAPROXY_CFG="/etc/haproxy/haproxy.cfg"
+  TAG_BEGIN="# BEGIN HUEMIX-LINK"
+  TAG_END="# END HUEMIX-LINK"
 
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "DRY-RUN: would ensure port ${EXT_PORT} is forwarded to localhost:${TARGET_PORT}"
-    return 0
-  fi
+  [ "$DRY_RUN" -eq 1 ] && { log "DRY-RUN: would configure HAProxy"; return; }
 
-  log "Setting up local port forward: ${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
+  log "Configuring HAProxy: ${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
 
-  # Check that iptables exists
-  command -v iptables >/dev/null 2>&1 || { warn "iptables not found; skipping port forwarding"; return; }
-
-  run iptables -t nat -A PREROUTING -p tcp --dport "$EXT_PORT" -j REDIRECT --to-ports "$TARGET_PORT"
-  run iptables -t nat -A OUTPUT -p tcp -o lo --dport "$EXT_PORT" -j REDIRECT --to-ports "$TARGET_PORT"
-
-  # Ensure persistence
-  if ! dpkg -s iptables-persistent >/dev/null 2>&1; then
-    log "Installing iptables-persistent for saving rules"
+  if ! command -v haproxy >/dev/null 2>&1; then
+    log "Installing HAProxy..."
     run apt update -y
-    run apt install -y iptables-persistent
+    run apt install -y haproxy
   fi
 
-  # Ensure rules file exists before saving
-  [ ! -f /etc/iptables/rules.v4 ] && run touch /etc/iptables/rules.v4
-  run iptables-save > /etc/iptables/rules.v4
-  success "iptables NAT rules saved and persistent"
+  # Remove old block if present (reinstall-safe)
+  run sed -i "/$TAG_BEGIN/,/$TAG_END/d" "$HAPROXY_CFG"
+
+  cat >> "$HAPROXY_CFG" <<EOF
+
+$TAG_BEGIN
+frontend huemixlink_front
+    bind *:${EXT_PORT}
+    mode http
+    default_backend huemixlink_back
+
+backend huemixlink_back
+    mode http
+    server huemixlink 127.0.0.1:${TARGET_PORT} check
+$TAG_END
+EOF
+
+  run systemctl enable haproxy
+  run systemctl restart haproxy
+
+  success "HAProxy configured: http://<server_ip>:${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
 }
 
 service_update_finish() {
@@ -345,7 +355,7 @@ setup_local_domain() {
 
   run systemctl enable avahi-daemon.service avahi-daemon.socket
   run systemctl restart avahi-daemon.service avahi-daemon.socket
-  
+
   success "huemixlink.local advertised via mDNS"
 }
 
@@ -386,15 +396,16 @@ uninstall() {
 
   id -u "$SERVICE_USER" >/dev/null 2>&1 && confirm "Remove service user $SERVICE_USER?" && run userdel "$SERVICE_USER" || true
 
-  if command -v iptables >/dev/null 2>&1; then
-    iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null && \
-      run iptables -t nat -D PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001
+  if command -v haproxy >/dev/null 2>&1; then
+    HAPROXY_CFG="/etc/haproxy/haproxy.cfg"
+    TAG_BEGIN="# BEGIN HUEMIX-LINK"
+    TAG_END="# END HUEMIX-LINK"
 
-    iptables -t nat -C OUTPUT -p tcp -o lo --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null && \
-      run iptables -t nat -D OUTPUT -p tcp -o lo --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001
-
-    [ -f /etc/iptables/rules.v4 ] && run iptables-save > /etc/iptables/rules.v4
+    log "Removing HAProxy HueMix-Link routing"
+    run sed -i "/$TAG_BEGIN/,/$TAG_END/d" "$HAPROXY_CFG"
+    run systemctl restart haproxy || true
   fi
+
   log "Uninstall complete"
 }
 

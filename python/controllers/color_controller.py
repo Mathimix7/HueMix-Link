@@ -16,7 +16,7 @@ def get_light_gamut(modelId):
     elif modelId in ('LCT010', 'LCT014', 'LCT015', 'LCT016', 'LCT011', 'LLC020', 'LST002', 'LCT012', 'LCL001', 'LCA003', '440400982841'):
         return GamutC
     else:
-        logger.warning(f"Unknown light model ID '{modelId}', defaulting to Gamut C")
+        logger.debug(f"Unknown light model ID '{modelId}', defaulting to Gamut C")
         return GamutC  # Default to Gamut C for unknown models
 
 

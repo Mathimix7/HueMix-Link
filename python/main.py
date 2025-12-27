@@ -1,24 +1,21 @@
 """Main application entry point."""
 import logging
+from services.logging_service import logging_service
 from servers.flask_server import app
 from services import config_manager, data_manager
 from services.home_id_manager import home_id_manager
 from services.automation_service import automation_service
 from network.network_server import network_server
 from network.pairing_manager import pairing_manager
-from constants import LOG_FORMAT, FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY
+from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY
 from waitress import serve
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format=LOG_FORMAT
-)
 
 logger = logging.getLogger(__name__)
 
 if __name__ == '__main__':
     try:
+        logging_service.start()
+        
         defaults = {
             FILE_BUTTONS: [],
             FILE_LIGHTSTRIPS: [],

@@ -92,7 +92,7 @@ class HueSSEListener:
                     'Accept': 'text/event-stream'  # Request SSE format
                 }
                 
-                logger.info(f"Connecting to Hue SSE at {ip}...")
+                logger.debug(f"Connecting to Hue SSE at {ip}...")
                 
                 # Stream events
                 response = requests.get(
@@ -111,7 +111,7 @@ class HueSSEListener:
                 
                 # Log reconnection success if this was a retry
                 if retry_delay > 1:
-                    logger.info(f"SSE connection re-established (status={response.status_code})")
+                    logger.debug(f"SSE connection re-established (status={response.status_code})")
                 else:
                     logger.info(f"SSE connection established (status={response.status_code})")
                 retry_delay = 1  # Reset retry delay on success
@@ -123,7 +123,7 @@ class HueSSEListener:
                     for chunk in response.iter_content(chunk_size=1024):
                         chunk_count += 1
                         if chunk_count == 1:
-                            logger.info(f"First chunk received: {len(chunk)} bytes")
+                            logger.debug(f"First chunk received: {len(chunk)} bytes")
                         
                         if not self._running or self._stop_event.is_set():
                             logger.info("SSE listener stopping...")

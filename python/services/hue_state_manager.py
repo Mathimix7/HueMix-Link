@@ -459,7 +459,7 @@ class HueStateManager:
                 
                 # If scene is active, set it as the current scene for the room
                 if is_active and room_id:
-                    logger.info(f"Found active scene {scene_name} ({scene_id}) in room {room_id}")
+                    logger.debug(f"Found active scene {scene_name} ({scene_id}) in room {room_id}")
                     self.set_room_scene(room_id, scene_id)
             
             logger.info(f"State manager initialized: {len(self._lights)} lights, "

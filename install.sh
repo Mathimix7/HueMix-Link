@@ -299,19 +299,37 @@ service_update_finish() {
 setup_local_domain() {
   # Add a local /etc/hosts entry for huemixlink.local
   HOSTNAME=huemixlink.local
-
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "DRY-RUN: would add /etc/hosts entry for ${HOSTNAME}"
+    log "DRY-RUN: would add /etc/hosts entry for ${HOSTNAME} (server LAN IP)"
     return 0
   fi
 
-  # Add /etc/hosts entry if not present
-  if grep -qi "\b${HOSTNAME//./\.}\b" /etc/hosts 2>/dev/null; then
-    log "/etc/hosts already contains ${HOSTNAME}; skipping host entry"
-  else
-    log "Adding /etc/hosts entry: 127.0.0.1 ${HOSTNAME}"
-    printf '%s\n' "127.0.0.1 ${HOSTNAME}" >> /etc/hosts
+  # Determine a sensible LAN IP for this host. Try modern utilities first, fall back to hostname -I.
+  TARGET_IP=""
+  if command -v ip >/dev/null 2>&1; then
+    TARGET_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}') || true
   fi
+  if [ -z "${TARGET_IP}" ] && command -v hostname >/dev/null 2>&1; then
+    TARGET_IP=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+  fi
+  if [ -z "${TARGET_IP}" ] && command -v ifconfig >/dev/null 2>&1; then
+    TARGET_IP=$(ifconfig 2>/dev/null | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}') || true
+  fi
+  if [ -z "${TARGET_IP}" ]; then
+    warn "Could not detect LAN IP; falling back to 127.0.0.1"
+    TARGET_IP=127.0.0.1
+  fi
+
+  # Update /etc/hosts: remove any existing huemixlink.local entries then append the chosen mapping
+  ESC_HOST=${HOSTNAME//./\.}
+  if grep -qi "\b${ESC_HOST}\b" /etc/hosts 2>/dev/null; then
+    log "Updating /etc/hosts entry for ${HOSTNAME} -> ${magenta}${TARGET_IP}${reset}"
+    run sed -i.bak -E "/\b${ESC_HOST}\b/d" /etc/hosts || run sed -i -E "/\b${ESC_HOST}\b/d" /etc/hosts || true
+  else
+    log "Adding /etc/hosts entry: ${magenta}${TARGET_IP}${reset} ${HOSTNAME}"
+  fi
+  run bash -c "printf '%s\n' \"${TARGET_IP} ${HOSTNAME}\" >> /etc/hosts"
+  success "Added host entry: ${magenta}${TARGET_IP}${reset} ${white}${HOSTNAME}${reset}"
 }
 
 uninstall() {
@@ -334,6 +352,18 @@ uninstall() {
       if command -v userdel >/dev/null 2>&1; then
         run userdel "$SERVICE_USER" || true
       fi
+    fi
+  fi
+  # Remove huemixlink.local entry from /etc/hosts if present
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if grep -qi "\bhuemixlink\.local\b" /etc/hosts 2>/dev/null; then
+      log "DRY-RUN: would remove huemixlink.local entries from /etc/hosts"
+    fi
+  else
+    if grep -qi "\bhuemixlink\.local\b" /etc/hosts 2>/dev/null; then
+      log "Removing /etc/hosts entries for huemixlink.local"
+      run sed -i.bak -E "/\bhuemixlink\.local\b/d" /etc/hosts || run sed -i -E "/\bhuemixlink\.local\b/d" /etc/hosts || true
+      success "Removed huemixlink.local entries from /etc/hosts (backup: /etc/hosts.bak)"
     fi
   fi
   log "Uninstall complete"

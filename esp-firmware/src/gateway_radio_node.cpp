@@ -1,7 +1,6 @@
 /* 
-   HUEMIXLINK V2 - GATEWAY FIRMWARE (ZERO-PAD & SELF-ADD FIX)
-   - Fixed: Net Node zero-pads UDP packets to maintain Serial Sync
-   - Fixed: Radio Node adds itself to gateway list on boot
+  HUEMIXLINK V3 - GATEWAY RADIO FIRMWARE
+  Supports: ESP32
 */
 
 #include "HueMixLink.h"

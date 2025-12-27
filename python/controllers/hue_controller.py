@@ -1,30 +1,82 @@
 from typing import List, Dict
-import urllib3
 import requests
+import time
+import logging
+import urllib3
+from constants import TIMEOUT_HTTP_REQUEST, HTTP_MAX_RETRIES, HTTP_RETRY_BACKOFF_BASE
+
+logger = logging.getLogger(__name__)
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class Hue:
     def __init__(self, bridge_ip, token):
         self.bridge_ip = bridge_ip
         self.token = token
         self.base_url = f"https://{self.bridge_ip}/clip/v2/resource"
-        self.headers = {
+        
+        # Create a session for connection pooling and SSL configuration
+        self.session = requests.Session()
+        self.session.verify = False
+        self.session.headers.update({
             "hue-application-key": self.token,
-        }
-
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        })
+        
+    def _make_request(self, method, url, json_data=None, max_retries=HTTP_MAX_RETRIES, timeout=TIMEOUT_HTTP_REQUEST):
+        """Make HTTP request with retry logic.
+        
+        Args:
+            method: HTTP method (GET, PUT, POST)
+            url: Full URL to request
+            json_data: JSON payload for PUT/POST
+            max_retries: Maximum number of retry attempts
+            timeout: Request timeout in seconds
+            
+        Returns:
+            Response data dict
+            
+        Raises:
+            ConnectionError: If all retries fail
+        """
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                if method == 'GET':
+                    response = self.session.get(url, timeout=timeout)
+                elif method == 'PUT':
+                    response = self.session.put(url, json=json_data, timeout=timeout)
+                elif method == 'POST':
+                    response = self.session.post(url, json=json_data, timeout=timeout)
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {method}")
+                
+                response.raise_for_status()
+                response_data = response.json()
+                
+                if len(response_data.get('errors', [])) == 1:
+                    raise ConnectionError(response_data['errors'][0])
+                
+                return response_data
+                
+            except (requests.exceptions.RequestException, ConnectionError) as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    # Exponential backoff
+                    sleep_time = HTTP_RETRY_BACKOFF_BASE * (2 ** attempt)
+                    logger.warning(f"Request failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {sleep_time}s...")
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(f"Request failed after {max_retries} attempts: {e}")
+        
+        raise ConnectionError(f"Failed after {max_retries} retries: {last_error}")
 
     def _get_resource(self, resource_type, resource_id=None):
         url = f"{self.base_url}/{resource_type}"
         if resource_id:
             url = f"{url}/{resource_id}"
-        response = requests.get(url, headers=self.headers, verify=False, timeout=5)
-        response.raise_for_status()
-
-        response_data = response.json()
-
-        if len(response_data.get('errors', [])) == 1:
-            raise ConnectionError(response_data['error'])
         
+        response_data = self._make_request('GET', url)
         data = response_data.get('data', {} if resource_id else [])
         
         # If resource_id is specified and data is a list, return the first item
@@ -35,24 +87,12 @@ class Hue:
     
     def _put_resource(self, resource_type, resource_id, payload):
         url = f"{self.base_url}/{resource_type}/{resource_id}"
-        response = requests.put(url, headers=self.headers, json=payload, verify=False, timeout=5)
-        response.raise_for_status()
-
-        response_data = response.json()
-
-        if len(response_data.get('errors', [])) == 1:
-            raise ConnectionError(response_data['error'])
+        response_data = self._make_request('PUT', url, json_data=payload)
         return response_data.get('data', {})
     
     def _post_resource(self, resource_type, payload):
         url = f"{self.base_url}/{resource_type}"
-        response = requests.post(url, headers=self.headers, json=payload, verify=False, timeout=5)
-        response.raise_for_status()
-
-        response_data = response.json()
-
-        if len(response_data.get('errors', [])) == 1:
-            raise ConnectionError(response_data['error'])
+        response_data = self._make_request('POST', url, json_data=payload)
         return response_data.get('data', [])
 
     def get_lights(self) -> List[dict]:

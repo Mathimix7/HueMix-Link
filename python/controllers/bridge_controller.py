@@ -2,12 +2,13 @@ import requests
 import json
 from pathlib import Path
 from controllers.hue_controller import Hue
+from constants import FILE_BRIDGE
 
 class BridgeController:
     def __init__(self, config_file=None):
         """Initialize the Bridge Controller"""
         if config_file is None:
-            self.config_file = Path(__file__).parent.parent / 'data' / 'bridge.json'
+            self.config_file = Path(__file__).parent.parent / 'data' / FILE_BRIDGE
         else:
             self.config_file = Path(config_file)
         

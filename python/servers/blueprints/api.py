@@ -1,24 +1,16 @@
 """API routes blueprint for rooms and scenes."""
 from flask import Blueprint, jsonify, request
 from controllers.bridge_controller import BridgeController
-from controllers.hue_controller import Hue
+from services.hue_service import hue_service
 from services.hue_state_manager import hue_state_manager
+from network.network_server import network_server
+from network.device_manager import device_manager
+from network.pairing_manager import pairing_manager
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 # Initialize bridge controller
 bridge_controller = BridgeController()
-
-
-def get_hue_controller():
-    """Get Hue controller instance or None if not configured."""
-    config = bridge_controller.load_config()
-    if config and config.get('ip') and config.get('username'):
-        try:
-            return Hue(config['ip'], config['username'])
-        except Exception:
-            return None
-    return None
 
 
 @api_bp.route('/rooms', methods=['GET'])
@@ -64,57 +56,12 @@ def get_rooms():
             "error": f"Failed to fetch rooms: {str(e)}",
             "rooms": []
         }), 200
-        return jsonify({
-            "success": False,
-            "error": "Hue Bridge not configured",
-            "needs_config": True,
-            "rooms": []
-        }), 200
-    
-    try:
-        rooms_data = hue.get_rooms()
-        grouped_lights = hue.get_grouped_lights()  # Fetch all grouped lights at once
-        
-        # Create a map of grouped light IDs to their on/off state
-        grouped_light_map = {gl['id']: gl.get('on', {}).get('on', False) for gl in grouped_lights}
-        
-        # Format rooms for frontend with light count
-        rooms = []
-        for room in rooms_data:
-            room_id = room["id"]
-            light_count = sum(1 for child in room.get('children', []) if child.get('rtype') == 'device')
-            
-            # Get room on/off status from grouped lights
-            is_on = False
-            for service in room.get('services', []):
-                if service.get('rtype') == 'grouped_light':
-                    grouped_light_id = service.get('rid')
-                    if grouped_light_id in grouped_light_map:
-                        is_on = grouped_light_map[grouped_light_id]
-                        break
-            
-            rooms.append({
-                "id": room_id,
-                "name": room["metadata"]["name"],
-                "light_count": light_count,
-                "is_on": is_on
-            })
-        
-        return jsonify({"success": True, "rooms": rooms})
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": f"Failed to fetch rooms: {str(e)}",
-            "needs_config": True,
-            "rooms": []
-        }), 200
 
 
 @api_bp.route('/rooms/<room_id>/scenes', methods=['GET'])
 def get_room_scenes(room_id):
     """Get scenes for a specific room from Hue Bridge."""
-    hue = get_hue_controller()
+    hue = hue_service.get_controller()
     
     if not hue:
         return jsonify({
@@ -249,7 +196,7 @@ def get_all_lights():
 @api_bp.route('/rooms/<room_id>', methods=['GET'])
 def get_room_detail(room_id):
     """Get detailed information about a specific room."""
-    hue = get_hue_controller()
+    hue = hue_service.get_controller()
     
     if not hue:
         return jsonify({
@@ -331,7 +278,7 @@ def get_room_detail(room_id):
 @api_bp.route('/rooms/<room_id>/toggle', methods=['POST'])
 def toggle_room(room_id):
     """Toggle a room on or off."""
-    hue = get_hue_controller()
+    hue = hue_service.get_controller()
     
     if not hue:
         return jsonify({
@@ -379,7 +326,7 @@ def toggle_room(room_id):
 @api_bp.route('/lights/<light_id>/toggle', methods=['POST'])
 def toggle_light(light_id):
     """Toggle a light on or off."""
-    hue = get_hue_controller()
+    hue = hue_service.get_controller()
     
     if not hue:
         return jsonify({
@@ -411,7 +358,7 @@ def toggle_light(light_id):
 @api_bp.route('/scenes/<scene_id>/activate', methods=['POST'])
 def activate_scene(scene_id):
     """Activate a scene."""
-    hue = get_hue_controller()
+    hue = hue_service.get_controller()
     
     if not hue:
         return jsonify({
@@ -482,9 +429,16 @@ def get_bridge_status():
             "connected": False
         })
     
-    # Test connection
+    # Test connection using hue_service
+    hue = hue_service.get_controller()
+    if not hue:
+        return jsonify({
+            "configured": True,
+            "connected": False,
+            "ip": config['ip']
+        })
+    
     try:
-        hue = Hue(config['ip'], config['username'])
         bridge_data = hue.get_bridge()[0]
         
         return jsonify({
@@ -502,19 +456,26 @@ def get_bridge_status():
         })
 
 
-@api_bp.route('/status/tcp', methods=['GET'])
-def get_tcp_status():
-    """Get TCP Server status."""
-    from servers.tcp_server import tcp_server
-    
-    # Check if server is running by checking the _running flag
-    running = tcp_server._running
-    port = tcp_server.port
-    
-    return jsonify({
-        "running": running,
-        "port": port
-    })
+@api_bp.route('/status/udp', methods=['GET'])
+def get_udp_status():
+    """Get UDP Network status."""
+    try:        
+        running = network_server.running
+        port = network_server.udp_port
+        
+        gateways = device_manager.get_all_gateways()
+        
+        return jsonify({
+            "running": running,
+            "port": port,
+            "gateways": len(gateways)
+        })
+    except Exception as e:
+        return jsonify({
+            "running": False,
+            "port": 7777,
+            "gateways": 0
+        })
 
 
 # ===== Pairing Mode Endpoints =====
@@ -529,9 +490,7 @@ def start_pairing():
             "types": ["button", "light"]  # optional, default all
         }
     """
-    try:
-        from network.pairing_manager import pairing_manager
-        
+    try:        
         data = request.get_json() or {}
         duration = data.get('duration', 60)
         device_types = data.get('types')  # None = all types
@@ -578,9 +537,7 @@ def start_pairing():
 @api_bp.route('/pairing/stop', methods=['POST'])
 def stop_pairing():
     """Stop device pairing mode."""
-    try:
-        from network.pairing_manager import pairing_manager
-        
+    try:        
         pairing_manager.stop_pairing()
         
         return jsonify({
@@ -597,9 +554,7 @@ def stop_pairing():
 @api_bp.route('/pairing/status', methods=['GET'])
 def get_pairing_status():
     """Get current pairing mode status."""
-    try:
-        from network.pairing_manager import pairing_manager
-        
+    try:        
         status = pairing_manager.get_status()
         
         return jsonify({
@@ -616,11 +571,9 @@ def get_pairing_status():
 
 @api_bp.route('/pairing/devices', methods=['GET'])
 def get_pairing_devices():
-    """Get devices found during pairing session."""
-    try:
-        from network.pairing_manager import pairing_manager
-        
-        devices = pairing_manager.get_devices_found()
+    """Get last 5 paired devices."""
+    try:        
+        paired_devices = pairing_manager.get_paired_devices()
         
         # Add type names for display
         type_names = {
@@ -629,12 +582,12 @@ def get_pairing_devices():
             3: 'Light'
         }
         
-        for device in devices:
+        for device in paired_devices:
             device['type_name'] = type_names.get(device.get('type'), 'Unknown')
         
         return jsonify({
             "success": True,
-            "devices": devices
+            "devices": paired_devices
         })
     
     except Exception as e:
@@ -642,4 +595,22 @@ def get_pairing_devices():
             "success": False,
             "error": str(e),
             "devices": []
+        }), 500
+
+
+@api_bp.route('/pairing/devices/<mac_address>', methods=['DELETE'])
+def delete_paired_device(mac_address: str):
+    """Remove a device from paired devices history."""
+    try:        
+        success = pairing_manager.remove_paired_device(mac_address)
+        
+        return jsonify({
+            "success": success,
+            "message": "Device removed from history" if success else "Device not found"
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
         }), 500

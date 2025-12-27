@@ -1,41 +1,76 @@
 """
-Config Change Notifier - Notifies TCP server when configurations change.
+Config Change Notifier - Notifies services when configurations change.
 
 When the web UI changes button configs, server configs, or bridge settings,
-this notifier queues those updates so the TCP server can push them to connected ESP32 devices.
+this notifier broadcasts those updates to all subscribed services.
 
 Example flow:
 1. User changes button config in web UI
 2. Web blueprint calls: config_notifier.notify_change('button_config', {...})
-3. TCP server polls and gets the update
-4. TCP server pushes new config to ESP32 receiver
+3. All subscribed services receive the notification
+4. Services can react accordingly (e.g., reinitialize)
 """
-import queue
 import threading
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Callable
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigChangeNotifier:
-    """Notifies TCP server of configuration changes from the web UI."""
+    """Notifies services of configuration changes via callback subscriptions."""
     
     def __init__(self):
         """Initialize the configuration change notifier."""
-        self._queue = queue.Queue()
+        self._subscribers: Dict[str, List[Callable]] = {}
         self._lock = threading.Lock()
     
-    def notify_change(self, change_type: str, data: Dict[str, Any]):
-        """Notify about a configuration change.
+    def subscribe(self, change_type: str, callback: Callable[[Dict[str, Any]], None]):
+        """Subscribe to configuration changes of a specific type.
         
         Args:
-            change_type: Type of change (e.g., 'button_config', 'button_rename', 'server_added')
-            data: Change data to send to TCP server
+            change_type: Type of change to subscribe to (e.g., 'bridge_config', 'button_config')
+            callback: Function to call when change occurs, receives notification dict
             
         Example:
-            config_notifier.notify_change('button_config', {
-                'device_id': 'abc123',
-                'room_id': '1',
-                'scenes': ['scene1', 'scene2']
+            def on_bridge_change(notification):
+                print(f"Bridge config changed: {notification['data']}")
+            
+            config_notifier.subscribe('bridge_config', on_bridge_change)
+        """
+        with self._lock:
+            if change_type not in self._subscribers:
+                self._subscribers[change_type] = []
+            self._subscribers[change_type].append(callback)
+            logger.debug(f"Subscriber added for '{change_type}' changes")
+    
+    def unsubscribe(self, change_type: str, callback: Callable[[Dict[str, Any]], None]):
+        """Unsubscribe from configuration changes.
+        
+        Args:
+            change_type: Type of change to unsubscribe from
+            callback: The callback function to remove
+        """
+        with self._lock:
+            if change_type in self._subscribers:
+                try:
+                    self._subscribers[change_type].remove(callback)
+                    logger.debug(f"Subscriber removed for '{change_type}' changes")
+                except ValueError:
+                    pass
+    
+    def notify_change(self, change_type: str, data: Dict[str, Any]):
+        """Notify all subscribers about a configuration change.
+        
+        Args:
+            change_type: Type of change (e.g., 'bridge_config', 'button_config', 'server_added')
+            data: Change data to send to subscribers
+            
+        Example:
+            config_notifier.notify_change('bridge_config', {
+                'ip': '192.168.1.100',
+                'username': 'abc123'
             })
         """
         notification = {
@@ -45,54 +80,17 @@ class ConfigChangeNotifier:
         }
         
         with self._lock:
-            self._queue.put(notification)
-    
-    def get_change(self, block: bool = False, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
-        """Get the next configuration change notification.
+            subscribers = self._subscribers.get(change_type, []).copy()
         
-        Args:
-            block: Whether to block until a notification is available
-            timeout: Timeout in seconds (only used if block=True)
-            
-        Returns:
-            Notification dictionary or None if queue is empty
-        """
-        try:
-            return self._queue.get(block=block, timeout=timeout)
-        except queue.Empty:
-            return None
-    
-    def get_all_changes(self) -> list:
-        """Get all pending configuration changes.
+        # Call subscribers outside the lock to avoid deadlocks
+        for callback in subscribers:
+            try:
+                callback(notification)
+            except Exception as e:
+                logger.error(f"Error in subscriber callback for '{change_type}': {e}", exc_info=True)
         
-        Returns:
-            List of all pending notifications
-        """
-        changes = []
-        with self._lock:
-            while not self._queue.empty():
-                try:
-                    changes.append(self._queue.get_nowait())
-                except queue.Empty:
-                    break
-        return changes
-    
-    def pending_count(self) -> int:
-        """Get the number of pending configuration changes.
-        
-        Returns:
-            Number of notifications in queue
-        """
-        return self._queue.qsize()
-    
-    def clear(self):
-        """Clear all pending configuration changes."""
-        with self._lock:
-            while not self._queue.empty():
-                try:
-                    self._queue.get_nowait()
-                except queue.Empty:
-                    break
+        if subscribers:
+            logger.debug(f"Notified {len(subscribers)} subscribers of '{change_type}' change")
 
 
 # Global singleton instance - use this everywhere

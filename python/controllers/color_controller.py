@@ -1,7 +1,24 @@
 """Controller for color space conversions and color utilities."""
+import hashlib
 import math
-from typing import Dict, Tuple, Optional
-from rgbxy import Converter, get_light_gamut
+from typing import Dict, List, Tuple, Union
+from rgbxy import Converter, GamutA, GamutB, GamutC
+import logging
+import colorsys
+
+logger = logging.getLogger(__name__)
+
+def get_light_gamut(modelId):
+    if modelId in ('LST001', 'LLC010', 'LLC011', 'LLC012', 'LLC005', 'LLC006', 'LLC007', 'LLC013', 'LLC014'):
+        return GamutA
+    elif modelId in ('LCT001', 'LCT007', 'LCT002', 'LCT003', 'LLM001', 'LCA005'):
+        return GamutB
+    elif modelId in ('LCT010', 'LCT014', 'LCT015', 'LCT016', 'LCT011', 'LLC020', 'LST002', 'LCT012', 'LCL001', 'LCA003', '440400982841'):
+        return GamutC
+    else:
+        logger.warning(f"Unknown light model ID '{modelId}', defaulting to Gamut C")
+        return GamutC  # Default to Gamut C for unknown models
+
 
 class ColorController:
     """
@@ -22,68 +39,63 @@ class ColorController:
         Returns:
             Tuple of (r, g, b) values (0-255)
         """
+
         converter = Converter(gamut=get_light_gamut(light_type))
         r, g, b = converter.xy_to_rgb(x, y)
         
         return {'r': r, 'g': g, 'b': b}
     
     @staticmethod
-    def ct_to_xy(ct: int) -> Tuple[float, float]:
+    def ct_to_rgb(ct: int) -> Tuple[float, float]:
         """
-        Convert color temperature (Kelvin/Mired) to XY.
+        Convert color temperature (Kelvin/Mired) to RGB.
         
         Args:
             ct: Color temperature in Mired (153-500) or Kelvin (2000-6500)
         
         Returns:
-            Tuple of (x, y) coordinates
+            Tuple of (r, g, b) values (0-255)
         """
-        # Convert Mired to Kelvin if needed
-        kelvin = int(round(1e6/ct)) - 600
-        if kelvin < 1000: 
-            kelvin = 1000
-        elif kelvin > 40000:
-            kelvin = 40000
-        tmp_internal = kelvin / 100.0
-        if tmp_internal <= 66:
-            red = 255
-        else:
-            tmp_red = 329.698727446 * math.pow(tmp_internal - 60, -0.1332047592)
-            if tmp_red < 0:
-                red = 0
-            elif tmp_red > 255:
-                red = 255
-            else:
-                red = tmp_red
-        if tmp_internal <=66:
-            tmp_green = 99.4708025861 * math.log(tmp_internal) - 161.1195681661
-            if tmp_green < 0:
-                green = 0
-            elif tmp_green > 255:
-                green = 255
-            else:
-                green = tmp_green
-        else:
-            tmp_green = 288.1221695283 * math.pow(tmp_internal - 60, -0.0755148492)
-            if tmp_green < 0:
-                green = 0
-            elif tmp_green > 255:
-                green = 255
-            else:
-                green = tmp_green
-        if tmp_internal >=66:
-            blue = 255
-        elif tmp_internal <= 19:
-            blue = 0
-        else:
-            tmp_blue = 138.5177312231 * math.log(tmp_internal - 10) - 305.0447927307
-            if tmp_blue < 0:
-                blue = 0
-            elif tmp_blue > 255:
-                blue = 255
-            else:
-                blue = tmp_blue
-        return round(red), round(green), round(blue)
+            
+        ANCHORS = [
+            (500, 255, 150, 20),  
+            (370, 255, 200, 65),  
+            (333, 255, 225, 110),  
+            (250, 255, 255, 200),  
+            (200, 250, 255, 235),  
+            (153, 255, 255, 215),  
+        ]
+
+        if ct > 500: ct = 500
+        if ct < 153: ct = 153
+
+        # Find which two points we are between
+        upper = ANCHORS[0]
+        lower = ANCHORS[-1]
+
+        # Scan the list to find the upper and lower bounds
+        for i in range(len(ANCHORS) - 1):
+            curr_point = ANCHORS[i]
+            next_point = ANCHORS[i+1]
+            
+            # The list goes from High Mired (Warm) to Low Mired (Cool)
+            if curr_point[0] >= ct >= next_point[0]:
+                upper = curr_point
+                lower = next_point
+                break
+
+        # Linear Interpolation (Lerp) logic
+        mired_range = upper[0] - lower[0]
+        if mired_range == 0: return upper[1:] # Avoid division by zero
+
+        # How far are we between the two points? (0.0 to 1.0)
+        fraction = (upper[0] - ct) / mired_range
+
+        r = upper[1] + (lower[1] - upper[1]) * fraction
+        g = upper[2] + (lower[2] - upper[2]) * fraction
+        b = upper[3] + (lower[3] - upper[3]) * fraction
+
+        return round(r), round(g), round(b)
     
     @staticmethod
     def rgb_to_hex(r: int, g: int, b: int) -> str:
@@ -131,69 +143,17 @@ class ColorController:
         Returns:
             Dict with h (0-360), s (0-100), v (0-100)
         """
-        r = r / 255.0
-        g = g / 255.0
-        b = b / 255.0
-        
-        max_val = max(r, g, b)
-        min_val = min(r, g, b)
-        diff = max_val - min_val
-        
-        # Hue calculation
-        if diff == 0:
-            h = 0
-        elif max_val == r:
-            h = 60 * (((g - b) / diff) % 6)
-        elif max_val == g:
-            h = 60 * (((b - r) / diff) + 2)
-        else:
-            h = 60 * (((r - g) / diff) + 4)
-        
-        # Saturation calculation
-        s = 0 if max_val == 0 else (diff / max_val) * 100
-        
-        # Value calculation
-        v = max_val * 100
-        
-        return {'h': round(h, 2), 's': round(s, 2), 'v': round(v, 2)}
+        h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+        return {'h': round(h * 360, 2), 's': round(s * 100, 2), 'v': round(v * 100, 2)}
     
     @staticmethod
     def hsv_to_rgb(h: float, s: float, v: float) -> Dict[str, int]:
-        """
-        Convert HSV to RGB.
-        
-        Args:
-            h: Hue (0-360)
-            s: Saturation (0-100)
-            v: Value (0-100)
-        
-        Returns:
-            Dict with r, g, b values (0-255)
-        """
-        s = s / 100.0
-        v = v / 100.0
-        
-        c = v * s
-        x = c * (1 - abs((h / 60) % 2 - 1))
-        m = v - c
-        
-        if 0 <= h < 60:
-            r, g, b = c, x, 0
-        elif 60 <= h < 120:
-            r, g, b = x, c, 0
-        elif 120 <= h < 180:
-            r, g, b = 0, c, x
-        elif 180 <= h < 240:
-            r, g, b = 0, x, c
-        elif 240 <= h < 300:
-            r, g, b = x, 0, c
-        else:
-            r, g, b = c, 0, x
+        r, g, b = colorsys.hsv_to_rgb(h / 360.0, s / 100.0, v / 100.0)
         
         return {
-            'r': int((r + m) * 255),
-            'g': int((g + m) * 255),
-            'b': int((b + m) * 255)
+            'r': int(r * 255),
+            'g': int(g * 255),
+            'b': int(b * 255)
         }
     
     @staticmethod
@@ -242,92 +202,67 @@ class ColorController:
             return "Purple"
         else:
             return "Pink"
+
+    @staticmethod
+    def sort_palette_by_hue(palette: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
+        return sorted(palette, key=lambda c: colorsys.rgb_to_hsv(c[0]/255, c[1]/255, c[2]/255)[0])
     
     @staticmethod
-    def color_distance(color1: Tuple[int, int, int], color2: Tuple[int, int, int]) -> float:
-        """
-        Calculate Euclidean distance between two RGB colors.
+    def lerp_color(c1: Tuple[int, int, int], c2: Tuple[int, int, int], fraction: float) -> Tuple[int, int, int]:
+        return tuple(int(c1[i] + (c2[i] - c1[i]) * fraction) for i in range(3))
+
+    @staticmethod
+    def get_color_from_palette(palette: List[Tuple[int, int, int]], pos: float) -> Tuple[int, int, int]:
+        """Maps a 0.0-1.0 value to the palette, treating it as a circular loop."""
+        pos = pos % 1.0
+        n = len(palette)
+        float_index = pos * n
+        index1 = int(float_index) % n
+        index2 = (index1 + 1) % n
+        fraction = float_index - int(float_index)
         
-        Args:
-            color1: First color as (r, g, b) tuple
-            color2: Second color as (r, g, b) tuple
-        
-        Returns:
-            Distance between colors
-        """
-        r1, g1, b1 = color1
-        r2, g2, b2 = color2
-        return math.sqrt((r2 - r1) ** 2 + (g2 - g1) ** 2 + (b2 - b1) ** 2)
+        return ColorController.lerp_color(palette[index1], palette[index2], fraction)
     
     @staticmethod
-    def order_color_palette(colors: list) -> list:
-        """
-        Order a color palette by proximity to create smooth transitions.
-        
-        Args:
-            colors: List of RGB color tuples [(r, g, b), ...]
-        
-        Returns:
-            Ordered list of RGB color tuples
-        """
-        if not colors:
-            return []
-        
-        sorted_colors = [colors[0]]
-        remaining_colors = colors[1:]
-        
-        while remaining_colors:
-            min_distance = float('inf')
-            closest_color = None
-            for color in remaining_colors:
-                distance = min(ColorController.color_distance(color, sorted_color) 
-                             for sorted_color in sorted_colors)
-                if distance < min_distance:
-                    min_distance = distance
-                    closest_color = color
-            sorted_colors.append(closest_color)
-            remaining_colors = [color for color in remaining_colors if color != closest_color]
-        
-        return sorted_colors
+    def _ensure_int_seed(seed: Union[int, str]) -> int:
+        """Converts macAddress to a stable integer seed."""
+        if isinstance(seed, str):
+            return int(hashlib.sha256(seed.encode()).hexdigest(), 16)
+        return seed
     
     @staticmethod
-    def generate_intermediate_colors(colors: list, num_colors: int) -> list:
+    def generate_strip(
+        palette: List[Tuple[int, int, int]], 
+        num_leds: int, 
+        seed: Union[int, str] = 0, 
+        coverage: float = 1.5,
+        distortion: float = 0.3
+    ) -> List[Tuple[int, int, int]]:
         """
-        Generate intermediate colors between a list of colors through interpolation.
-        
         Args:
-            colors: List of RGB color tuples [(r, g, b), ...]
-            num_colors: Number of intermediate colors to generate
-        
-        Returns:
-            List of interpolated RGB color tuples
+            palette: RGB colors
+            num_leds: Length of the strip
+            seed: Unique ID for the light (must be an integer)
+            coverage: How many times the pattern 'cycles' through the palette.
+                      1.0 = strip shows the palette once. 2.0 = cycles through it twice.
         """
-        def interpolate_color(start_color, end_color, ratio):
-            r = int(start_color[0] + (end_color[0] - start_color[0]) * ratio)
-            g = int(start_color[1] + (end_color[1] - start_color[1]) * ratio)
-            b = int(start_color[2] + (end_color[2] - start_color[2]) * ratio)
-            return (r, g, b)
+        sorted_palette = ColorController.sort_palette_by_hue(palette)
+        strip = []
 
-        if num_colors <= 0 or len(colors) < 2:
-            return []
+        numeric_seed = ColorController._ensure_int_seed(seed)
+        offset = (numeric_seed * 0.618033) % 1.0 
 
-        num_intervals = len(colors) - 1
-        steps = num_colors / num_intervals
+        for i in range(num_leds):
+            t = i / num_leds
 
-        intermediate_colors = []
-
-        for i in range(num_intervals):
-            start_color = colors[i]
-            end_color = colors[i + 1]
-
-            for j in range(int(steps) + 1):
-                ratio = (j + 1) / (steps + 1)
-                intermediate_color = interpolate_color(start_color, end_color, ratio)
-                intermediate_colors.append(intermediate_color)
-
-        intermediate_colors = intermediate_colors[:num_colors]
-
-        return intermediate_colors
+            pos = offset + (t * coverage)
+            wiggle = math.sin(t * math.pi * 2 + (numeric_seed * 1.5)) * distortion
+            pos += wiggle
+            
+            color = ColorController.get_color_from_palette(sorted_palette, pos)
+            strip.append(color)
+            
+        return strip
 
 
 # Global singleton instance

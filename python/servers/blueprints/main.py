@@ -11,6 +11,12 @@ def index():
     return render_template('home.html')
 
 
+@main_bp.route('/pairing')
+def pairing():
+    """Render the device pairing page."""
+    return render_template('pairing.html')
+
+
 @main_bp.route('/api/config', methods=['GET'])
 def get_config():
     """Get application configuration."""
@@ -26,16 +32,16 @@ def update_config():
     """Update application configuration."""
     data = request.get_json()
     
-    tcp_port = data.get('tcp_port')
+    udp_port = data.get('udp_port')
     web_port = data.get('web_port')
     
-    if tcp_port is not None:
-        if not isinstance(tcp_port, int) or tcp_port < 1 or tcp_port > 65535:
+    if udp_port is not None:
+        if not isinstance(udp_port, int) or udp_port < 1 or udp_port > 65535:
             return jsonify({
                 "success": False,
-                "error": "TCP port must be between 1 and 65535"
+                "error": "UDP port must be between 1 and 65535"
             }), 400
-        config_manager.update_tcp_port(tcp_port)
+        config_manager.update_udp_port(udp_port)
     
     if web_port is not None:
         if not isinstance(web_port, int) or web_port < 1 or web_port > 65535:
@@ -55,21 +61,17 @@ def update_config():
 @main_bp.route('/api/config/restart', methods=['POST'])
 def update_config_and_restart():
     """Update configuration and restart servers."""
-    import threading
-    import time
-    from servers.tcp_server import tcp_server
-    
     data = request.get_json()
     
-    tcp_port = data.get('tcp_port')
+    udp_port = data.get('udp_port')
     web_port = data.get('web_port')
     
     # Validate ports
-    if tcp_port is not None:
-        if not isinstance(tcp_port, int) or tcp_port < 1 or tcp_port > 65535:
+    if udp_port is not None:
+        if not isinstance(udp_port, int) or udp_port < 1 or udp_port > 65535:
             return jsonify({
                 "success": False,
-                "error": "TCP port must be between 1 and 65535"
+                "error": "UDP port must be between 1 and 65535"
             }), 400
     
     if web_port is not None:
@@ -80,40 +82,28 @@ def update_config_and_restart():
             }), 400
     
     # Get current ports
-    current_tcp_port = config_manager.get_tcp_port()
+    current_udp_port = config_manager.get_udp_port()
     current_web_port = config_manager.get_web_port()
     
     # Save new configuration
-    if tcp_port is not None:
-        config_manager.update_tcp_port(tcp_port)
+    if udp_port is not None:
+        config_manager.update_udp_port(udp_port)
     if web_port is not None:
         config_manager.update_web_port(web_port)
     
-    # Restart TCP server if port changed
-    if tcp_port is not None and tcp_port != current_tcp_port:
-        def restart_tcp():
-            time.sleep(0.5)  # Small delay
-            tcp_server.stop()
-            time.sleep(0.5)
-            tcp_server.port = tcp_port
-            tcp_server.start()
-        
-        threading.Thread(target=restart_tcp, daemon=True).start()
-    
-    # Note: Flask server restart requires application restart
-    # We can't restart Flask from within Flask itself
     message = "Settings saved! "
-    if tcp_port is not None and tcp_port != current_tcp_port:
-        message += "TCP server is restarting. "
+    if udp_port is not None and udp_port != current_udp_port:
+        message += "UDP server restarting with new port... "
     if web_port is not None and web_port != current_web_port:
-        message += "Please restart the application manually to apply web server port changes."
+        message += "Please restart the application to apply web server port changes."
     else:
-        message += "Changes applied successfully."
+        if udp_port == current_udp_port and web_port == current_web_port:
+            message += "No changes detected."
     
     return jsonify({
         "success": True,
         "message": message,
         "config": config_manager.load_config(),
-        "tcp_restarted": tcp_port is not None and tcp_port != current_tcp_port,
+        "udp_restart_required": udp_port is not None and udp_port != current_udp_port,
         "web_restart_required": web_port is not None and web_port != current_web_port
     })

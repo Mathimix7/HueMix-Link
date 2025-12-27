@@ -8,6 +8,7 @@ import urllib3
 from typing import Optional
 from services import data_manager
 from services.hue_state_manager import hue_state_manager
+from constants import FILE_BRIDGE
 
 # Disable SSL warnings for Hue Bridge self-signed certificate
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -66,11 +67,11 @@ class HueSSEListener:
         """Main loop for SSE connection with auto-reconnect."""
         retry_delay = 1
         max_retry_delay = 60
-        
+                
         while self._running:
             try:
                 # Get bridge config
-                config = data_manager.read_json('bridge.json', default={})
+                config = data_manager.read_json(FILE_BRIDGE, default={})
                 if not config:
                     logger.warning("Bridge not configured, retrying in 10s...")
                     time.sleep(10)
@@ -220,7 +221,7 @@ class HueSSEListener:
             item_type = item.get('type')
             item_id = item.get('id')
 
-            logger.info(f"SSE event received: type={item_type}, id={item_id}")
+            logger.debug(f"SSE event received: type={item_type}, id={item_id}")
 
             if item_type == 'light':
                 self._handle_light_update(item_id, item)
@@ -245,7 +246,9 @@ class HueSSEListener:
             # Extract light state - only include fields that are present
             is_on = None
             brightness = None
-            color = None
+            xy_color = None
+            ct_color = None
+            color_mode = None
             
             on_data = data.get('on')
             if on_data is not None:
@@ -255,25 +258,31 @@ class HueSSEListener:
             if dimming_data is not None:
                 brightness = dimming_data.get('brightness')
             
+            # Get XY color if present
             color_data = data.get('color')
             if color_data is not None:
                 color_xy = color_data.get('xy')
-                if color_xy:
-                    x = color_xy.get('x', 0)
-                    y = color_xy.get('y', 0)
-                    # Simple conversion (could be improved)
-                    r = int(x * 255)
-                    g = int(y * 255)
-                    b = int((1 - x - y) * 255)
-                    color = {'r': max(0, min(255, r)), 'g': max(0, min(255, g)), 'b': max(0, min(255, b))}
+                if color_xy and 'x' in color_xy and 'y' in color_xy:
+                    xy_color = {'x': color_xy['x'], 'y': color_xy['y']}
+                    color_mode = 'xy'
+            
+            # Get color temperature if present
+            color_temp_data = data.get('color_temperature')
+            if color_temp_data is not None:
+                ct_value = color_temp_data.get('mirek')
+                if ct_value:
+                    ct_color = ct_value
+                    color_mode = 'ct'
             
             # Only update if we have at least one field
-            if is_on is not None or brightness is not None or color is not None:
+            if is_on is not None or brightness is not None or xy_color is not None or ct_color is not None:
                 hue_state_manager.update_light(
                     light_id=light_id,
                     is_on=is_on,
                     brightness=brightness,
-                    color=color
+                    xy=xy_color,
+                    ct=ct_color,
+                    color_mode=color_mode
                 )
         
         except Exception as e:
@@ -286,7 +295,6 @@ class HueSSEListener:
             room_id = hue_state_manager.get_room_id_from_grouped_light(grouped_light_id)
             
             if room_id is None:
-                logger.warning(f"Received grouped_light update for unknown ID: {grouped_light_id}")
                 return
             
             # Extract room state - only include fields that are present

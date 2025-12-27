@@ -1,27 +1,34 @@
 """
 Services Package - Application-wide singleton services.
 
-This package contains services that manage application state and inter-component communication:
+This package contains services that manage application state:
 
 - DataManager: Thread-safe JSON file read/write operations
-- ConfigChangeNotifier: Notifies TCP server when web UI changes configs
-- ButtonStateManager: Tracks which scene each button is currently on (with timeout-based reset)
-- EventBus: Pub/sub system for decoupled communication between components
+- ConfigManager: Application configuration management
+- ConfigChangeNotifier: Notifies when web UI changes configs
+- HueService: Manages Hue controller lifecycle
+- HueStateManager: Manages Hue bridge state
+- HueSSEListener: Listens to Hue bridge SSE events
+- AutomationService: Manages automation engine lifecycle
 
 These are initialized as singletons and used throughout the application.
 """
 
 from .data_manager import DataManager, data_manager
 from .config_change_notifier import ConfigChangeNotifier, config_notifier
-from .button_state_manager import ButtonStateManager, button_state_manager
-from .event_bus import EventBus, event_bus
 from .config_manager import ConfigManager, config_manager
+from .hue_service import HueService, hue_service
+from .hue_state_manager import HueStateManager, hue_state_manager
+from .hue_sse_listener import HueSSEListener, hue_sse_listener
+from .automation_service import AutomationService, automation_service
 
 # Export both classes and singleton instances
 __all__ = [
     'DataManager', 'data_manager',
     'ConfigChangeNotifier', 'config_notifier',
-    'ButtonStateManager', 'button_state_manager',
-    'EventBus', 'event_bus',
-    'ConfigManager', 'config_manager'
+    'ConfigManager', 'config_manager',
+    'HueService', 'hue_service',
+    'HueStateManager', 'hue_state_manager',
+    'HueSSEListener', 'hue_sse_listener',
+    'AutomationService', 'automation_service',
 ]

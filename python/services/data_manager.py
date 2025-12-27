@@ -5,9 +5,13 @@ This service provides thread-safe JSON file operations for storing configuration
 like button configs, server configs, bridge settings, etc.
 """
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Optional
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class DataManager:
@@ -51,6 +55,7 @@ class DataManager:
             Data from the file or default value
         """
         filepath = self._get_filepath(filename)
+        backup_path = filepath.with_suffix('.json.bak')
         lock = self._get_lock(filename)
         
         with lock:
@@ -60,23 +65,58 @@ class DataManager:
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except (json.JSONDecodeError, FileNotFoundError):
+            except (json.JSONDecodeError, FileNotFoundError) as e:
+                logger.warning(f"Failed to read {filename}: {e}")
+                
+                # Try to recover from backup
+                if backup_path.exists():
+                    logger.info(f"Attempting to recover {filename} from backup...")
+                    try:
+                        with open(backup_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        # Restore from backup
+                        shutil.copy2(backup_path, filepath)
+                        logger.info(f"Successfully recovered {filename} from backup")
+                        return data
+                    except Exception as backup_error:
+                        logger.error(f"Backup recovery failed for {filename}: {backup_error}")
+                
                 return default if default is not None else []
     
     def write_json(self, filename: str, data: Any):
-        """Write data to a JSON file.
+        """Write data to a JSON file with atomic write and backup.
         
         Args:
             filename: Name of the JSON file (e.g., 'buttons.json')
             data: Data to write
         """
         filepath = self._get_filepath(filename)
+        backup_path = filepath.with_suffix('.json.bak')
+        temp_path = filepath.with_suffix('.json.tmp')
         lock = self._get_lock(filename)
         
         with lock:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-    
+            # Create backup if file exists
+            if filepath.exists():
+                try:
+                    shutil.copy2(filepath, backup_path)
+                except Exception as e:
+                    logger.warning(f"Failed to create backup for {filename}: {e}")
+            
+            # Write to temp file first
+            try:
+                with open(temp_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2)
+                
+                # Atomic rename (overwrites existing file)
+                temp_path.replace(filepath)
+            except Exception as e:
+                # Clean up temp file if it exists
+                if temp_path.exists():
+                    temp_path.unlink()
+                logger.error(f"Failed to write {filename}: {e}")
+                raise
+
     def update_json(self, filename: str, update_func):
         """Update a JSON file using a function.
         

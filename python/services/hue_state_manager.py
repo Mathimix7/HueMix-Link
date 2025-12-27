@@ -3,7 +3,6 @@ import threading
 import logging
 from typing import Dict, Optional, List, Callable
 from datetime import datetime
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +17,9 @@ class HueStateManager:
         self._lock = threading.RLock()
         
         # State storage
-        self._lights: Dict[str, Dict] = {}  # light_id -> {on, brightness, color, room_id}
-        self._rooms: Dict[str, Dict] = {}   # room_id -> {name, current_scene_id, is_on, lights}
-        self._scenes: Dict[str, Dict] = {}  # scene_id -> {name, room_id}
+        self._lights: Dict[str, Dict] = {}
+        self._rooms: Dict[str, Dict] = {}
+        self._scenes: Dict[str, Dict] = {}
         
         # Mapping for grouped_light_id to room_id (for SSE events)
         self._grouped_light_to_room: Dict[str, str] = {}  # grouped_light_id -> room_id
@@ -32,12 +31,13 @@ class HueStateManager:
         
         logger.info("HueStateManager initialized")
     
-    # ===== Light State Management =====
+    # Light State Management
     
     def update_light(self, light_id: str, is_on: Optional[bool] = None, 
-                    brightness: Optional[float] = None, color: Optional[Dict] = None, 
+                    brightness: Optional[float] = None, 
                     room_id: Optional[str] = None, name: Optional[str] = None,
-                    model_id: Optional[str] = None):
+                    model_id: Optional[str] = None, xy: Optional[Dict] = None,
+                    ct: Optional[int] = None, color_mode: Optional[str] = None):
         """
         Update the state of a specific light.
         
@@ -45,10 +45,12 @@ class HueStateManager:
             light_id: Hue light ID
             is_on: Whether light is on
             brightness: Brightness level (0-100)
-            color: Color dict with r, g, b
             room_id: Room this light belongs to
             name: Light name
             model_id: Light model ID for determining color gamut
+            xy: XY color coordinates dict with 'x' and 'y' (0.0-1.0)
+            ct: Color temperature in Mired (153-500)
+            color_mode: 'xy' or 'ct' to indicate which color mode is active
         """
         with self._lock:
             # Build state dict from provided values
@@ -57,15 +59,24 @@ class HueStateManager:
                 state['on'] = is_on
             if brightness is not None:
                 state['brightness'] = brightness
-            if color is not None:
-                state['color'] = color
             if room_id is not None:
                 state['room_id'] = room_id
             if name is not None:
                 state['name'] = name
             if model_id is not None:
                 state['model_id'] = model_id
+            if xy is not None:
+                state['xy'] = xy
+            if ct is not None:
+                state['ct'] = ct
+            if color_mode is not None:
+                state['color_mode'] = color_mode
             
+            existing_on = self._lights.get(light_id, {}).get('on') if light_id in self._lights else None
+            final_on = state.get('on') if 'on' in state else existing_on
+            if 'brightness' not in state and final_on is not None:
+                state['brightness'] = 100 if final_on else 0
+
             # Skip empty updates
             if not state:
                 return
@@ -109,7 +120,7 @@ class HueStateManager:
         with self._lock:
             return self._grouped_light_to_room.get(grouped_light_id)
     
-    # ===== Room State Management =====
+    # Room State Management
     
     def update_room(self, room_id: str, is_on: Optional[bool] = None, 
                    brightness: Optional[float] = None, name: Optional[str] = None,
@@ -222,7 +233,7 @@ class HueStateManager:
         if old_is_on != any_on or old_brightness != room['avg_brightness']:
             self._notify_room_change(room_id, room)
     
-    # ===== Scene Management =====
+    # Scene Management
     
     def register_scene(self, scene_id: str, scene_data: Dict):
         """
@@ -241,7 +252,7 @@ class HueStateManager:
         with self._lock:
             return self._scenes.get(scene_id, {}).copy() if scene_id in self._scenes else None
     
-    # ===== Subscription Management =====
+    # Subscription Management
     
     def subscribe_light_changes(self, callback: Callable):
         """Subscribe to light state changes."""
@@ -282,7 +293,7 @@ class HueStateManager:
             if callback in self._room_change_callbacks:
                 self._room_change_callbacks.remove(callback)
     
-    # ===== Notification Helpers =====
+    # Notification Helpers
     
     def _notify_light_change(self, light_id: str, new_state: Dict, old_state: Dict):
         """Notify all subscribers of light state change."""
@@ -308,7 +319,7 @@ class HueStateManager:
             except Exception as e:
                 logger.error(f"Error in room change callback {callback.__name__}: {e}")
     
-    # ===== Utility =====
+    # Utility
     
     def initialize_from_bridge(self, hue_controller):
         """
@@ -396,28 +407,36 @@ class HueStateManager:
                         room_id = rid
                         break
                 
-                # Get color if available
-                color = None
+                # Get color if available - store original values
+                xy_color = None
+                ct_color = None
+                color_mode = None
+                
                 color_data = light.get('color', {})
                 if color_data:
                     xy = color_data.get('xy', {})
-                    if xy:
-                        x = xy.get('x', 0)
-                        y = xy.get('y', 0)
-                        # Simple xy to RGB conversion
-                        r = int(x * 255)
-                        g = int(y * 255)
-                        b = int((1 - x - y) * 255)
-                        color = {'r': r, 'g': g, 'b': b}
+                    if xy and 'x' in xy and 'y' in xy:
+                        xy_color = {'x': xy['x'], 'y': xy['y']}
+                        color_mode = 'xy'
+                
+                # Check for color temperature
+                color_temp_data = light.get('color_temperature', {})
+                if color_temp_data:
+                    ct_value = color_temp_data.get('mirek')
+                    if ct_value:
+                        ct_color = ct_value
+                        color_mode = 'ct'
                 
                 self.update_light(
                     light_id=light_id,
                     is_on=is_on,
                     brightness=brightness,
-                    color=color,
                     room_id=room_id,
                     name=light_name,
-                    model_id=model_id
+                    model_id=model_id,
+                    xy=xy_color,
+                    ct=ct_color,
+                    color_mode=color_mode
                 )
             
             # Process scenes

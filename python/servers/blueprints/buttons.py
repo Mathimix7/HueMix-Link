@@ -1,21 +1,19 @@
 """Buttons routes blueprint."""
 from flask import Blueprint, render_template, request, jsonify
 from services import data_manager, config_notifier
+from constants import FILE_BUTTONS
 
 buttons_bp = Blueprint('buttons', __name__, url_prefix='/buttons')
-
-# Data files
-BUTTONS_FILE = 'buttons.json'
 
 
 def get_buttons():
     """Get all buttons from JSON file."""
-    return data_manager.read_json(BUTTONS_FILE, default=[])
+    return data_manager.read_json(FILE_BUTTONS, default=[])
 
 
 def save_buttons(buttons):
     """Save buttons to JSON file."""
-    data_manager.write_json(BUTTONS_FILE, buttons)
+    data_manager.write_json(FILE_BUTTONS, buttons)
 
 
 def get_button_config(device_id):
@@ -56,7 +54,6 @@ def rename_device(device_id):
     """Rename a device."""
     data = request.get_json()
     new_name = data.get('name')
-    
     buttons = get_buttons()
     
     for button in buttons:
@@ -65,7 +62,7 @@ def rename_device(device_id):
             button['name'] = new_name
             save_buttons(buttons)
             
-            # Notify TCP server about the update
+            # Notify UDP server about the update
             config_notifier.notify_change('button_rename', {
                 'device_id': device_id,
                 'old_name': old_name,
@@ -93,7 +90,7 @@ def configure_button():
     # Save configuration to separate file
     save_button_config(device_id, config)
     
-    # Notify TCP server about the configuration update
+    # Notify UDP server about the configuration update
     config_notifier.notify_change('button_config', {
         'device_id': device_id,
         'config': config
@@ -111,27 +108,6 @@ def get_button_config_route(device_id):
     return jsonify({"success": False, "error": "Configuration not found"}), 404
 
 
-@buttons_bp.route('/api/updates', methods=['GET'])
-def get_updates():
-    """Get pending configuration change notifications for TCP server."""
-    changes = config_notifier.get_all_changes()
-    return jsonify({
-        "success": True,
-        "updates": changes,
-        "count": len(changes)
-    })
-
-
-@buttons_bp.route('/api/updates/count', methods=['GET'])
-def get_updates_count():
-    """Get count of pending configuration changes."""
-    count = config_notifier.pending_count()
-    return jsonify({
-        "success": True,
-        "count": count
-    })
-
-
 @buttons_bp.route('/api/devices/<device_id>', methods=['DELETE'])
 def delete_device(device_id):
     """Delete a device."""
@@ -146,7 +122,7 @@ def delete_device(device_id):
     
     save_buttons(buttons)
     
-    # Notify TCP server about the deletion
+    # Notify UDP server about the deletion
     config_notifier.notify_change('button_delete', {
         'device_id': device_id
     })

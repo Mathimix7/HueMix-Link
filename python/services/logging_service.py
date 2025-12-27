@@ -4,13 +4,13 @@ This merges the previous standalone `logging_setup.py` into the
 service so logging can be started/reconfigured as part of the app
 service lifecycle.
 """
-import os
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+import sys
 from rich.logging import RichHandler
 from constants import LOG_FORMAT
-
+from rich.console import Console
 
 def setup_logging():
     log_dir = Path('logs')
@@ -36,7 +36,9 @@ def setup_logging():
     except Exception:
         root_logger.warning('Could not create file handler for logging; continuing with console only.')
 
-    rh = RichHandler(rich_tracebacks=True)
+    rh = RichHandler(rich_tracebacks=True, omit_repeated_times=False, show_path=False, console=Console(force_terminal=True))
+    inline_format = "[%(filename)s:%(lineno)d] %(message)s"
+    rh.setFormatter(logging.Formatter(inline_format))
     rh.setLevel(logging.INFO)
     root_logger.addHandler(rh)
 

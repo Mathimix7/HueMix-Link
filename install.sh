@@ -14,6 +14,7 @@ DELETE=0
 NO_RESTART=0
 ASSUME_YES=0
 LOCAL=0
+EXT_PORT=5001
 
 # Colors for nicer output
 bold=$(echo -en "\e[1m")
@@ -67,6 +68,7 @@ ${blue}${bold}Usage:${reset} $0 [${magenta}install${reset}|${magenta}uninstall${
   ${gray}--no-restart${reset}    Do not stop or restart the service during update
   ${gray}--show-version${reset}  Show installed and source version information and exit
   ${gray}--local${reset}         Create huemixlink.local host entry
+  ${gray}--port <port>${reset}   External port to expose website (default: ${EXT_PORT})
   ${gray}-h|--help${reset}       Show this help message
 EOF
 }
@@ -80,6 +82,7 @@ parse_args() {
       --force) FORCE=1; shift ;;
       --delete) DELETE=1; shift ;;
       --no-restart) NO_RESTART=1; shift ;;
+      --port) shift; EXT_PORT="$1"; shift ;;
       --show-version) SHOW_VERSION=1; shift ;;
       --local) LOCAL=1; shift ;;
       --yes|-y) ASSUME_YES=1; shift ;;
@@ -268,6 +271,52 @@ WantedBy=multi-user.target
 EOF
 }
 
+setup_proxy() {
+  # Ensure external port is forwarded to internal Flask port 5001 using iptables NAT
+  TARGET_PORT=5001
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "DRY-RUN: would ensure port ${EXT_PORT} is forwarded to localhost:${TARGET_PORT}"
+    return 0
+  fi
+
+  log "Setting up local port forward: ${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
+
+  # Check for iptables
+  if ! command -v iptables >/dev/null 2>&1; then
+    warn "iptables not found; cannot create port-forward. Please install iptables or run a proxy manually."
+    return 0
+  fi
+
+  # Validate port numbers
+  if ! printf '%s' "${EXT_PORT}" | grep -qE '^[0-9]+$'; then
+    die "Invalid --port value: ${EXT_PORT}"
+  fi
+
+  # Add NAT rule if not present
+  if iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports "${TARGET_PORT}" 2>/dev/null; then
+    log "Port-forward rule already exists"
+  else
+    run iptables -t nat -A PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports "${TARGET_PORT}"
+    log "Added iptables NAT rule for port ${EXT_PORT} -> ${TARGET_PORT}"
+  fi
+
+  # Persist rules on Debian/Ubuntu using iptables-persistent if available
+  if command -v apt >/dev/null 2>&1; then
+    if ! dpkg -s iptables-persistent >/dev/null 2>&1; then
+      log "Installing iptables-persistent to save rules"
+      run DEBIAN_FRONTEND=noninteractive apt-get update -y || true
+      run DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent || true
+    fi
+    # Save current rules
+    run mkdir -p /etc/iptables || true
+    run iptables-save > /etc/iptables/rules.v4 || true
+    log "Saved iptables rules to /etc/iptables/rules.v4"
+  else
+    debug "Non-apt system; iptables rule will not be persisted automatically"
+  fi
+}
+
 service_update_finish() {
   # Called after unit file is written. Decide whether to restart existing service or enable/start new unit.
   if ! command -v systemctl >/dev/null 2>&1; then
@@ -298,38 +347,58 @@ service_update_finish() {
 
 setup_local_domain() {
   # Add a local /etc/hosts entry for huemixlink.local
-  HOSTNAME=huemixlink.local
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "DRY-RUN: would add /etc/hosts entry for ${HOSTNAME} (server LAN IP)"
+    log "DRY-RUN: would install Avahi to advertise huemixlink.local"
     return 0
   fi
 
-  # Determine a sensible LAN IP for this host. Try modern utilities first, fall back to hostname -I.
-  TARGET_IP=""
-  if command -v ip >/dev/null 2>&1; then
-    TARGET_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}') || true
-  fi
-  if [ -z "${TARGET_IP}" ] && command -v hostname >/dev/null 2>&1; then
-    TARGET_IP=$(hostname -I 2>/dev/null | awk '{print $1}') || true
-  fi
-  if [ -z "${TARGET_IP}" ] && command -v ifconfig >/dev/null 2>&1; then
-    TARGET_IP=$(ifconfig 2>/dev/null | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}') || true
-  fi
-  if [ -z "${TARGET_IP}" ]; then
-    warn "Could not detect LAN IP; falling back to 127.0.0.1"
-    TARGET_IP=127.0.0.1
+  # Install Avahi (Linux) if not present
+  if ! command -v avahi-daemon >/dev/null 2>&1; then
+    log "Installing Avahi to enable .local hostname resolution"
+    if command -v apt >/dev/null 2>&1; then
+      run apt update -y
+      run apt install -y avahi-daemon avahi-utils
+    elif command -v yum >/dev/null 2>&1; then
+      run yum install -y avahi avahi-tools nss-mdns
+    else
+      warn "Cannot automatically install Avahi; please install manually"
+      return 1
+    fi
   fi
 
-  # Update /etc/hosts: remove any existing huemixlink.local entries then append the chosen mapping
-  ESC_HOST=${HOSTNAME//./\.}
-  if grep -qi "\b${ESC_HOST}\b" /etc/hosts 2>/dev/null; then
-    log "Updating /etc/hosts entry for ${HOSTNAME} -> ${magenta}${TARGET_IP}${reset}"
-    run sed -i.bak -E "/\b${ESC_HOST}\b/d" /etc/hosts || run sed -i -E "/\b${ESC_HOST}\b/d" /etc/hosts || true
-  else
-    log "Adding /etc/hosts entry: ${magenta}${TARGET_IP}${reset} ${HOSTNAME}"
+  # Set hostname
+  run hostnamectl set-hostname huemixlink
+
+  # Enable and start Avahi
+  run systemctl enable avahi-daemon --now
+
+  success "huemixlink.local is now advertised via mDNS on your LAN"
+}
+
+cleanup_local_domain() {
+  CURRENT_HOST=$(hostnamectl --static 2>/dev/null || hostname)
+  if [ "$CURRENT_HOST" != "huemixlink" ]; then
+    return 0
   fi
-  run bash -c "printf '%s\n' \"${TARGET_IP} ${HOSTNAME}\" >> /etc/hosts"
-  success "Added host entry: ${magenta}${TARGET_IP}${reset} ${white}${HOSTNAME}${reset}"
+
+  if ! confirm "Do you want to remove huemixlink.local mDNS (Avahi) setup and restore hostname?"; then
+    log "Skipping Avahi/mDNS cleanup"
+    return 0
+  fi
+
+  # Stop and disable Avahi
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q avahi-daemon; then
+    log "Stopping and disabling Avahi daemon"
+    run systemctl stop avahi-daemon || true
+    run systemctl disable avahi-daemon || true
+    success "Avahi daemon stopped and disabled"
+  fi
+
+  if command -v apt >/dev/null 2>&1; then
+    run apt remove -y avahi-daemon avahi-utils || true
+  elif command -v yum >/dev/null 2>&1; then
+    run yum remove -y avahi avahi-tools || true
+  fi
 }
 
 uninstall() {
@@ -354,16 +423,30 @@ uninstall() {
       fi
     fi
   fi
-  # Remove huemixlink.local entry from /etc/hosts if present
+
   if [ "$DRY_RUN" -eq 1 ]; then
-    if grep -qi "\bhuemixlink\.local\b" /etc/hosts 2>/dev/null; then
-      log "DRY-RUN: would remove huemixlink.local entries from /etc/hosts"
+    log "DRY-RUN: would remove huemixlink hosts entry if present"
+    return 0
+  else
+    cleanup_local_domain
+  fi
+  # Remove iptables NAT rule if present (forwarding external port to internal Flask)
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if command -v iptables >/dev/null 2>&1; then
+      if iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null; then
+        log "DRY-RUN: would remove iptables NAT rule for port ${EXT_PORT}"
+      fi
     fi
   else
-    if grep -qi "\bhuemixlink\.local\b" /etc/hosts 2>/dev/null; then
-      log "Removing /etc/hosts entries for huemixlink.local"
-      run sed -i.bak -E "/\bhuemixlink\.local\b/d" /etc/hosts || run sed -i -E "/\bhuemixlink\.local\b/d" /etc/hosts || true
-      success "Removed huemixlink.local entries from /etc/hosts (backup: /etc/hosts.bak)"
+    if command -v iptables >/dev/null 2>&1; then
+      if iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null; then
+        log "Removing iptables NAT rule for port ${EXT_PORT}"
+        run iptables -t nat -D PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 || true
+        # Save rules if iptables-persistent exists
+        if [ -f /etc/iptables/rules.v4 ]; then
+          run iptables-save > /etc/iptables/rules.v4 || true
+        fi
+      fi
     fi
   fi
   log "Uninstall complete"
@@ -416,6 +499,8 @@ main_install() {
   create_venv_and_deps
   setup_permissions
   install_systemd_unit
+  setup_proxy
+
   if [ "$LOCAL" -eq 1 ]; then
     setup_local_domain
   fi

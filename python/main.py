@@ -7,7 +7,7 @@ from services.automation_service import automation_service
 from network.network_server import network_server
 from network.pairing_manager import pairing_manager
 from constants import LOG_FORMAT, FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY
-
+from waitress import serve
 
 # Configure logging
 logging.basicConfig(
@@ -63,7 +63,7 @@ if __name__ == '__main__':
         
         # Start Flask web server (blocking)
         logger.info(f"Starting Flask web server on port {web_port}...")
-        app.run(host='0.0.0.0', port=web_port, debug=True, use_reloader=False)
+        serve(app, host='0.0.0.0', port=web_port, threads=8)
         
     except KeyboardInterrupt:
         logger.info("Shutting down...")

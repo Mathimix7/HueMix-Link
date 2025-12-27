@@ -234,6 +234,9 @@ create_venv_and_deps() {
 setup_permissions() {
   log "Setting ownership and permissions"
   run chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR"
+
+  [ ! -d "$APP_DIR/data" ] && run mkdir -p "$APP_DIR/data"
+
   run find "$APP_DIR/data" -type d -exec chmod 750 {} + 2>/dev/null || true
   run find "$APP_DIR/data" -type f -exec chmod 640 {} + 2>/dev/null || true
 }
@@ -292,6 +295,10 @@ setup_proxy() {
   if ! dpkg -s iptables-persistent >/dev/null 2>&1; then
     run DEBIAN_FRONTEND=noninteractive apt-get update -y
     run DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+  fi
+  if [ -f /etc/iptables/rules.v4 ]; then
+    log "Backing up existing iptables rules to /etc/iptables/rules.v4.bak"
+    run cp /etc/iptables/rules.v4 /etc/iptables/rules.v4.bak
   fi
   run iptables-save > /etc/iptables/rules.v4
   success "iptables NAT rules saved and persistent"
@@ -353,11 +360,13 @@ cleanup_local_domain() {
 }
 
 uninstall() {
-  if [ ! -d "$APP_DIR" ] && ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}.service" && ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+  [ "$DRY_RUN" -eq 1 ] && { log "DRY-RUN: would uninstall ${SERVICE_NAME}"; return; }
+  
+  if [ ! -d "$APP_DIR" ] && ! -f "/etc/systemd/system/${SERVICE_NAME}.service" && ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
     log "${SERVICE_NAME} does not appear to be installed. Nothing to uninstall."
     return 0
   fi
-  
+
   confirm "Are you sure you want to completely uninstall ${SERVICE_NAME} and remove all files, users, and system modifications?" || { log "Uninstall aborted"; return; }
 
   log "Uninstalling ${SERVICE_NAME}"
@@ -366,15 +375,17 @@ uninstall() {
   run rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
   run systemctl daemon-reload || true
 
+  cleanup_local_domain
+
   [ -d "$APP_DIR" ] && confirm "Remove $APP_DIR?" && run rm -rf "$APP_DIR"
 
   id -u "$SERVICE_USER" >/dev/null 2>&1 && confirm "Remove service user $SERVICE_USER?" && run userdel "$SERVICE_USER" || true
 
-  cleanup_local_domain
-
-  command -v iptables >/dev/null 2>&1 && iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null && \
-    run iptables -t nat -D PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 && run iptables-save > /etc/iptables/rules.v4
-
+  if command -v iptables >/dev/null 2>&1; then
+    iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null && \
+      run iptables -t nat -D PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 && \
+      run iptables-save > /etc/iptables/rules.v4
+  fi
   log "Uninstall complete"
 }
 

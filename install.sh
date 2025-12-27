@@ -57,8 +57,8 @@ usage() {
   cat <<EOF
 ${blue}${bold}Usage:${reset} $0 [${magenta}install${reset}|${magenta}uninstall${reset}] [${gray}--yes${reset}] [${gray}--dry-run${reset}] [${gray}--force${reset}] [${gray}--delete${reset}] [${gray}--no-restart${reset}] [${gray}--show-version${reset}] [${gray}--help${reset}]
 
-  ${white}install${reset}         Install or update the application (${magenta}default${reset})
-  ${white}uninstall${reset}       Remove service and application files
+  ${blue}install${reset}         Install or update the application (${magenta}default${reset})
+  ${blue}uninstall${reset}       Remove service and application files
 
   ${gray}--yes${reset}           Non-interactive; assume yes to prompts
   ${gray}--dry-run${reset}       Show actions without making changes

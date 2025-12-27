@@ -106,6 +106,7 @@ class NetworkServer:
     def _subscribe_to_config_changes(self):
         """Subscribe to configuration changes for automatic restart."""
         config_notifier.subscribe('udp_port_changed', self._on_udp_port_changed)
+        config_notifier.subscribe('gateways_reload', self.reload_gateways)
         config_notifier.subscribe('gateway_deleted', self._on_gateway_deleted)
         home_id_manager.subscribe(self._on_home_id_changed)
     
@@ -199,13 +200,13 @@ class NetworkServer:
     
     def _load_gateways(self):
         """Load persisted gateways from gateways.json into gateway table."""        
-        servers = data_manager.read_json(FILE_GATEWAYS, default=[])
+        gateways = data_manager.read_json(FILE_GATEWAYS, default=[])
         
         with self._gateway_lock:
-            for server in servers:
-                radio_mac = server.get('radio_mac')
-                wifi_mac = server.get('mac_address')
-                ip = server.get('ip_address')
+            for gateway in gateways:
+                radio_mac = gateway.get('radio_mac')
+                wifi_mac = gateway.get('mac_address')
+                ip = gateway.get('ip_address')
                 
                 if radio_mac and wifi_mac and ip:
                     self._gateway_table[radio_mac] = {
@@ -218,6 +219,18 @@ class NetworkServer:
         if self._gateway_table:
             logger.info(f"Loaded {len(self._gateway_table)} gateway(s) from storage")
     
+    def reload_gateways(self, notification=None):
+        """Reload gateways from storage into gateway table."""
+        self._load_gateways()
+        # After reloading gateways, broadcast updated list to all gateways and paired devices
+        threading.Thread(
+            target=self._broadcast_gateway_list,
+            args=(False,),
+            daemon=True,
+            name="Reload-GW-Broadcast"
+        ).start()
+        logger.info("Reloaded gateways and triggered broadcast to all devices")
+
     def remove_gateway_from_table(self, radio_mac: str):
         """Remove a gateway from the routing table.
         
@@ -1089,7 +1102,7 @@ class NetworkServer:
     
     def trigger_gateway_list_broadcast(self):
         """Manually trigger gateway list broadcast."""
-        self._broadcast_gateway_list()
+        self._broadcast_gateway_list(only_gateways=False)
     
     def send_ping(self, gateway_mac: str, timeout: float = 3.0) -> Optional[int]:
         """Send ping to gateway and wait for response.

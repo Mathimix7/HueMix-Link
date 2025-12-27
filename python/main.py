@@ -1,12 +1,13 @@
 """Main application entry point."""
 import logging
 from servers.flask_server import app
-from services import config_manager
+from services import config_manager, data_manager
 from services.home_id_manager import home_id_manager
 from services.automation_service import automation_service
 from network.network_server import network_server
 from network.pairing_manager import pairing_manager
-from constants import LOG_FORMAT
+from constants import LOG_FORMAT, FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY
+
 
 # Configure logging
 logging.basicConfig(
@@ -18,6 +19,23 @@ logger = logging.getLogger(__name__)
 
 if __name__ == '__main__':
     try:
+        defaults = {
+            FILE_BUTTONS: [],
+            FILE_LIGHTSTRIPS: [],
+            FILE_GATEWAYS: [],
+            FILE_BRIDGE: {},
+            FILE_PAIRING_HISTORY: []
+        }
+
+        for fname, default_content in defaults.items():
+            try:
+                fp = data_manager._get_filepath(fname)
+                if not fp.exists():
+                    data_manager.write_json(fname, default_content)
+                    logger.info(f"Created missing data file: {fp}")
+            except Exception as e:
+                logger.error(f"Failed to ensure data file {fname}: {e}")
+
         home_id_manager.get_or_create_home_id()
 
         # Load configuration

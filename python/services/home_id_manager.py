@@ -59,6 +59,7 @@ class HomeIDManager:
             existing = self.read_home_id()
             if existing:
                 return existing
+            logger.info("No existing HOME_ID found, generating a new one...")
             # Generate non-zero 32-bit id
             new_id = secrets.randbits(32)
             if new_id == 0:

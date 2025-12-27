@@ -8,7 +8,14 @@ import tempfile
 import shutil
 from datetime import datetime
 from typing import List, Dict, Optional
+from services.config_change_notifier import config_notifier
+from services.data_manager import data_manager
+from constants import FILE_BRIDGE, FILE_BUTTONS, FILE_LIGHTSTRIPS
+import threading
+from network.network_server import network_server
+import logging
 
+logger = logging.getLogger(__name__)
 
 class BackupManager:
     """Manages backup creation and restoration of the data directory."""
@@ -49,7 +56,9 @@ class BackupManager:
                 
                 # Add to archive with relative path
                 tar.add(item_path, arcname=item)
-        
+
+        logger.info(f"Backup created at: {out_path}")
+
         return out_path
     
     def list_backups(self) -> List[Dict[str, any]]:
@@ -95,6 +104,8 @@ class BackupManager:
         Raises:
             Exception if restore fails.
         """
+
+        logger.info(f"Restoring backup from: {archive_path}")
         if not os.path.exists(archive_path):
             raise FileNotFoundError(f"Backup file not found: {archive_path}")
         
@@ -140,11 +151,46 @@ class BackupManager:
                 
                 # Move new data
                 shutil.move(src, dst)
-            
+
+            logger.info(f"Backup restored successfully from: {archive_path}, previous data backed up at: {old_data_path}")
+
+            # Notify services about restored configuration so they can reinitialize
+            try:
+                try:
+                    bridge_cfg = data_manager.read_json(FILE_BRIDGE, default={})
+                    config_notifier.notify_change('bridge_config', {'config': bridge_cfg})
+                except Exception:
+                    logger.warning("Failed to notify bridge config change after restore", exc_info=True)
+
+                # Notify button and lightstrip config changes
+                try:
+                    buttons = data_manager.read_json(FILE_BUTTONS, default=[])
+                    config_notifier.notify_change('button_config', {'count': len(buttons)})
+                except Exception:
+                    logger.warning("Failed to notify button config change after restore", exc_info=True)
+
+                try:
+                    strips = data_manager.read_json(FILE_LIGHTSTRIPS, default=[])
+                    config_notifier.notify_change('lightstrip_config', {'count': len(strips)})
+                except Exception:
+                    logger.warning("Failed to notify lightstrip config change after restore", exc_info=True)
+                    
+                try:
+                    config_notifier.notify_change('gateways_reload', {})
+                except Exception:
+                    logger.warning("Failed to notify gateway reload after restore", exc_info=True)
+            except Exception:
+                logger.error("Error during post-restore notifications", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Error restoring backup: {e}", exc_info=True)
+            raise
+
         finally:
             # Clean up temp directory
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
+                logger.debug(f"Cleaned up temporary directory: {temp_dir}")
 
 
 # Global singleton instance

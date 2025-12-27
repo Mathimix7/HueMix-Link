@@ -9,7 +9,6 @@ DEFAULT_UDP_IP = "0.0.0.0"
 DEFAULT_UDP_PORT = 7777
 DEFAULT_GATEWAY_PORT = 4210
 DEFAULT_WEB_PORT = 5000
-HOME_ID = 0xCAFEBABE
 
 # ===== Packet Types =====
 PKT_PAIR_CONFIRM = 0x01
@@ -83,7 +82,6 @@ FILE_BUTTONS = 'buttons.json'
 FILE_LIGHTSTRIPS = 'lightstrips.json'
 FILE_BRIDGE = 'bridge.json'
 FILE_CONFIG = 'config.json'
-FILE_SERVERS = 'servers.json'
 FILE_PAIRING_HISTORY = 'pairing_history.json'
 
 # ===== Logging =====

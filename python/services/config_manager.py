@@ -4,6 +4,10 @@ from pathlib import Path
 from threading import RLock
 from services.config_change_notifier import config_notifier
 from constants import DEFAULT_UDP_PORT, DEFAULT_WEB_PORT, FILE_CONFIG
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class ConfigManager:
     """Manages application configuration settings."""
@@ -16,6 +20,7 @@ class ConfigManager:
     def _ensure_config_file(self):
         """Ensure config file exists with default values."""
         if not self.config_file.exists():
+            logger.info("Config file not found, creating default config...")
             self.config_file.parent.mkdir(parents=True, exist_ok=True)
             default_config = {
                 'udp_port': DEFAULT_UDP_PORT,

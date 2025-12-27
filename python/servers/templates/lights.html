@@ -3,6 +3,21 @@
 {% block title %}Lights - Hue Mix Link{% endblock %}
 
 {% block content %}
+<div id="toast-notification" class="hidden fixed top-4 right-4 z-50 max-w-md">
+    <div id="toast-container" class="rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0">
+        <div class="flex-shrink-0">
+            <i id="toast-icon" class="fas fa-check-circle text-2xl text-green-600"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <p id="toast-title" class="text-sm font-semibold text-gray-900"></p>
+            <p id="toast-message" class="text-sm text-gray-700 mt-1"></p>
+        </div>
+        <button onclick="hideToast()" class="flex-shrink-0 inline-flex items-center text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
+
 <div class="max-w-7xl mx-auto">
     <!-- Header -->
     <div class="mb-8">
@@ -177,18 +192,58 @@ function toggleLight(lightId) {
             // Reload lights to show updated status
             loadLights();
         } else {
-            alert('Failed to toggle light: ' + (data.error || 'Unknown error'));
+                showToast('Error', 'Failed to toggle light: ' + (data.error || 'Unknown error'), 'error');
         }
     })
     .catch(err => {
         console.error('Error toggling light:', err);
-        alert('Failed to toggle light');
+            showToast('Error', 'Failed to toggle light', 'error');
     });
 }
 
 function showError(message) {
     document.getElementById('error-message').textContent = message;
     document.getElementById('error-state').classList.remove('hidden');
+}
+
+function showToast(title, message, type = 'success') {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    const icon = document.getElementById('toast-icon');
+    const titleEl = document.getElementById('toast-title');
+    const messageEl = document.getElementById('toast-message');
+    if (!toast || !toastContainer) return;
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    if (type === 'success') {
+        icon.className = 'fas fa-check-circle text-2xl text-green-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0';
+    } else if (type === 'error') {
+        icon.className = 'fas fa-exclamation-circle text-2xl text-red-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-red-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-red-50 translate-x-full opacity-0';
+    } else if (type === 'warning') {
+        icon.className = 'fas fa-exclamation-triangle text-2xl text-yellow-500';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-yellow-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-yellow-50 translate-x-full opacity-0';
+    } else if (type === 'info') {
+        icon.className = 'fas fa-info-circle text-2xl text-blue-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-blue-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-blue-50 translate-x-full opacity-0';
+    }
+    toast.classList.remove('hidden');
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toastContainer.classList.remove('translate-x-full', 'opacity-0');
+            toastContainer.classList.add('translate-x-0', 'opacity-100');
+        });
+    });
+    setTimeout(() => { hideToast(); }, 4000);
+}
+function hideToast() {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    if (!toast || !toastContainer) return;
+    toastContainer.classList.remove('translate-x-0', 'opacity-100');
+    toastContainer.classList.add('translate-x-full', 'opacity-0');
+    setTimeout(() => { toast.classList.add('hidden'); }, 300);
 }
 </script>
 {% endblock %}

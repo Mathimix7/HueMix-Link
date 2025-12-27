@@ -40,20 +40,20 @@
                 <p id="bridge-info" class="text-sm text-gray-500">Loading...</p>
             </div>
 
-            <!-- TCP Server Status -->
+            <!-- UDP Network Status -->
             <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-100">
                 <div class="flex items-center justify-between mb-3">
                     <div class="flex items-center">
                         <div class="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center mr-3">
-                            <i class="fas fa-server text-purple-600"></i>
+                            <i class="fas fa-broadcast-tower text-purple-600"></i>
                         </div>
-                        <h3 class="text-lg font-semibold text-gray-900">TCP Server</h3>
+                        <h3 class="text-lg font-semibold text-gray-900">UDP Network</h3>
                     </div>
-                    <span id="tcp-status" class="px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600">
+                    <span id="udp-status" class="px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600">
                         <i class="fas fa-spinner fa-spin mr-1"></i>Checking...
                     </span>
                 </div>
-                <p id="tcp-info" class="text-sm text-gray-500">Loading...</p>
+                <p id="udp-info" class="text-sm text-gray-500">Loading...</p>
             </div>
 
             <!-- Flask Server Status -->
@@ -69,7 +69,7 @@
                         <i class="fas fa-check-circle mr-1"></i>Online
                     </span>
                 </div>
-                <p id="web-info" class="text-sm text-gray-500">Port 5001</p>
+                <p id="web-info" class="text-sm text-gray-500">Port 5000</p>
             </div>
 
         </div>
@@ -108,15 +108,15 @@
                 </div>
             </a>
 
-            <!-- Button Servers -->
-            <a href="/servers" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-purple-500">
+            <!-- Button Gateways -->
+            <a href="/gateways" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-purple-500">
                 <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-purple-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
                 <div class="relative">
                     <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500/20 to-purple-500/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
                         <i class="fas fa-microchip text-2xl text-purple-500"></i>
                     </div>
-                    <h3 class="text-xl font-bold text-gray-900 mb-2">Button Servers</h3>
-                    <p class="text-sm text-gray-500">ESP-NOW receivers & TCP</p>
+                    <h3 class="text-xl font-bold text-gray-900 mb-2">Button Gateways</h3>
+                    <p class="text-sm text-gray-500">ESP-NOW receivers & UDP</p>
                 </div>
             </a>
 
@@ -129,6 +129,30 @@
                     </div>
                     <h3 class="text-xl font-bold text-gray-900 mb-2">Lightstrips</h3>
                     <p class="text-sm text-gray-500">Automatic scene sync</p>
+                </div>
+            </a>
+
+            <!-- Device Pairing -->
+            <a href="/pairing" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-green-500">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-green-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
+                <div class="relative">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500/20 to-green-500/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <i class="fas fa-link text-2xl text-green-500"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-2">Pair Devices</h3>
+                    <p class="text-sm text-gray-500">Add buttons & lightstrips</p>
+                </div>
+            </a>
+
+            <!-- Network Mesh -->
+            <a href="/mesh" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-cyan-500">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-cyan-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
+                <div class="relative">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500/20 to-cyan-500/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <i class="fas fa-project-diagram text-2xl text-cyan-500"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-2">Network Mesh</h3>
+                    <p class="text-sm text-gray-500">Gateway topology view</p>
                 </div>
             </a>
 
@@ -239,28 +263,28 @@ function loadSystemStatus() {
             document.getElementById('bridge-info').textContent = 'Unable to check status';
         });
 
-    // Check TCP Server status
-    fetch('/api/status/tcp')
+    // Check UDP Network status
+    fetch('/api/status/udp')
         .then(response => response.json())
         .then(data => {
-            const statusEl = document.getElementById('tcp-status');
-            const infoEl = document.getElementById('tcp-info');
+            const statusEl = document.getElementById('udp-status');
+            const infoEl = document.getElementById('udp-info');
             
             if (data.running) {
                 statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-600';
                 statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>Running';
-                infoEl.textContent = `Port ${data.port}`;
+                infoEl.textContent = `Port ${data.port} • ${data.gateways || 0} devices`;
             } else {
                 statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-600';
                 statusEl.innerHTML = '<i class="fas fa-times-circle mr-1"></i>Stopped';
-                infoEl.textContent = 'TCP server is not running';
+                infoEl.textContent = 'UDP network is not running';
             }
         })
         .catch(err => {
-            console.error('Error loading TCP status:', err);
-            document.getElementById('tcp-status').className = 'px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600';
-            document.getElementById('tcp-status').innerHTML = '<i class="fas fa-question-circle mr-1"></i>Unknown';
-            document.getElementById('tcp-info').textContent = 'Unable to check status';
+            console.error('Error loading UDP status:', err);
+            document.getElementById('udp-status').className = 'px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600';
+            document.getElementById('udp-status').innerHTML = '<i class="fas fa-question-circle mr-1"></i>Unknown';
+            document.getElementById('udp-info').textContent = 'Unable to check status';
         });
 }
 

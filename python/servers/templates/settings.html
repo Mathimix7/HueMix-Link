@@ -1,0 +1,407 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Hue Mix Link{% endblock %}
+
+{% block head %}
+<style>
+    input[type="file"] {
+        display: none;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <h1 class="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
+    
+    <!-- Server Configuration Section -->
+    <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-200">
+            <i class="fas fa-server text-blue-600 mr-2"></i>Server Configuration
+        </h2>
+        
+        <div class="space-y-4">
+            <!-- UDP Port Setting -->
+            <div class="flex items-center justify-between py-3">
+                <div class="flex-1">
+                    <h3 class="font-medium text-gray-900">UDP Server Port</h3>
+                    <p class="text-sm text-gray-600 mt-1">Port for ESP32 button gateways to connect (default: 7777)</p>
+                </div>
+                <div class="ml-4">
+                    <input type="number" id="udp-port-input" min="1" max="65535" 
+                           class="w-32 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                </div>
+            </div>
+            
+            <!-- Web Port Setting -->
+            <div class="flex items-center justify-between py-3 border-t border-gray-100">
+                <div class="flex-1">
+                    <h3 class="font-medium text-gray-900">Web Server Port</h3>
+                    <p class="text-sm text-gray-600 mt-1">Port for web interface (default: 5000)</p>
+                </div>
+                <div class="ml-4">
+                    <input type="number" id="web-port-input" min="1" max="65535" 
+                           class="w-32 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                </div>
+            </div>
+            
+            <!-- Save Button -->
+            <div class="pt-4 border-t border-gray-100">
+                <button onclick="saveAndRestartSettings()" 
+                        class="w-full sm:w-auto px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
+                    <i class="fas fa-save mr-2"></i>Save & Restart Servers
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Backup & Restore Section -->
+    <div class="bg-white rounded-xl shadow-md p-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-200">
+            <i class="fas fa-database text-blue-600 mr-2"></i>Backup & Restore
+        </h2>
+        
+        <div class="space-y-4">
+            <!-- Create Backup -->
+            <div class="flex items-center justify-between py-3">
+                <div class="flex-1">
+                    <h3 class="font-medium text-gray-900">Create Backup</h3>
+                    <p class="text-sm text-gray-600 mt-1">Download a backup of all your configuration and data</p>
+                </div>
+                <div class="ml-4">
+                    <button onclick="createBackup()" 
+                            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                        <i class="fas fa-download mr-2"></i>Create & Download
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Restore from Backup -->
+            <div class="flex items-center justify-between py-3 border-t border-gray-100">
+                <div class="flex-1">
+                    <h3 class="font-medium text-gray-900">Restore from Backup</h3>
+                    <p class="text-sm text-gray-600 mt-1">Upload and restore a previous backup file</p>
+                </div>
+                <div class="ml-4">
+                    <label for="backup-file-input" 
+                           class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors cursor-pointer inline-block">
+                        <i class="fas fa-upload mr-2"></i>Choose File
+                    </label>
+                    <input type="file" id="backup-file-input" accept=".tar.gz,.tgz" onchange="handleBackupFileSelected(this)">
+                </div>
+            </div>
+            
+            <!-- Available Backups -->
+            <div class="pt-3 border-t border-gray-100">
+                <h3 class="font-medium text-gray-900 mb-3">Available Backups</h3>
+                <p class="text-sm text-gray-600 mb-3">Previously created backups on this server</p>
+                <div id="backup-list" class="space-y-2 max-h-96 overflow-y-auto"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Confirmation Modal -->
+<div id="confirm-modal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen px-4">
+        <div class="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75" onclick="closeModal()"></div>
+        
+        <div class="relative bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:max-w-lg sm:w-full z-10">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="flex items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <i class="fas fa-exclamation-triangle text-red-600"></i>
+                    </div>
+                    <div class="ml-4 mt-0 text-left">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">Confirm Action</h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-600" id="modal-message"></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" id="modal-confirm-btn" onclick="confirmAction()" 
+                        class="w-full inline-flex justify-center rounded-lg border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm">
+                    Confirm
+                </button>
+                <button type="button" onclick="closeModal()" 
+                        class="mt-3 w-full inline-flex justify-center rounded-lg border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Toast Notification -->
+<div id="toast" class="hidden fixed top-4 right-4 z-50 max-w-sm"></div>
+
+{% endblock %}
+
+{% block scripts %}
+
+<script>
+    let pendingAction = null;
+
+    // Load initial data
+    document.addEventListener('DOMContentLoaded', function() {
+        loadSettings();
+        loadBackupList();
+    });
+
+    function loadSettings() {
+        fetch('/api/config')
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('udp-port-input').value = data.config.udp_port || 7777;
+                    document.getElementById('web-port-input').value = data.config.web_port || 5000;
+                }
+            })
+            .catch(err => {
+                console.error('Error loading settings:', err);
+            });
+    }
+
+    function saveAndRestartSettings() {
+        const udpPort = parseInt(document.getElementById('udp-port-input').value);
+        const webPort = parseInt(document.getElementById('web-port-input').value);
+        
+        if (isNaN(udpPort) || udpPort < 1 || udpPort > 65535) {
+            showSettingsStatus('UDP port must be between 1 and 65535', 'error');
+            return;
+        }
+        
+        if (isNaN(webPort) || webPort < 1 || webPort > 65535) {
+            showSettingsStatus('Web port must be between 1 and 65535', 'error');
+            return;
+        }
+        
+        showToast('Saving settings and restarting servers...', 'info');
+        
+        fetch('/api/config/restart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                udp_port: udpPort,
+                web_port: webPort
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast(data.message || 'Settings saved successfully!', 'success');
+                setTimeout(() => window.location.reload(), 2000);
+            } else {
+                showToast('Error: ' + (data.error || 'Failed to save settings'), 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error saving settings:', err);
+            showToast('Error saving settings', 'error');
+        });
+    }
+
+    function showSettingsStatus(message, type = 'info') {
+        showToast(message, type);
+    }
+
+    function loadBackupList() {
+        fetch('/admin/backups')
+            .then(r => r.json())
+            .then(data => {
+                const listEl = document.getElementById('backup-list');
+                if (data.success && data.backups && data.backups.length > 0) {
+                    listEl.innerHTML = data.backups.map(b => `
+                        <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                            <div class="flex-1">
+                                <div class="font-medium text-gray-900">${b.name}</div>
+                                <div class="text-sm text-gray-600">${formatSize(b.size || 0)} • ${formatDate(b.mtime)}</div>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="downloadBackup('${b.name}')" 
+                                        class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors">
+                                    <i class="fas fa-download mr-1"></i>Download
+                                </button>
+                                <button onclick="confirmRestoreBackup('${b.name}')" 
+                                        class="px-3 py-1.5 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-700 transition-colors">
+                                    <i class="fas fa-undo mr-1"></i>Restore
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    listEl.innerHTML = '<p class="text-sm text-gray-600 text-center py-4">No backups available</p>';
+                }
+            })
+            .catch(err => {
+                showToast('Failed to load backups', 'error');
+            });
+    }
+
+    function createBackup() {
+        showToast('Creating backup...', 'info');
+        fetch('/admin/backups', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Backup created successfully!', 'success');
+                loadBackupList();
+                const filename = data.path.split('/').pop().split('\\').pop();
+                setTimeout(() => downloadBackup(filename), 500);
+            } else {
+                showToast('Failed to create backup: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error creating backup', 'error');
+        });
+    }
+
+    function downloadBackup(filename) {
+        window.location.href = `/admin/backups/download/${filename}`;
+    }
+
+    function handleBackupFileSelected(input) {
+        if (input.files && input.files[0]) {
+            const file = input.files[0];
+            confirmRestoreFromFile(file);
+        }
+    }
+
+    function confirmRestoreFromFile(file) {
+        showModal(
+            'Restore from Uploaded Backup?',
+            `This will replace all current settings with data from "${file.name}". All current devices and settings will be lost. Are you sure?`,
+            () => restoreFromFile(file)
+        );
+    }
+
+    function restoreFromFile(file) {
+        showToast('Uploading and restoring backup...', 'info');
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        fetch('/admin/backups/upload-restore', {
+            method: 'POST',
+            body: formData
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Backup restored successfully!', 'success');
+                setTimeout(() => location.reload(), 3000);
+            } else {
+                showToast('Failed to restore: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error restoring backup', 'error');
+        });
+    }
+
+    function confirmRestoreBackup(filename) {
+        showModal(
+            'Restore Backup?',
+            `This will replace all current settings with data from "${filename}". All current devices and settings will be lost. Are you sure?`,
+            () => restoreBackup(filename)
+        );
+    }
+
+    function restoreBackup(filename) {
+        showToast('Restoring backup...', 'info');
+        fetch('/admin/backups/restore', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({filename: filename})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Backup restore successfully!', 'info');
+                setTimeout(() => location.reload(), 3000);
+            } else {
+                showToast('Failed to restore: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error restoring backup', 'error');
+        });
+    }
+
+    function showModal(title, message, onConfirm) {
+        document.getElementById('modal-title').textContent = title;
+        document.getElementById('modal-message').textContent = message;
+        pendingAction = onConfirm;
+        document.getElementById('confirm-modal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+        document.getElementById('confirm-modal').classList.add('hidden');
+        pendingAction = null;
+    }
+
+    function confirmAction() {
+        setTimeout(closeModal, 100);
+        if (pendingAction) {
+            pendingAction();
+        }
+    }
+
+    function showToast(message, type = 'success') {
+        const toast = document.getElementById('toast');
+        let bgColor, textColor, icon;
+        
+        if (type === 'success') {
+            bgColor = 'bg-green-50 border-green-200';
+            textColor = 'text-green-800';
+            icon = 'fa-check-circle text-green-600';
+        } else if (type === 'error') {
+            bgColor = 'bg-red-50 border-red-200';
+            textColor = 'text-red-800';
+            icon = 'fa-exclamation-circle text-red-600';
+        } else if (type === 'info') {
+            bgColor = 'bg-blue-50 border-blue-200';
+            textColor = 'text-blue-800';
+            icon = 'fa-info-circle text-blue-600';
+        } else if (type === 'warning') {
+            bgColor = 'bg-yellow-50 border-yellow-200';
+            textColor = 'text-yellow-800';
+            icon = 'fa-exclamation-triangle text-yellow-600';
+        }
+        
+        toast.className = `fixed top-4 right-4 z-50 max-w-sm ${bgColor} border rounded-lg shadow-lg p-4`;
+        toast.innerHTML = `
+            <div class="flex items-center">
+                <i class="fas ${icon} mr-3"></i>
+                <p class="text-sm ${textColor}">${message}</p>
+            </div>
+        `;
+        toast.classList.remove('hidden');
+        setTimeout(() => {
+            toast.classList.add('hidden');
+        }, 3000);
+    }
+
+    function formatSize(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    function formatDate(timestamp) {
+        if (!timestamp) return 'Unknown';
+        const date = new Date(timestamp * 1000);
+        return date.toLocaleString();
+    }
+</script>
+</body>
+</html>
+{% endblock %}

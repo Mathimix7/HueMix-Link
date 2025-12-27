@@ -1,0 +1,495 @@
+{% extends "base.html" %}
+
+{% block title %}Network Mesh - Hue Mix Link{% endblock %}
+
+{% block content %}
+<style>
+.spinner {
+    border: 3px solid rgba(6, 182, 212, 0.3);
+    border-top: 3px solid #06b6d4;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+.skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: loading 1.5s ease-in-out infinite;
+    border-radius: 0.375rem;
+}
+@keyframes loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+.rssi-bar {
+    height: 8px;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+.rotate-360 {
+    animation: rotate360 0.5s linear;
+}
+@keyframes rotate360 {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+</style>
+
+<!-- Toast Notification -->
+<div id="toast-notification" class="hidden fixed top-4 right-4 z-50 max-w-md">
+    <div id="toast-container" class="rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0">
+        <div class="flex-shrink-0">
+            <i id="toast-icon" class="fas fa-check-circle text-2xl text-green-600"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <p id="toast-title" class="text-sm font-semibold text-gray-900"></p>
+            <p id="toast-message" class="text-sm text-gray-700 mt-1"></p>
+        </div>
+        <button onclick="hideToast()" class="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-cyan-600 to-cyan-400 bg-clip-text text-transparent mb-1">
+                    Network Mesh
+                </h1>
+                <p class="text-gray-600">Gateway routing and device connectivity overview</p>
+            </div>
+            <div class="flex items-center space-x-3">
+                <button onclick="optimizeAllLights()" id="optimize-btn" class="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-all inline-flex items-center shadow-md hover:shadow-lg">
+                    <i class="fas fa-network-wired mr-2"></i>Optimize All Lights
+                </button>
+                <button onclick="refreshMesh()" class="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors inline-flex items-center">
+                    <i id="refresh-icon" class="fas fa-sync-alt mr-2 transition-transform duration-500"></i>Refresh
+                </button>
+                <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                    <i class="fas fa-arrow-left mr-2"></i>Back to Home
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gateways List -->
+    <div id="gateways-container" class="space-y-6">
+        <!-- Gateways will be loaded here -->
+    </div>
+</div>
+
+<script>
+let meshData = null;
+
+// Toast notification functions
+function showToast(title, message, type = 'success') {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    const icon = document.getElementById('toast-icon');
+    const titleEl = document.getElementById('toast-title');
+    const messageEl = document.getElementById('toast-message');
+    
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    
+    if (type === 'success') {
+        icon.className = 'fas fa-check-circle text-2xl text-green-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0';
+    } else if (type === 'error') {
+        icon.className = 'fas fa-exclamation-circle text-2xl text-red-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-red-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-red-50 translate-x-full opacity-0';
+    } else if (type === 'warning') {
+        icon.className = 'fas fa-exclamation-triangle text-2xl text-yellow-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-yellow-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-yellow-50 translate-x-full opacity-0';
+    } else if (type === 'info') {
+        icon.className = 'fas fa-info-circle text-2xl text-blue-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-blue-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-blue-50 translate-x-full opacity-0';
+    }
+    
+    toast.classList.remove('hidden');
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toastContainer.classList.remove('translate-x-full', 'opacity-0');
+            toastContainer.classList.add('translate-x-0', 'opacity-100');
+        });
+    });
+    
+    setTimeout(() => {
+        hideToast();
+    }, 4000);
+}
+
+function hideToast() {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    
+    toastContainer.classList.remove('translate-x-0', 'opacity-100');
+    toastContainer.classList.add('translate-x-full', 'opacity-0');
+    
+    setTimeout(() => {
+        toast.classList.add('hidden');
+    }, 300);
+}
+
+// Load mesh data on page load
+window.addEventListener('DOMContentLoaded', function() {
+    loadMeshData();
+});
+
+function showSkeletonLoaders() {
+    const container = document.getElementById('gateways-container');
+    container.innerHTML = '';
+    
+    // Create 2 skeleton gateway cards
+    for (let i = 0; i < 2; i++) {
+        const skeletonCard = document.createElement('div');
+        skeletonCard.className = 'bg-white rounded-2xl shadow-lg p-6';
+        skeletonCard.innerHTML = `
+            <div class="flex items-center justify-between mb-6">
+                <div class="flex items-center space-x-3">
+                    <div class="w-14 h-14 rounded-xl skeleton"></div>
+                    <div>
+                        <div class="h-6 w-40 skeleton mb-2"></div>
+                        <div class="h-4 w-32 skeleton"></div>
+                    </div>
+                </div>
+                <div class="h-8 w-24 skeleton rounded-full"></div>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-6">
+                <div>
+                    <div class="h-5 w-24 skeleton mb-3"></div>
+                    <div class="space-y-2">
+                        <div class="h-16 skeleton rounded-lg"></div>
+                        <div class="h-16 skeleton rounded-lg"></div>
+                    </div>
+                </div>
+                <div>
+                    <div class="h-5 w-32 skeleton mb-3"></div>
+                    <div class="space-y-2">
+                        <div class="h-20 skeleton rounded-lg"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+        container.appendChild(skeletonCard);
+    }
+}
+
+function loadMeshData() {
+    showSkeletonLoaders();
+    
+    fetch('/mesh/api/topology')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                meshData = data;
+                // Fetch RSSI for each light from their assigned gateway
+                fetchLightRSSI();
+            } else {
+                showToast('Error', 'Failed to load mesh data', 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error loading mesh:', err);
+            showToast('Error', 'Failed to load mesh data', 'error');
+        });
+}
+
+function fetchLightRSSI() {
+    const lights = meshData.nodes.filter(n => n.type === 'light');
+    
+    if (lights.length === 0) {
+        renderMesh();
+        return;
+    }
+    
+    // Fetch RSSI for each light from their assigned gateway
+    const rssiPromises = lights.map(light => 
+        fetch(`/lightstrips/api/lightstrips/${light.id}/rssi`)
+            .then(response => response.json())
+            .then(data => {
+                console.log(`RSSI for ${light.id}:`, data);
+                if (data.success && data.rssi !== null) {
+                    // Store RSSI directly on the light node
+                    light.rssi = data.rssi;
+                    console.log(`Set RSSI for ${light.label}: ${data.rssi} dBm`);
+                } else {
+                    console.log(`No RSSI data for ${light.label}`);
+                }
+            })
+            .catch(err => {
+                console.error(`Error fetching RSSI for ${light.id}:`, err);
+            })
+    );
+    
+    // Wait for all RSSI fetches to complete, then render
+    Promise.all(rssiPromises).then(() => {
+        renderMesh();
+    });
+}
+
+function renderMesh() {
+    const container = document.getElementById('gateways-container');
+    container.innerHTML = '';
+    
+    // Get gateways
+    const gateways = meshData.nodes.filter(n => n.type === 'gateway');
+    
+    if (gateways.length === 0) {
+        container.innerHTML = '<div class="text-center py-12 text-gray-400"><i class="fas fa-network-wired text-4xl mb-3"></i><p>No gateways found</p></div>';
+        return;
+    }
+    
+    gateways.forEach(gateway => {
+        const gatewayCard = createGatewayCard(gateway);
+        container.appendChild(gatewayCard);
+    });
+}
+
+function createGatewayCard(gateway) {
+    const card = document.createElement('div');
+    card.className = 'bg-white rounded-2xl shadow-lg p-6 border-2 border-transparent hover:border-cyan-200 transition-all';
+    
+    // Get buttons and lights connected to this gateway
+    const buttons = meshData.nodes.filter(n => 
+        n.type === 'button' && 
+        meshData.edges.some(e => e.from === n.id && e.to === gateway.id)
+    );
+    
+    const lights = meshData.nodes.filter(n => 
+        n.type === 'light' && 
+        meshData.edges.some(e => e.from === gateway.id && e.to === n.id)
+    );
+    
+    card.innerHTML = `
+        <div class="flex items-center justify-between mb-6">
+            <div class="flex items-center space-x-4">
+                <div class="w-14 h-14 rounded-xl bg-cyan-500/20 flex items-center justify-center">
+                    <i class="fas fa-server text-3xl text-cyan-600"></i>
+                </div>
+                <div>
+                    <h3 class="text-xl font-bold text-gray-900">${gateway.label}</h3>
+                    <p class="text-sm text-gray-500 font-mono">${gateway.id}</p>
+                    <p class="text-xs text-gray-400">${gateway.ip || 'No IP'}</p>
+                </div>
+            </div>
+            <div class="text-right">
+                <div class="flex items-center space-x-3">
+                    <div class="px-3 py-1 text-xs font-semibold rounded-full ${gateway.ip ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'} inline-flex items-center">
+                        <i class="fas ${gateway.ip ? 'fa-check-circle' : 'fa-circle'} mr-1"></i>
+                        ${gateway.ip ? 'Online' : 'Offline'}
+                    </div>
+                    <button onclick="toggleGatewayDevices('${gateway.id}')" class="text-gray-400 hover:text-gray-600">
+                        <i id="gateway-${gateway.id}-icon" class="fas fa-chevron-down transition-transform"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="gateway-${gateway.id}-devices" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Buttons Section -->
+            <div>
+                <div class="flex items-center justify-between mb-3">
+                    <h4 class="text-sm font-semibold text-gray-700 flex items-center">
+                        <i class="fas fa-circle text-orange-500 mr-2"></i>
+                        Buttons <span class="ml-2 text-xs bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full">${buttons.length}</span>
+                    </h4>
+                </div>
+                <div class="space-y-2">
+                    ${buttons.length === 0 
+                        ? '<p class="text-sm text-gray-400 text-center py-4 border border-dashed border-gray-200 rounded-lg">No buttons connected</p>'
+                        : buttons.map(button => `
+                            <div class="border border-gray-200 rounded-lg p-3 hover:border-orange-300 hover:bg-orange-50/30 transition-all">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-2">
+                                        <i class="fas fa-circle text-xs ${button.configured ? 'text-green-500' : 'text-gray-400'}"></i>
+                                        <span class="text-sm font-medium text-gray-900">${button.label}</span>
+                                    </div>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1 font-mono">${button.id}</p>
+                            </div>
+                        `).join('')
+                    }
+                </div>
+            </div>
+            
+            <!-- Lights Section -->
+            <div>
+                <div class="flex items-center justify-between mb-3">
+                    <h4 class="text-sm font-semibold text-gray-700 flex items-center">
+                        <i class="fas fa-lightbulb text-yellow-500 mr-2"></i>
+                        Lights <span class="ml-2 text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full">${lights.length}</span>
+                    </h4>
+                </div>
+                <div class="space-y-2">
+                    ${lights.length === 0 
+                        ? '<p class="text-sm text-gray-400 text-center py-4 border border-dashed border-gray-200 rounded-lg">No lights connected</p>'
+                        : lights.map(light => {
+                            // Get RSSI stored on the light node
+                            const rssi = light.rssi || null;
+                            // Convert RSSI to percentage (range: -90 dBm = 0%, -40 dBm = 100%)
+                            const rawPercent = ((rssi + 90) / (-40 + 90)) * 100;
+                            const rssiPercent = rssi 
+                                ? Math.max(0, Math.min(100, Math.round(rawPercent))) 
+                                : 0;
+                                                        
+                            return `
+                            <div class="border border-gray-200 rounded-lg p-3 hover:border-yellow-300 hover:bg-yellow-50/30 transition-all">
+                                <div class="flex items-center justify-between mb-2">
+                                    <span class="text-sm font-medium text-gray-900">${light.label}</span>
+                                    <button onclick="optimizeLight('${light.id}')" class="text-xs text-cyan-600 hover:text-cyan-800 font-medium">
+                                        <i class="fas fa-search-location mr-1"></i>Find Best
+                                    </button>
+                                </div>
+                                <p class="text-xs text-gray-500 font-mono mb-2">${light.id}</p>
+                                ${rssi ? `
+                                    <div class="flex items-center space-x-2">
+                                        <span class="text-xs text-gray-600">Signal:</span>
+                                        <div class="flex-1 bg-gray-200 rounded-full h-2">
+                                            <div class="rssi-bar ${getRssiBgColor(rssi)}" style="width: ${rssiPercent}%"></div>
+                                        </div>
+                                        <span class="text-xs font-mono ${getRssiTextColor(rssi)}">${rssi*-1} dBm</span>
+                                    </div>
+                                ` : '<p class="text-xs text-gray-400">No signal data</p>'}
+                            </div>
+                        `;
+                        }).join('')
+                    }
+                </div>
+            </div>
+        </div>
+    `;
+    
+    return card;
+}
+
+function toggleGatewayDevices(gatewayId) {
+    const devicesSection = document.getElementById(`gateway-${gatewayId}-devices`);
+    const icon = document.getElementById(`gateway-${gatewayId}-icon`);
+    
+    if (devicesSection.style.display === 'none') {
+        devicesSection.style.display = 'grid';
+        icon.classList.remove('fa-chevron-right');
+        icon.classList.add('fa-chevron-down');
+    } else {
+        devicesSection.style.display = 'none';
+        icon.classList.remove('fa-chevron-down');
+        icon.classList.add('fa-chevron-right');
+    }
+}
+
+function getRssiColor(rssi) {
+    if (!rssi) return 'bg-gray-100 text-gray-600';
+    if (rssi >= -50) return 'bg-green-100 text-green-700';
+    if (rssi >= -70) return 'bg-yellow-100 text-yellow-700';
+    return 'bg-red-100 text-red-700';
+}
+
+function getRssiBgColor(rssi) {
+    if (!rssi) return 'bg-gray-400';
+    if (rssi >= -50) return 'bg-green-500';
+    if (rssi >= -70) return 'bg-yellow-500';
+    return 'bg-red-500';
+}
+
+function getRssiTextColor(rssi) {
+    if (!rssi) return 'text-gray-600';
+    if (rssi >= -50) return 'text-green-700';
+    if (rssi >= -70) return 'text-yellow-700';
+    return 'text-red-700';
+}
+
+function refreshMesh() {
+    const refreshIcon = document.getElementById('refresh-icon');
+    refreshIcon.classList.add('rotate-360');
+    
+    loadMeshData();
+    
+    setTimeout(() => {
+        refreshIcon.classList.remove('rotate-360');
+    }, 500);
+}
+
+function optimizeLight(lightMac) {
+    showToast('Optimizing...', `Finding best gateway for light`, 'info');
+    
+    fetch(`/lightstrips/api/lightstrips/${lightMac}/ping`, {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const bestGateway = data.best_gateway;
+            const gatewayName = bestGateway.name || bestGateway.gateway_mac;
+            const rssi = bestGateway.rssi !== undefined ? bestGateway.rssi : (bestGateway.rssi_dbm || 'unknown');
+            showToast('Optimization Complete', 
+                `Best gateway: ${gatewayName} (${rssi} dBm)`, 
+                'success');
+            // Refresh to show updated routing
+            setTimeout(() => loadMeshData(), 1500);
+        } else {
+            showToast('Optimization Failed', data.error || 'Could not find best gateway', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error optimizing light:', err);
+        showToast('Error', 'Failed to optimize light routing', 'error');
+    });
+}
+
+function optimizeAllLights() {
+    const optimizeBtn = document.getElementById('optimize-btn');
+    const lights = meshData.nodes.filter(n => n.type === 'light');
+    
+    if (lights.length === 0) {
+        showToast('No Lights', 'No lights found to optimize', 'warning');
+        return;
+    }
+    
+    optimizeBtn.disabled = true;
+    optimizeBtn.innerHTML = '<span class="spinner mr-2"></span>Optimizing...';
+    
+    showToast('Optimizing Network', `Testing ${lights.length} lights across all gateways...`, 'info');
+    
+    // Optimize each light sequentially
+    let completed = 0;
+    const optimizeNext = (index) => {
+        if (index >= lights.length) {
+            optimizeBtn.disabled = false;
+            optimizeBtn.innerHTML = '<i class="fas fa-network-wired mr-2"></i>Optimize All Lights';
+            showToast('Optimization Complete', `Successfully optimized ${completed} lights`, 'success');
+            setTimeout(() => loadMeshData(), 1000);
+            return;
+        }
+        
+        const light = lights[index];
+        fetch(`/lightstrips/api/lightstrips/${light.id}/ping`, {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                completed++;
+            }
+            optimizeNext(index + 1);
+        })
+        .catch(err => {
+            console.error(`Error optimizing ${light.label}:`, err);
+            optimizeNext(index + 1);
+        });
+    };
+    
+    optimizeNext(0);
+}
+</script>
+{% endblock %}

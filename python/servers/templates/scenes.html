@@ -3,6 +3,20 @@
 {% block title %}Scenes - Hue Mix Link{% endblock %}
 
 {% block content %}
+<div id="toast-notification" class="hidden fixed top-4 right-4 z-50 max-w-md">
+    <div id="toast-container" class="rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0">
+        <div class="flex-shrink-0">
+            <i id="toast-icon" class="fas fa-check-circle text-2xl text-green-600"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <p id="toast-title" class="text-sm font-semibold text-gray-900"></p>
+            <p id="toast-message" class="text-sm text-gray-700 mt-1"></p>
+        </div>
+        <button onclick="hideToast()" class="flex-shrink-0 inline-flex items-center text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
 <div class="max-w-7xl mx-auto">
     <!-- Header -->
     <div class="mb-8">
@@ -113,35 +127,39 @@ function displayScenes(scenes) {
         
         const roomScenes = scenesByRoom[roomName];
         const roomHeader = document.createElement('div');
-        roomHeader.className = 'flex items-center mb-4';
+        roomHeader.className = 'flex items-center mb-3';
         roomHeader.innerHTML = `
-            <h2 class="text-xl font-bold text-gray-900 mr-3">
-                <i class="fas fa-door-open text-pink-600 mr-2"></i>${roomName}
+            <h2 class="text-base font-semibold text-gray-900 mr-2 flex items-center">
+                <i class="fas fa-door-open text-pink-500 mr-2 text-sm"></i><span class="truncate">${roomName}</span>
             </h2>
-            <span class="px-3 py-1 text-xs font-semibold rounded-full bg-pink-100 text-pink-800">
+            <span class="px-2 py-0.5 text-[11px] font-medium rounded-full bg-pink-50 text-pink-700">
                 ${roomScenes.length} scene${roomScenes.length !== 1 ? 's' : ''}
             </span>
         `;
         roomSection.appendChild(roomHeader);
         
         const scenesGrid = document.createElement('div');
-        scenesGrid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4';
+        scenesGrid.className = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3';
         
         roomScenes.forEach(scene => {
             const sceneCard = document.createElement('div');
-            sceneCard.className = 'bg-white rounded-xl p-6 shadow-lg hover:shadow-xl transition-all duration-300 border-2 border-pink-100 hover:border-pink-400 cursor-pointer';
+            sceneCard.className = 'bg-white rounded-lg p-3 shadow-sm hover:shadow-md transition-all duration-200 border border-transparent hover:border-pink-200 cursor-pointer flex flex-col items-stretch';
             sceneCard.setAttribute('data-scene-id', scene.id);
             
             sceneCard.innerHTML = `
-                <div class="flex items-start justify-between mb-4">
-                    <div class="w-12 h-12 rounded-lg bg-gradient-to-br from-pink-400 to-pink-600 flex items-center justify-center shadow-lg">
-                        <i class="fas fa-palette text-xl text-white"></i>
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-9 h-9 rounded-md bg-gradient-to-br from-pink-400 to-pink-600 flex items-center justify-center text-white text-sm">
+                        <i class="fas fa-palette text-sm"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="text-sm font-medium text-gray-900 truncate">${scene.name}</div>
                     </div>
                 </div>
-                <h3 class="text-lg font-bold text-gray-900 mb-3">${scene.name}</h3>
-                <button onclick="activateScene('${scene.id}', '${scene.name.replace(/'/g, "\\'")}', event)" class="w-full px-4 py-2 bg-pink-600 text-white text-sm rounded-lg hover:bg-pink-700 transition-colors">
-                    <i class="fas fa-play mr-2"></i>Activate Scene
-                </button>
+                <div class="mt-auto flex items-center text-center justify-start gap-3">
+                    <button onclick="activateScene('${scene.id}', '${scene.name.replace(/'/g, "\\'")}', event)" class="w-full flex  justify-center px-3 py-1.5 bg-pink-600 text-white text-xs rounded-md hover:bg-pink-700 transition-colors inline-flex items-center">
+                        <i class="fas fa-play mr-1 text-xs"></i>Activate
+                    </button>
+                </div>
             `;
             
             scenesGrid.appendChild(sceneCard);
@@ -182,20 +200,60 @@ function activateScene(sceneId, sceneName, event) {
         } else {
             btn.innerHTML = originalContent;
             btn.disabled = false;
-            alert('Failed to activate scene: ' + (data.error || 'Unknown error'));
+            showToast('Error', 'Failed to activate scene: ' + (data.error || 'Unknown error'), 'error');
         }
     })
     .catch(err => {
         console.error('Error activating scene:', err);
         btn.innerHTML = originalContent;
         btn.disabled = false;
-        alert('Failed to activate scene');
+        showToast('Error', 'Failed to activate scene', 'error');
     });
 }
 
 function showError(message) {
     document.getElementById('error-message').textContent = message;
     document.getElementById('error-state').classList.remove('hidden');
+}
+
+function showToast(title, message, type = 'success') {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    const icon = document.getElementById('toast-icon');
+    const titleEl = document.getElementById('toast-title');
+    const messageEl = document.getElementById('toast-message');
+    if (!toast || !toastContainer) return;
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    if (type === 'success') {
+        icon.className = 'fas fa-check-circle text-2xl text-green-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0';
+    } else if (type === 'error') {
+        icon.className = 'fas fa-exclamation-circle text-2xl text-red-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-red-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-red-50 translate-x-full opacity-0';
+    } else if (type === 'warning') {
+        icon.className = 'fas fa-exclamation-triangle text-2xl text-yellow-500';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-yellow-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-yellow-50 translate-x-full opacity-0';
+    } else if (type === 'info') {
+        icon.className = 'fas fa-info-circle text-2xl text-blue-600';
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-blue-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-blue-50 translate-x-full opacity-0';
+    }
+    toast.classList.remove('hidden');
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toastContainer.classList.remove('translate-x-full', 'opacity-0');
+            toastContainer.classList.add('translate-x-0', 'opacity-100');
+        });
+    });
+    setTimeout(() => { hideToast(); }, 4000);
+}
+function hideToast() {
+    const toast = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    if (!toast || !toastContainer) return;
+    toastContainer.classList.remove('translate-x-0', 'opacity-100');
+    toastContainer.classList.add('translate-x-full', 'opacity-0');
+    setTimeout(() => { toast.classList.add('hidden'); }, 300);
 }
 </script>
 {% endblock %}

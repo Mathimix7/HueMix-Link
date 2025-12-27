@@ -223,9 +223,9 @@ create_venv_and_deps() {
   else
     log "Using existing virtualenv"
   fi
-  run "$VENV/bin/python" -m pip install --upgrade pip setuptools wheel
+  run "$VENV/bin/python" -m pip install --upgrade pip setuptools wheel --quiet
   if [ -f "$APP_DIR/requirements.txt" ]; then
-    run "$VENV/bin/python" -m pip install -r "$APP_DIR/requirements.txt"
+    run "$VENV/bin/python" -m pip install -r "$APP_DIR/requirements.txt" --quiet
   else
     log "No requirements.txt found; skipping pip install"
   fi
@@ -293,8 +293,9 @@ setup_proxy() {
 
   # Ensure persistence
   if ! dpkg -s iptables-persistent >/dev/null 2>&1; then
-    run DEBIAN_FRONTEND=noninteractive apt-get update -y
-    run DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+    export DEBIAN_FRONTEND=noninteractive
+    run apt-get update -y
+    run apt-get install -y iptables-persistent
   fi
   if [ -f /etc/iptables/rules.v4 ]; then
     log "Backing up existing iptables rules to /etc/iptables/rules.v4.bak"
@@ -384,7 +385,7 @@ uninstall() {
   if command -v iptables >/dev/null 2>&1; then
     iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null && \
       run iptables -t nat -D PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 && \
-      run iptables-save > /etc/iptables/rules.v4
+      [ -f /etc/iptables/rules.v4 ] && run iptables-save > /etc/iptables/rules.v4
   fi
   log "Uninstall complete"
 }

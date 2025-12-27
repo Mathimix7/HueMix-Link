@@ -170,10 +170,10 @@
     // Initial load
     loadRoomsData();
 
-    // Auto-refresh every 5 seconds
-    // setInterval(() => {
-    //     saveScrollPosition();
-    //     loadRoomsData().then(restoreScrollPosition);
-    // }, 5000);
+    // Auto-refresh every 3 seconds
+    setInterval(() => {
+        saveScrollPosition();
+        loadRoomsData().then(restoreScrollPosition);
+    }, 3000);
 </script>
 {% endblock %}

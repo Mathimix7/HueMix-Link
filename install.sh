@@ -15,6 +15,7 @@ NO_RESTART=0
 ASSUME_YES=0
 LOCAL=0
 EXT_PORT=5001
+OLD_HOSTNAME_FILE="$APP_DIR/.prev-hostname"
 
 # Colors for nicer output
 bold=$(echo -en "\e[1m")
@@ -31,7 +32,6 @@ reset=$(echo -en "\e[0m")
 # Message helpers with visual markers and distinct colors
 log()  { printf '%b\n' "${blue}● ${reset}${white}$*${reset}" >&2; }
 die()  { printf '%b\n' "${bold}${red}ERROR:${reset} ${red}$*${reset}" >&2; exit 1; }
-
 success() { printf '%b\n' "${green}${reset}${white}$*${reset}" >&2; }
 warn()    { printf '%b\n' "${yellow}${reset}${white}$*${reset}" >&2; }
 debug()   { printf '%b\n' "${gray}$*${reset}" >&2; }
@@ -47,6 +47,7 @@ print_header() {
   fi
   printf '%b\n' "${yellow}=====================================================${reset}"
 }
+
 run() {
   if [ "$DRY_RUN" -eq 1 ]; then
     log "DRY-RUN: $*"; return 0
@@ -282,39 +283,18 @@ setup_proxy() {
 
   log "Setting up local port forward: ${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
 
-  # Check for iptables
-  if ! command -v iptables >/dev/null 2>&1; then
-    warn "iptables not found; cannot create port-forward. Please install iptables or run a proxy manually."
-    return 0
-  fi
+  command -v iptables >/dev/null 2>&1 || { warn "iptables not found"; return; }
 
-  # Validate port numbers
-  if ! printf '%s' "${EXT_PORT}" | grep -qE '^[0-9]+$'; then
-    die "Invalid --port value: ${EXT_PORT}"
-  fi
-
-  # Add NAT rule if not present
-  if iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports "${TARGET_PORT}" 2>/dev/null; then
-    log "Port-forward rule already exists"
-  else
+  iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports "${TARGET_PORT}" 2>/dev/null || \
     run iptables -t nat -A PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports "${TARGET_PORT}"
-    log "Added iptables NAT rule for port ${EXT_PORT} -> ${TARGET_PORT}"
-  fi
 
-  # Persist rules on Debian/Ubuntu using iptables-persistent if available
-  if command -v apt >/dev/null 2>&1; then
-    if ! dpkg -s iptables-persistent >/dev/null 2>&1; then
-      log "Installing iptables-persistent to save rules"
-      run DEBIAN_FRONTEND=noninteractive apt-get update -y || true
-      run DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent || true
-    fi
-    # Save current rules
-    run mkdir -p /etc/iptables || true
-    run iptables-save > /etc/iptables/rules.v4 || true
-    log "Saved iptables rules to /etc/iptables/rules.v4"
-  else
-    debug "Non-apt system; iptables rule will not be persisted automatically"
+  # Ensure persistence
+  if ! dpkg -s iptables-persistent >/dev/null 2>&1; then
+    run DEBIAN_FRONTEND=noninteractive apt-get update -y
+    run DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
   fi
+  run iptables-save > /etc/iptables/rules.v4
+  success "iptables NAT rules saved and persistent"
 }
 
 service_update_finish() {
@@ -346,109 +326,55 @@ service_update_finish() {
 }
 
 setup_local_domain() {
-  # Add a local /etc/hosts entry for huemixlink.local
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "DRY-RUN: would install Avahi to advertise huemixlink.local"
-    return 0
-  fi
+  [ "$DRY_RUN" -eq 1 ] && { log "DRY-RUN: would setup Avahi"; return; }
 
-  # Install Avahi (Linux) if not present
-  if ! command -v avahi-daemon >/dev/null 2>&1; then
-    log "Installing Avahi to enable .local hostname resolution"
-    if command -v apt >/dev/null 2>&1; then
-      run apt update -y
-      run apt install -y avahi-daemon avahi-utils
-    elif command -v yum >/dev/null 2>&1; then
-      run yum install -y avahi avahi-tools nss-mdns
-    else
-      warn "Cannot automatically install Avahi; please install manually"
-      return 1
-    fi
-  fi
+  [ ! -d "$APP_DIR" ] && mkdir -p "$APP_DIR"
+  [ ! -f "$OLD_HOSTNAME_FILE" ] && hostnamectl --static > "$OLD_HOSTNAME_FILE"
 
-  # Set hostname
+  # Install Avahi
+  command -v avahi-daemon >/dev/null 2>&1 || run apt update -y && run apt install -y avahi-daemon avahi-utils
+
   run hostnamectl set-hostname huemixlink
-
-  # Enable and start Avahi
   run systemctl enable avahi-daemon --now
-
-  success "huemixlink.local is now advertised via mDNS on your LAN"
+  success "huemixlink.local advertised via mDNS"
 }
 
 cleanup_local_domain() {
-  CURRENT_HOST=$(hostnamectl --static 2>/dev/null || hostname)
-  if [ "$CURRENT_HOST" != "huemixlink" ]; then
-    return 0
-  fi
+  CURRENT_HOST=$(hostnamectl --static)
+  [ "$CURRENT_HOST" != "huemixlink" ] && return
+  confirm "Remove huemixlink.local (Avahi) and restore hostname?" || { log "Skipping"; return; }
 
-  if ! confirm "Do you want to remove huemixlink.local mDNS (Avahi) setup and restore hostname?"; then
-    log "Skipping Avahi/mDNS cleanup"
-    return 0
-  fi
+  # Restore old hostname
+  [ -f "$OLD_HOSTNAME_FILE" ] && { run hostnamectl set-hostname "$(cat "$OLD_HOSTNAME_FILE")"; rm -f "$OLD_HOSTNAME_FILE"; success "Hostname restored"; }
 
-  # Stop and disable Avahi
-  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q avahi-daemon; then
-    log "Stopping and disabling Avahi daemon"
-    run systemctl stop avahi-daemon || true
-    run systemctl disable avahi-daemon || true
-    success "Avahi daemon stopped and disabled"
-  fi
-
-  if command -v apt >/dev/null 2>&1; then
-    run apt remove -y avahi-daemon avahi-utils || true
-  elif command -v yum >/dev/null 2>&1; then
-    run yum remove -y avahi avahi-tools || true
-  fi
+  # Stop Avahi
+  systemctl list-unit-files | grep -q avahi-daemon && run systemctl stop avahi-daemon || true
+  run systemctl disable avahi-daemon || true
 }
 
 uninstall() {
-  log "Uninstalling ${SERVICE_NAME}"
-  if command -v systemctl >/dev/null 2>&1; then
-    run systemctl stop "${SERVICE_NAME}.service" || true
-    run systemctl disable "${SERVICE_NAME}.service" || true
-    run rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-    run systemctl daemon-reload || true
-  fi
-  if [ -d "$APP_DIR" ]; then
-    if confirm "Remove application directory $APP_DIR (this will delete all data)?"; then
-      run rm -rf "$APP_DIR"
-    else
-      log "Skipping removal of $APP_DIR"
-    fi
-  fi
-  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
-    if confirm "Remove service user $SERVICE_USER?"; then
-      if command -v userdel >/dev/null 2>&1; then
-        run userdel "$SERVICE_USER" || true
-      fi
-    fi
-  fi
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "DRY-RUN: would remove huemixlink hosts entry if present"
+  if [ ! -d "$APP_DIR" ] && ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}.service" && ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    log "${SERVICE_NAME} does not appear to be installed. Nothing to uninstall."
     return 0
-  else
-    cleanup_local_domain
   fi
-  # Remove iptables NAT rule if present (forwarding external port to internal Flask)
-  if [ "$DRY_RUN" -eq 1 ]; then
-    if command -v iptables >/dev/null 2>&1; then
-      if iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null; then
-        log "DRY-RUN: would remove iptables NAT rule for port ${EXT_PORT}"
-      fi
-    fi
-  else
-    if command -v iptables >/dev/null 2>&1; then
-      if iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null; then
-        log "Removing iptables NAT rule for port ${EXT_PORT}"
-        run iptables -t nat -D PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 || true
-        # Save rules if iptables-persistent exists
-        if [ -f /etc/iptables/rules.v4 ]; then
-          run iptables-save > /etc/iptables/rules.v4 || true
-        fi
-      fi
-    fi
-  fi
+  
+  confirm "Are you sure you want to completely uninstall ${SERVICE_NAME} and remove all files, users, and system modifications?" || { log "Uninstall aborted"; return; }
+
+  log "Uninstalling ${SERVICE_NAME}"
+  run systemctl stop "${SERVICE_NAME}.service" || true
+  run systemctl disable "${SERVICE_NAME}.service" || true
+  run rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+  run systemctl daemon-reload || true
+
+  [ -d "$APP_DIR" ] && confirm "Remove $APP_DIR?" && run rm -rf "$APP_DIR"
+
+  id -u "$SERVICE_USER" >/dev/null 2>&1 && confirm "Remove service user $SERVICE_USER?" && run userdel "$SERVICE_USER" || true
+
+  cleanup_local_domain
+
+  command -v iptables >/dev/null 2>&1 && iptables -t nat -C PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 2>/dev/null && \
+    run iptables -t nat -D PREROUTING -p tcp --dport "${EXT_PORT}" -j REDIRECT --to-ports 5001 && run iptables-save > /etc/iptables/rules.v4
+
   log "Uninstall complete"
 }
 
@@ -456,44 +382,21 @@ main_install() {
   ensure_root
   print_header
   detect_python
+
   SOURCE=$(get_repo_version)
   INSTALLED=""
-  if [ -f "$APP_DIR/VERSION" ]; then
-    INSTALLED=$(head -n 1 "$APP_DIR/VERSION" 2>/dev/null || echo "")
-  fi
+  [ -f "$APP_DIR/VERSION" ] && INSTALLED=$(head -n 1 "$APP_DIR/VERSION" 2>/dev/null || echo "")
+
   if [ -n "$SOURCE" ]; then
     if [ -n "$INSTALLED" ] && [ "$INSTALLED" != "$SOURCE" ]; then
-      log "Updating from version ${magenta}v${INSTALLED}${reset} to ${magenta}v${SOURCE}${reset}"
+      log "Updating v${INSTALLED} -> v${SOURCE}"
     elif [ -z "$INSTALLED" ]; then
-      log "Installing version ${magenta}v${SOURCE}${reset}"
+      log "Installing v${SOURCE}"
     else
-      if [ "$FORCE" -eq 1 ]; then
-        warn "Version ${magenta}v${SOURCE}${reset} already installed — forcing reinstall"
-      else
-        log "Version ${magenta}v${SOURCE}${reset} already installed; use ${gray}--force${reset} to reinstall"
-        return 0
-      fi
-    fi
-  else
-    log "Installing HueMix-Link to ${APP_DIR} using ${PYTHON_BIN}"
-  fi
-  # Detect existing service and stop if active (unless --no-restart)
-  WAS_ACTIVE=0
-  SERVICE_EXISTS=0
-  if command -v systemctl >/dev/null 2>&1; then
-    if systemctl list-unit-files | grep -q "^${SERVICE_NAME}.service"; then
-      SERVICE_EXISTS=1
-    fi
-    if [ "$SERVICE_EXISTS" -eq 1 ] && systemctl is-active --quiet "${SERVICE_NAME}.service"; then
-      WAS_ACTIVE=1
-      if [ "$NO_RESTART" -eq 0 ]; then
-        log "Stopping existing service ${SERVICE_NAME}.service for update"
-        run systemctl stop "${SERVICE_NAME}.service" || true
-      else
-        log "--no-restart specified; leaving service running"
-      fi
+      [ "$FORCE" -eq 1 ] && warn "Reinstalling v${SOURCE}" || { log "Already installed. Use --force"; return; }
     fi
   fi
+
   create_service_user
   copy_files
   create_venv_and_deps
@@ -510,6 +413,7 @@ main_install() {
 
 # Entry
 parse_args "$@"
+
 if [ "${MODE:-install}" = uninstall ]; then
   ensure_root
   uninstall

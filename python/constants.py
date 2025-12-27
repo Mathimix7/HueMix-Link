@@ -8,7 +8,7 @@ Centralizes all magic numbers, packet types, limits, and default values.
 DEFAULT_UDP_IP = "0.0.0.0"
 DEFAULT_UDP_PORT = 7777
 DEFAULT_GATEWAY_PORT = 4210
-DEFAULT_WEB_PORT = 5000
+DEFAULT_WEB_PORT = 5001
 
 # ===== Packet Types =====
 PKT_PAIR_CONFIRM = 0x01

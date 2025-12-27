@@ -7,7 +7,7 @@ from services.home_id_manager import home_id_manager
 from services.automation_service import automation_service
 from network.network_server import network_server
 from network.pairing_manager import pairing_manager
-from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY
+from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY, DEFAULT_WEB_PORT
 from waitress import serve
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,6 @@ if __name__ == '__main__':
 
         # Load configuration
         udp_port = config_manager.get_udp_port()
-        web_port = config_manager.get_web_port()
         
         # Configure and start UDP network server
         logger.info(f"Starting UDP network server on port {udp_port}...")
@@ -58,9 +57,9 @@ if __name__ == '__main__':
         automation_service.set_network_server(network_server)
         automation_service.start()
         
-        # Start Flask web server (blocking)
-        logger.info(f"Starting Flask web server on port {web_port}...")
-        serve(app, host='0.0.0.0', port=web_port, threads=8)
+        # Start Flask web server (blocking) — bind to localhost only; proxy will expose externally
+        logger.info(f"Starting Flask web server on port {DEFAULT_WEB_PORT} (127.0.0.1)...")
+        serve(app, host='127.0.0.1', port=DEFAULT_WEB_PORT, threads=8)
         
     except KeyboardInterrupt:
         logger.info("Shutting down...")

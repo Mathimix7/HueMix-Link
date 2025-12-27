@@ -233,10 +233,8 @@ create_venv_and_deps() {
 
 setup_permissions() {
   log "Setting ownership and permissions"
+  run mkdir -p "$APP_DIR/data"
   run chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR"
-
-  [ ! -d "$APP_DIR/data" ] && run mkdir -p "$APP_DIR/data"
-
   run find "$APP_DIR/data" -type d -exec chmod 750 {} + 2>/dev/null || true
   run find "$APP_DIR/data" -type f -exec chmod 640 {} + 2>/dev/null || true
 }

@@ -19,10 +19,12 @@
   #define PIN_BTN  D2
   #define PIN_AUX  D1
   #define PIN_LED  D4
+  #define LED_ACTIVE_HIGH LOW
 #else  // ESP32
   #define PIN_BTN  12
   #define PIN_AUX  13
   #define PIN_LED  18
+  #define LED_ACTIVE_HIGH HIGH
 #endif
 
 #define HOLD_TIME     500
@@ -55,15 +57,15 @@ bool ledActive = false;
 #endif
 
 void triggerLed(int duration) {
-  digitalWrite(PIN_LED, HIGH);
+  digitalWrite(PIN_LED, LED_ACTIVE_HIGH);
   ledActive = true;
   ledTimer = millis() + duration;
 }
 
 void ledBlink(int times, int delayMs) {
   for(int i=0; i<times; i++) {
-    digitalWrite(PIN_LED, HIGH); delay(delayMs);
-    digitalWrite(PIN_LED, LOW); delay(delayMs);
+    digitalWrite(PIN_LED, LED_ACTIVE_HIGH); delay(delayMs);
+    digitalWrite(PIN_LED, !LED_ACTIVE_HIGH); delay(delayMs);
   }
 }
 
@@ -254,7 +256,7 @@ void sendPacket(uint8_t type, uint8_t action) {
 #if defined(ESP32)
 void goToSleep() {
   delay(100);
-  digitalWrite(PIN_LED, LOW);
+  digitalWrite(PIN_LED, !LED_ACTIVE_HIGH);
   pinMode(PIN_LED, INPUT);
   WiFi.mode(WIFI_OFF);
   btStop();
@@ -270,7 +272,7 @@ void setup() {
   pinMode(PIN_BTN, INPUT_PULLUP);
   pinMode(PIN_AUX, INPUT_PULLUP);
   pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, LOW);
+  digitalWrite(PIN_LED, !LED_ACTIVE_HIGH);
   
   Serial.begin(115200);
   Serial.println("\n--- BUTTON WAKE ---");
@@ -320,7 +322,7 @@ void loop() {
 
   if (ledActive) {
     if (millis() > ledTimer) {
-      digitalWrite(PIN_LED, LOW);
+      digitalWrite(PIN_LED, !LED_ACTIVE_HIGH);
       ledActive = false;
     }
   }

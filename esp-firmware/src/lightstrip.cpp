@@ -20,7 +20,7 @@
 
 // Option 2: RGBW Strip
 // #define IS_RGBW  true
-// #define LED_TYPE WS2812B
+// #define LED_TYPE SK6812
 // #define COLOR_ORDER GRB 
 
 // --- PLATFORM SETUP ---

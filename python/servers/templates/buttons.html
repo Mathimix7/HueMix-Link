@@ -718,8 +718,37 @@ function toggleScene(scene) {
     if (index > -1) {
         selectedScenes.splice(index, 1);
     } else {
-        selectedScenes.push(scene);
+        selectedScenes.push(scene);        
+        fetch(`/api/scenes/${scene.id}/activate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Show visual feedback
+                const card = document.getElementById(`scene-${scene.id}`);
+                if (card) {
+                    const originalClasses = card.className;
+                    card.className = 'border-2 border-green-500 bg-green-50 rounded-lg p-3 cursor-pointer transition-colors scene-card';
+                    setTimeout(() => {
+                        card.className = originalClasses;
+                        // Re-apply selected state if this scene is selected
+                        if (selectedScenes.findIndex(s => s.id === scene.id) > -1) {
+                            card.className = 'border-2 border-pink-500 bg-pink-50 rounded-lg p-3 cursor-pointer transition-colors scene-card';
+                        }
+                    }, 1000);
+                }
+            } else {
+                showToast('Error', 'Failed to activate scene: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error activating scene:', err);
+            showToast('Error', 'Failed to activate scene', 'error');
+        });
     }
+    
     renderSelectedScenes();
     updateSceneCardStates();
 }

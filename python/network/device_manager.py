@@ -4,10 +4,11 @@ Device manager for tracking gateways, buttons, and lightstrips with routing inte
 Manages device registry in JSON files with delivery-based gateway failover logic.
 """
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from datetime import datetime
 from services.data_manager import data_manager
 from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class DeviceManager:
             else:
                 # Create new gateway
                 gateway = {
-                    'id': str(len(servers) + 1),
+                    'id': uuid.uuid4().hex,
                     'name': f"Gateway {wifi_mac[-8:]}",
                     'mac_address': wifi_mac.upper(),
                     'radio_mac': radio_mac.upper(),
@@ -192,7 +193,7 @@ class DeviceManager:
             
             # Create new entry
             new_strip = {
-                'id': str(len(strips) + 1),
+                'id': uuid.uuid4().hex,
                 'name': name,
                 'mac_address': mac_address.upper(),
                 'type': 'led_strip',
@@ -266,7 +267,7 @@ class DeviceManager:
             
             # Create new entry
             new_button = {
-                'id': str(len(buttons) + 1),
+                'id': uuid.uuid4().hex,
                 'name': name,
                 'mac_address': mac_address.upper(),
                 'configured': False,

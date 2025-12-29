@@ -107,6 +107,30 @@ class HueStateManager:
         with self._lock:
             return {lid: state.copy() for lid, state in self._lights.items()}
     
+    def remove_light(self, light_id: str) -> bool:
+        """Remove a light from state tracking.
+        
+        Args:
+            light_id: Hue light ID to remove
+            
+        Returns:
+            True if light was removed, False if it didn't exist
+        """
+        with self._lock:
+            if light_id in self._lights:
+                # Remove light from any room it belongs to
+                room_id = self._lights[light_id].get('room_id')
+                if room_id and room_id in self._rooms:
+                    room_lights = self._rooms[room_id].get('lights', [])
+                    if light_id in room_lights:
+                        room_lights.remove(light_id)
+                        self._update_room_aggregate(room_id)
+                
+                del self._lights[light_id]
+                logger.info(f"Light {light_id} removed from state manager")
+                return True
+            return False
+    
     def get_room_id_from_grouped_light(self, grouped_light_id: str) -> Optional[str]:
         """
         Get the room ID associated with a grouped_light ID.
@@ -198,6 +222,27 @@ class HueStateManager:
         with self._lock:
             return {rid: state.copy() for rid, state in self._rooms.items()}
     
+    def remove_room(self, room_id: str) -> bool:
+        """Remove a room from state tracking.
+        
+        Args:
+            room_id: Hue room ID to remove
+            
+        Returns:
+            True if room was removed, False if it didn't exist
+        """
+        with self._lock:
+            if room_id in self._rooms:
+                # Remove grouped_light_id mapping
+                grouped_light_id = self._rooms[room_id].get('grouped_light_id')
+                if grouped_light_id and grouped_light_id in self._grouped_light_to_room:
+                    del self._grouped_light_to_room[grouped_light_id]
+                
+                del self._rooms[room_id]
+                logger.info(f"Room {room_id} removed from state manager")
+                return True
+            return False
+    
     def _update_room_aggregate(self, room_id: str):
         """Update aggregate room state based on its lights."""
         if room_id not in self._rooms:
@@ -251,6 +296,35 @@ class HueStateManager:
         """Get scene metadata."""
         with self._lock:
             return self._scenes.get(scene_id, {}).copy() if scene_id in self._scenes else None
+    
+    def remove_scene(self, scene_id: str) -> bool:
+        """Remove a scene from state tracking.
+        
+        Args:
+            scene_id: Hue scene ID to remove
+            
+        Returns:
+            True if scene was removed, False if it didn't exist
+        """
+        with self._lock:
+            if scene_id in self._scenes:
+                # Clear scene from any room if it's currently active
+                scene_info = self._scenes[scene_id]
+                room_id = scene_info.get('room_id')
+                if room_id and room_id in self._rooms:
+                    if self._rooms[room_id].get('current_scene_id') == scene_id:
+                        self._rooms[room_id]['current_scene_id'] = None
+                        logger.info(f"Cleared active scene {scene_id} from room {room_id}")
+                
+                del self._scenes[scene_id]
+                logger.info(f"Scene {scene_id} removed from state manager")
+                return True
+            return False
+
+    def get_all_scenes(self) -> Dict[str, Dict]:
+        """Get all registered scenes."""
+        with self._lock:
+            return {sid: data.copy() for sid, data in self._scenes.items()}
     
     # Subscription Management
     

@@ -7,6 +7,9 @@ from network.network_server import network_server
 from network.device_manager import device_manager
 from network.pairing_manager import pairing_manager
 from services.automation_service import automation_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 

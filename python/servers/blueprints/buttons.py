@@ -2,6 +2,10 @@
 from flask import Blueprint, render_template, request, jsonify
 from services import data_manager, config_notifier
 from constants import FILE_BUTTONS
+from services.hue_service import hue_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 buttons_bp = Blueprint('buttons', __name__, url_prefix='/buttons')
 
@@ -14,6 +18,50 @@ def get_buttons():
 def save_buttons(buttons):
     """Save buttons to JSON file."""
     data_manager.write_json(FILE_BUTTONS, buttons)
+
+
+def cleanup_deleted_scenes(valid_scene_ids):
+    """
+    Remove deleted scenes from all button configurations.
+    
+    Args:
+        valid_scene_ids: Set of scene IDs that currently exist in Hue
+    
+    Returns:
+        Number of buttons that were updated
+    """
+    buttons = get_buttons()
+    updated_count = 0
+    
+    for button in buttons:
+        if button.get('configured') and button.get('config'):
+            config = button['config']
+            original_scenes = config.get('scenes', [])
+            
+            if original_scenes:
+                # Filter out scenes that no longer exist
+                valid_scenes = [scene_id for scene_id in original_scenes if scene_id in valid_scene_ids]
+                
+                # Check if any scenes were removed
+                if len(valid_scenes) != len(original_scenes):
+                    removed = set(original_scenes) - set(valid_scenes)
+                    logger.info(f"Button {button['name']} ({button['id']}): Removed {len(removed)} deleted scene(s): {removed}")
+                    
+                    config['scenes'] = valid_scenes
+                    
+                    # If no scenes left, mark as not configured
+                    if not valid_scenes:
+                        button['configured'] = False
+                        button['config'] = None
+                        logger.info(f"Button {button['name']} ({button['id']}): No valid scenes remaining, marking as unconfigured")
+                    
+                    updated_count += 1
+    
+    if updated_count > 0:
+        save_buttons(buttons)
+        logger.info(f"Cleaned up {updated_count} button configuration(s)")
+    
+    return updated_count
 
 
 def get_button_config(device_id):
@@ -128,3 +176,28 @@ def delete_device(device_id):
     })
     
     return jsonify({"success": True, "message": "Device deleted successfully"})
+
+
+def validate_scenes_at_startup():
+    """Validate button scene configurations at startup against current Hue scenes."""
+    try:        
+        hue = hue_service.get_controller()
+        if not hue:
+            logger.info("Hue Bridge not configured, skipping startup scene validation")
+            return
+        
+        # Get all current scenes from Hue
+        all_scenes = hue.get_scenes()
+        valid_scene_ids = {scene["id"] for scene in all_scenes}
+        
+        # Clean up button configurations
+        updated_count = cleanup_deleted_scenes(valid_scene_ids)
+        
+        if updated_count > 0:
+            logger.info(f"Startup validation: Cleaned up {updated_count} button configuration(s) with deleted scenes")
+        else:
+            logger.info("Startup validation: All button configurations are valid")
+    
+    except Exception as e:
+        logger.error(f"Error during startup scene validation: {e}", exc_info=True)
+

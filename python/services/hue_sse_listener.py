@@ -204,8 +204,19 @@ class HueSSEListener:
                 for event_obj in event:
                     if isinstance(event_obj, dict) and 'data' in event_obj:
                         data_items = event_obj.get('data', [])
-                        for item in data_items:
-                            self._process_item(item)
+                        event_type = event_obj.get('type', 'unknown')
+                        print(f"Processing SSE event type: {event_type} with {len(data_items)} items")
+                        if event_type == 'update':
+                            for item in data_items:
+                                self._process_update(item)
+                        elif event_type == 'add':
+                            for item in data_items:
+                                self._process_add(item)
+                        elif event_type == 'delete':
+                            for item in data_items:
+                                self._process_delete(item)
+                        elif event_type == 'error':
+                            logger.error(f"Hue SSE error event: {data_items}")
             else:
                 # Fallback for unexpected structure
                 logger.warning(f"Unexpected SSE event structure: {type(event)}")
@@ -215,7 +226,7 @@ class HueSSEListener:
         except Exception as e:
             logger.error(f"Error handling SSE event: {e}", exc_info=True)
     
-    def _process_item(self, item: dict):
+    def _process_update(self, item: dict):
         """Process a single data item from SSE event."""
         try:
             item_type = item.get('type')
@@ -238,6 +249,148 @@ class HueSSEListener:
         
         except Exception as e:
             logger.error(f"Error processing item {item.get('id')}: {e}", exc_info=True)
+    
+    def _process_add(self, item: dict):
+        """Process add events for new resources."""
+        try:
+            item_type = item.get('type')
+            item_id = item.get('id')
+
+            logger.info(f"Addition event: type={item_type}, id={item_id}")
+
+            if item_type == 'light':
+                self._handle_light_update(item_id, item)
+            
+            elif item_type == 'grouped_light':
+                self._handle_grouped_light_update(item_id, item)
+            
+            elif item_type == 'scene':
+                self._handle_scene_addition(item_id, item)
+            
+            elif item_type == 'room':
+                self._handle_room_addition(item_id, item)
+            
+            else:
+                logger.debug(f"Ignoring addition of type: {item_type}")
+        
+        except Exception as e:
+            logger.error(f"Error processing addition for {item.get('type')} {item.get('id')}: {e}", exc_info=True)
+    
+    def _process_delete(self, item: dict):
+        """Process deletion events for any resource type."""
+        try:
+            item_type = item.get('type')
+            item_id = item.get('id')
+            
+            logger.debug(f"Deletion event: type={item_type}, id={item_id}")
+
+            if item_type == 'light':
+                self._handle_light_deletion(item_id)
+            elif item_type == 'grouped_light':
+                self._handle_grouped_light_deletion(item_id)
+            elif item_type == 'scene':
+                self._handle_scene_deletion(item_id)
+            elif item_type == 'room':
+                self._handle_room_deletion(item_id)
+            else:
+                logger.debug(f"Ignoring deletion of type: {item_type}")
+        
+        except Exception as e:
+            logger.error(f"Error processing deletion for {item_type} {item_id}: {e}", exc_info=True)
+    
+    def _handle_scene_deletion(self, scene_id: str):
+        """Handle scene deletion from SSE."""
+        try:
+            logger.info(f"Scene deletion detected: {scene_id}")
+            
+            hue_state_manager.remove_scene(scene_id)
+            
+            all_scenes = hue_state_manager.get_all_scenes()
+            valid_scene_ids = set(all_scenes)
+
+            from servers.blueprints.buttons import cleanup_deleted_scenes
+            updated_count = cleanup_deleted_scenes(valid_scene_ids)
+            
+            if updated_count > 0:
+                logger.info(f"Updated {updated_count} button configuration(s) after scene deletion")
+        
+        except Exception as e:
+            logger.error(f"Error handling scene deletion {scene_id}: {e}", exc_info=True)
+    
+    def _handle_light_deletion(self, light_id: str):
+        """Handle light deletion from SSE."""
+        try:
+            logger.info(f"Light deletion detected: {light_id}")
+            hue_state_manager.remove_light(light_id)
+        
+        except Exception as e:
+            logger.error(f"Error handling light deletion {light_id}: {e}", exc_info=True)
+    
+    def _handle_grouped_light_deletion(self, grouped_light_id: str):
+        """Handle grouped_light deletion from SSE."""
+        try:
+            logger.info(f"Grouped light deletion detected: {grouped_light_id}")
+            room_id = hue_state_manager.get_room_id_from_grouped_light(grouped_light_id)
+            if room_id:
+                logger.debug(f"Grouped light {grouped_light_id} was for room {room_id}")
+        
+        except Exception as e:
+            logger.error(f"Error handling grouped_light deletion {grouped_light_id}: {e}", exc_info=True)
+    
+    def _handle_room_deletion(self, room_id: str):
+        """Handle room deletion from SSE."""
+        try:
+            logger.info(f"Room deletion detected: {room_id}")
+            hue_state_manager.remove_room(room_id)
+        
+        except Exception as e:
+            logger.error(f"Error handling room deletion {room_id}: {e}", exc_info=True)
+    
+    def _handle_scene_addition(self, scene_id: str, data: dict):
+        """Handle new scene added from SSE."""
+        try:
+            logger.info(f"Scene addition detected: {scene_id}")
+            
+            # Extract scene metadata
+            scene_name = data.get('metadata', {}).get('name', 'Unknown')
+            group_info = data.get('group', {})
+            room_id = group_info.get('rid')
+            
+            # Register the new scene
+            hue_state_manager.register_scene(scene_id, {
+                'name': scene_name,
+                'room_id': room_id
+            })
+            logger.info(f"Registered new scene {scene_id} ({scene_name}) for room {room_id}")
+        
+        except Exception as e:
+            logger.error(f"Error handling scene addition {scene_id}: {e}", exc_info=True)
+    
+    def _handle_room_addition(self, room_id: str, data: dict):
+        """Handle new room added from SSE."""
+        try:
+            logger.info(f"Room addition detected: {room_id}")
+            
+            # Extract room metadata
+            room_name = data.get('metadata', {}).get('name', 'Unknown')
+            
+            # Get grouped_light_id for this room
+            grouped_light_id = None
+            for service in data.get('services', []):
+                if service.get('rtype') == 'grouped_light':
+                    grouped_light_id = service.get('rid')
+                    break
+            
+            # Update room in state manager
+            hue_state_manager.update_room(
+                room_id=room_id,
+                name=room_name,
+                grouped_light_id=grouped_light_id
+            )
+            logger.info(f"Registered new room {room_id} ({room_name})")
+        
+        except Exception as e:
+            logger.error(f"Error handling room addition {room_id}: {e}", exc_info=True)
 
     
     def _handle_light_update(self, light_id: str, data: dict):
@@ -289,7 +442,7 @@ class HueSSEListener:
             logger.error(f"Error processing light update {light_id}: {e}", exc_info=True)
     
     def _handle_grouped_light_update(self, grouped_light_id: str, data: dict):
-        """Handle room/zone state update from SSE."""
+        """Handle room state update from SSE."""
         try:
             # Get the actual room ID from the grouped_light ID
             room_id = hue_state_manager.get_room_id_from_grouped_light(grouped_light_id)
@@ -350,27 +503,6 @@ class HueSSEListener:
             if scene_info:
                 room_id = scene_info.get('room_id')
                 logger.debug(f"Found room_id {room_id} from scene registry")
-            
-            # If not found in registry, try to fetch from bridge
-            if not room_id and self._hue_controller:
-                logger.info(f"Scene {scene_id} not in registry, fetching from bridge...")
-                try:
-                    scenes_data = self._hue_controller.get_scenes()
-                    for scene in scenes_data:
-                        if scene.get('id') == scene_id:
-                            scene_name = scene.get('metadata', {}).get('name', 'Unknown')
-                            group_info = scene.get('group', {})
-                            room_id = group_info.get('rid')
-                            
-                            # Register this scene for future use
-                            hue_state_manager.register_scene(scene_id, {
-                                'name': scene_name,
-                                'room_id': room_id
-                            })
-                            logger.info(f"Registered scene {scene_id} ({scene_name}) for room {room_id}")
-                            break
-                except Exception as e:
-                    logger.error(f"Failed to fetch scene data from bridge: {e}")
             
             # If we have a room_id, update the room's active scene
             if room_id:

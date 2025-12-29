@@ -247,8 +247,36 @@ def update_led_times(gateway_id):
     led_on_time = data.get('led_on_time')
     led_off_time = data.get('led_off_time')
     
+    # Allow clearing the schedule by passing None/null for both values
+    if led_on_time is None and led_off_time is None:
+        # Clear the LED schedule
+        gateways = get_gateways()
+        gateway_found = False
+        
+        for gateway in gateways:
+            if gateway['id'] == gateway_id:
+                gateway.pop('led_on_time', None)
+                gateway.pop('led_off_time', None)
+                gateway_found = True
+                break
+        
+        if not gateway_found:
+            return jsonify({"success": False, "error": "Gateway not found"}), 404
+        
+        save_gateways(gateways)
+        
+        # Turn LEDs back on when schedule is cleared
+        gateway = get_gateway_by_id(gateway_id)
+        if gateway:
+            gateway_mac = gateway.get('mac_address')
+            if gateway_mac:
+                network_server.set_gateway_leds(gateway_mac, True)
+        
+        return jsonify({"success": True, "message": "LED schedule cleared, LEDs enabled"})
+    
+    # If only one value is provided, reject
     if led_on_time is None or led_off_time is None:
-        return jsonify({"success": False, "error": "Missing led_on_time or led_off_time"}), 400
+        return jsonify({"success": False, "error": "Both led_on_time and led_off_time must be provided (or both null to clear)"}), 400
     
     # Validate hours (0-23)
     if not isinstance(led_on_time, int) or not isinstance(led_off_time, int):

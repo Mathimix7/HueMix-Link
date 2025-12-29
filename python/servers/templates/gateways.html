@@ -151,12 +151,49 @@
     </div>
 </div>
 
+<!-- Clear LED Schedule Confirmation Modal -->
+<div id="clear-led-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeClearLedModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="sm:flex sm:items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <i class="fas fa-exclamation-triangle text-yellow-600"></i>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">
+                            Clear LED Schedule
+                        </h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500">
+                                Are you sure you want to clear the LED schedule for "<span id="clear-led-gateway-name" class="font-semibold text-gray-900"></span>"? LEDs will remain on continuously.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="confirmClearLedSchedule()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-yellow-600 text-base font-medium text-white hover:bg-yellow-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Clear Schedule
+                </button>
+                <button type="button" onclick="closeClearLedModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 let gateways = [];
 let deleteGatewayId = null;
 let deleteGatewayName = null;
 let renameGatewayId = null;
 let renameGatewayName = null;
+let clearLedGatewayId = null;
+let clearLedGatewayName = null;
 
 // Toast notification functions
 function showToast(title, message, type = 'success') {
@@ -380,9 +417,17 @@ function createGatewayCard(gateway) {
         <div class="border-t border-gray-200 pt-4 space-y-4">
             <!-- LED Times -->
             <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">
-                    <i class="fas fa-lightbulb mr-1"></i>LED Schedule
-                </label>
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-medium text-gray-700">
+                        <i class="fas fa-lightbulb mr-1"></i>LED Schedule
+                    </label>
+                    ${ledOffTime && ledOnTime ? `
+                    <button onclick="openClearLedModal('${gateway.id}', '${gateway.name.replace(/'/g, "\\'").replace(/"/g, '&quot;')}')" 
+                            class="text-red-600 hover:text-red-800 transition-colors" title="Clear LED Schedule">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                    ` : ''}
+                </div>
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="text-xs text-gray-500">Off Time</label>
@@ -521,6 +566,8 @@ function updateLedTimes(gatewayId) {
     .then(data => {
         if (data.success) {
             showToast('Success!', 'LED schedule updated successfully', 'success');
+            // Reload gateways to show trash icon
+            setTimeout(() => loadGateways(), 1000);
         } else {
             showToast('Error', data.error || 'Failed to update LED schedule', 'error');
         }
@@ -533,6 +580,47 @@ function updateLedTimes(gatewayId) {
         setTimeout(() => {
             setButtonLoading(`led-btn-${gatewayId}`, `led-spinner-${gatewayId}`, false);
         }, 1500);
+    });
+}
+
+function openClearLedModal(gatewayId, gatewayName) {
+    clearLedGatewayId = gatewayId;
+    clearLedGatewayName = gatewayName;
+    document.getElementById('clear-led-gateway-name').textContent = gatewayName;
+    document.getElementById('clear-led-modal').classList.remove('hidden');
+}
+
+function closeClearLedModal() {
+    document.getElementById('clear-led-modal').classList.add('hidden');
+    clearLedGatewayId = null;
+    clearLedGatewayName = null;
+}
+
+function confirmClearLedSchedule() {
+    if (!clearLedGatewayId) return;
+    
+    fetch(`/gateways/api/gateways/${clearLedGatewayId}/led_times`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            led_off_time: null,
+            led_on_time: null
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Success!', 'LED schedule cleared', 'success');
+            closeClearLedModal();
+            // Reload gateways to reflect changes
+            setTimeout(() => loadGateways(), 1000);
+        } else {
+            showToast('Error', data.error || 'Failed to clear LED schedule', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error clearing LED times:', err);
+        showToast('Error', 'Failed to clear LED schedule', 'error');
     });
 }
 

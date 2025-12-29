@@ -205,7 +205,7 @@ class HueSSEListener:
                     if isinstance(event_obj, dict) and 'data' in event_obj:
                         data_items = event_obj.get('data', [])
                         event_type = event_obj.get('type', 'unknown')
-                        print(f"Processing SSE event type: {event_type} with {len(data_items)} items")
+                        logger.debug(f"Processing SSE event type: {event_type} with {len(data_items)} items")
                         if event_type == 'update':
                             for item in data_items:
                                 self._process_update(item)

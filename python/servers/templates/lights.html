@@ -23,7 +23,7 @@
     <div class="mb-8">
         <div class="flex items-center justify-between">
             <div>
-                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-amber-700 via-amber-500 to-amber-700 bg-clip-text text-transparent mb-1">
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-amber-600 via-amber-500 to-amber-700 bg-clip-text text-transparent mb-1">
                     All Lights
                 </h1>
                 <p class="text-gray-600">View all lights connected to your Hue Bridge</p>
@@ -80,8 +80,15 @@
 
 {% block scripts %}
 <script>
+
 window.addEventListener('DOMContentLoaded', function() {
     loadLights();
+    setInterval(() => {
+        // Only refresh if no modal is open (if you add modals in the future, adjust this check)
+        const scrollY = window.scrollY;
+        loadLights();
+        setTimeout(() => { window.scrollTo(0, scrollY); }, 0);
+    }, 3000);
 });
 
 function loadLights() {
@@ -89,7 +96,9 @@ function loadLights() {
         .then(response => response.json())
         .then(data => {
             document.getElementById('loading-state').classList.add('hidden');
-            
+
+            document.getElementById('error-state').classList.add('hidden');
+
             if (data.success && data.lights && data.lights.length > 0) {
                 displayLights(data.lights);
             } else if (data.needs_config) {
@@ -148,15 +157,15 @@ function displayLights(lights) {
             const isOn = light.on;
             const borderColor = isOn ? 'border-amber-400' : 'border-gray-200';
             const bgGradient = isOn ? 'from-amber-400 to-amber-600' : 'from-gray-400 to-gray-600';
-            
+
             lightCard.className = `bg-white rounded-xl p-6 shadow-lg hover:shadow-xl transition-all duration-300 border-2 ${borderColor}`;
-            
+
             lightCard.innerHTML = `
                 <div class="flex items-start justify-between mb-4">
-                    <div class="w-12 h-12 rounded-lg bg-gradient-to-br ${bgGradient} flex items-center justify-center shadow-lg">
+                    <div class="w-12 h-12 rounded-lg bg-gradient-to-br ${bgGradient} flex items-center justify-center shadow-lg transition-all duration-300 light-icon" data-light-id="${light.id}">
                         <i class="fas fa-lightbulb text-xl text-white"></i>
                     </div>
-                    <span class="px-2 py-1 text-xs font-semibold rounded-full ${isOn ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-800'}">
+                    <span class="px-2 py-1 text-xs font-semibold rounded-full ${isOn ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-800'} transition-all duration-300 light-status-badge" data-light-id="${light.id}">
                         ${isOn ? 'ON' : 'OFF'}
                     </span>
                 </div>
@@ -170,7 +179,7 @@ function displayLights(lights) {
                     <i class="fas fa-power-off mr-1"></i>Toggle
                 </button>
             `;
-            
+
             lightsGrid.appendChild(lightCard);
         });
         
@@ -189,21 +198,52 @@ function toggleLight(lightId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            // Reload lights to show updated status
-            loadLights();
+            // Find the light card elements for feedback only after success
+            const iconDiv = document.querySelector(`.light-icon[data-light-id="${lightId}"]`);
+            const statusBadge = document.querySelector(`.light-status-badge[data-light-id="${lightId}"]`);
+            let cardDiv = iconDiv ? iconDiv.closest('.rounded-xl') : null;
+            let isCurrentlyOn = false;
+            if (iconDiv && statusBadge && cardDiv) {
+                isCurrentlyOn = iconDiv.classList.contains('from-amber-400');
+                if (isCurrentlyOn) {
+                    // Animate to OFF
+                    iconDiv.classList.remove('from-amber-400', 'to-amber-600');
+                    iconDiv.classList.add('from-gray-400', 'to-gray-600');
+                    statusBadge.classList.remove('bg-amber-100', 'text-amber-800');
+                    statusBadge.classList.add('bg-gray-100', 'text-gray-800');
+                    statusBadge.textContent = 'OFF';
+                    cardDiv.classList.remove('border-amber-400');
+                    cardDiv.classList.add('border-gray-200');
+                } else {
+                    // Animate to ON
+                    iconDiv.classList.remove('from-gray-400', 'to-gray-600');
+                    iconDiv.classList.add('from-amber-400', 'to-amber-600');
+                    statusBadge.classList.remove('bg-gray-100', 'text-gray-800');
+                    statusBadge.classList.add('bg-amber-100', 'text-amber-800');
+                    statusBadge.textContent = 'ON';
+                    cardDiv.classList.remove('border-gray-200');
+                    cardDiv.classList.add('border-amber-400');
+                }
+            }
+            // After a short delay, reload all lights to sync brightness
+            setTimeout(() => { loadLights(); }, 800);
         } else {
-                showToast('Error', 'Failed to toggle light: ' + (data.error || 'Unknown error'), 'error');
+            showToast('Error', 'Failed to toggle light: ' + (data.error || 'Unknown error'), 'error');
         }
     })
     .catch(err => {
         console.error('Error toggling light:', err);
-            showToast('Error', 'Failed to toggle light', 'error');
+        showToast('Error', 'Failed to toggle light', 'error');
     });
 }
 
 function showError(message) {
     document.getElementById('error-message').textContent = message;
     document.getElementById('error-state').classList.remove('hidden');
+    const lightsContainer = document.getElementById('lights-container');
+    if (lightsContainer) lightsContainer.classList.add('hidden');
+    const loadingState = document.getElementById('loading-state');
+    if (loadingState) loadingState.classList.add('hidden');
 }
 
 function showToast(title, message, type = 'success') {

@@ -272,7 +272,7 @@ function loadSystemStatus() {
             if (data.running) {
                 statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-600';
                 statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>Running';
-                infoEl.textContent = `Port ${data.port} • ${data.gateways || 0} devices`;
+                infoEl.textContent = `Port ${data.port} • ${data.gateways || 0} gateways`;
             } else {
                 statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-600';
                 statusEl.innerHTML = '<i class="fas fa-times-circle mr-1"></i>Stopped';

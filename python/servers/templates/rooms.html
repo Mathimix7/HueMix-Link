@@ -80,8 +80,36 @@
 
 {% block scripts %}
 <script>
+
 window.addEventListener('DOMContentLoaded', function() {
     loadRooms();
+    setInterval(() => {
+        // Only refresh if no modal is open
+        const scrollY = window.scrollY;
+        loadRooms();
+        setTimeout(() => { window.scrollTo(0, scrollY); }, 0);
+        
+        // If modal is open, refresh its content every 3s
+        const modal = document.getElementById('room-details-modal');
+        if (modal) {
+            // Try to get the roomId from the modal's toggle button
+            const toggleBtn = modal.querySelector('[onclick*="toggleLightInModal"]');
+            if (toggleBtn) {
+                const onclickAttr = toggleBtn.getAttribute('onclick');
+                const match = onclickAttr.match(/'([^']+)',\s*'([^']+)'/);
+                if (match && match[2]) {
+                    const roomId = match[2];
+                    fetch(`/api/rooms/${roomId}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                displayRoomDetails(data.room);
+                            }
+                        });
+                }
+            }
+        }
+    }, 3000);
 });
 
 function loadRooms() {
@@ -89,7 +117,9 @@ function loadRooms() {
         .then(response => response.json())
         .then(data => {
             document.getElementById('loading-state').classList.add('hidden');
-            
+
+            document.getElementById('error-state').classList.add('hidden');
+
             if (data.success && data.rooms && data.rooms.length > 0) {
                 displayRooms(data.rooms);
             } else if (data.needs_config) {
@@ -116,13 +146,15 @@ function displayRooms(rooms) {
         const bgGradient = isOn ? 'from-blue-400 to-blue-600' : 'from-blue-300 to-blue-500';
         
         roomCard.className = `bg-white rounded-xl p-6 shadow-lg hover:shadow-xl transition-all duration-300 border-2 ${borderColor}`;
+        roomCard.setAttribute('data-room-id', room.id);
+        roomCard.setAttribute('data-room-state', isOn ? 'on' : 'off');
         
         roomCard.innerHTML = `
             <div class="flex items-start justify-between mb-4">
-                <div class="w-12 h-12 rounded-lg bg-gradient-to-br ${bgGradient} flex items-center justify-center shadow-lg">
+                <div class="w-12 h-12 rounded-lg bg-gradient-to-br ${bgGradient} flex items-center justify-center shadow-lg room-icon">
                     <i class="fas fa-door-open text-xl text-white"></i>
                 </div>
-                <span class="px-2 py-1 text-xs font-semibold rounded-full ${isOn ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}">
+                <span class="px-2 py-1 text-xs font-semibold rounded-full ${isOn ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'} room-status-badge">
                     ${isOn ? 'ON' : 'OFF'}
                 </span>
             </div>
@@ -147,6 +179,13 @@ function displayRooms(rooms) {
 }
 
 function toggleRoom(roomId) {
+    // Find the room card
+    const roomCard = document.querySelector(`[data-room-id="${roomId}"]`);
+    if (!roomCard) return;
+    
+    const currentState = roomCard.getAttribute('data-room-state');
+    const newState = currentState === 'on' ? 'off' : 'on';
+    
     fetch(`/api/rooms/${roomId}/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -154,15 +193,42 @@ function toggleRoom(roomId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            // Reload rooms to show updated status
-            loadRooms();
+            // Update UI immediately
+            roomCard.setAttribute('data-room-state', newState);
+            
+            const statusBadge = roomCard.querySelector('.room-status-badge');
+            const iconDiv = roomCard.querySelector('.room-icon');
+            
+            if (newState === 'on') {
+                // Update to ON state
+                roomCard.classList.remove('border-blue-100');
+                roomCard.classList.add('border-blue-400');
+                
+                iconDiv.classList.remove('from-blue-300', 'to-blue-500');
+                iconDiv.classList.add('from-blue-400', 'to-blue-600');
+                
+                statusBadge.classList.remove('bg-gray-100', 'text-gray-800');
+                statusBadge.classList.add('bg-blue-100', 'text-blue-800');
+                statusBadge.textContent = 'ON';
+            } else {
+                // Update to OFF state
+                roomCard.classList.remove('border-blue-400');
+                roomCard.classList.add('border-blue-100');
+                
+                iconDiv.classList.remove('from-blue-400', 'to-blue-600');
+                iconDiv.classList.add('from-blue-300', 'to-blue-500');
+                
+                statusBadge.classList.remove('bg-blue-100', 'text-blue-800');
+                statusBadge.classList.add('bg-gray-100', 'text-gray-800');
+                statusBadge.textContent = 'OFF';
+            }
         } else {
-                showToast('Error', 'Failed to toggle room: ' + (data.error || 'Unknown error'), 'error');
+            showToast('Error', 'Failed to toggle room: ' + (data.error || 'Unknown error'), 'error');
         }
     })
     .catch(err => {
         console.error('Error toggling room:', err);
-            showToast('Error', 'Failed to toggle room', 'error');
+        showToast('Error', 'Failed to toggle room', 'error');
     });
 }
 
@@ -229,7 +295,7 @@ function displayRoomDetails(room) {
                     ${room.lights.map(light => `
                         <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                             <div class="flex items-center">
-                                <div class="w-8 h-8 rounded-lg bg-gradient-to-br ${light.on ? 'from-amber-400 to-amber-600' : 'from-gray-400 to-gray-600'} flex items-center justify-center mr-3">
+                                <div class="w-8 h-8 rounded-lg bg-gradient-to-br ${light.on ? 'from-amber-400 to-amber-600' : 'from-gray-400 to-gray-600'} flex items-center justify-center mr-3 transition-all duration-300">
                                     <i class="fas fa-lightbulb text-sm text-white"></i>
                                 </div>
                                 <div>
@@ -313,6 +379,21 @@ function toggleLightInModal(lightId, roomId) {
 }
 
 function activateSceneInModal(sceneId, sceneName) {
+    // Get the current room ID from the modal
+    const modal = document.getElementById('room-details-modal');
+    const roomDetailsContent = document.getElementById('room-details-content');
+    let currentRoomId = null;
+    
+    // Extract room ID from the modal context (look for button with room ID in onclick)
+    const toggleButtons = modal?.querySelectorAll('[onclick*="toggleLightInModal"]');
+    if (toggleButtons && toggleButtons.length > 0) {
+        const onclickAttr = toggleButtons[0].getAttribute('onclick');
+        const match = onclickAttr.match(/'([^']+)',\s*'([^']+)'/);
+        if (match && match[2]) {
+            currentRoomId = match[2];
+        }
+    }
+    
     fetch(`/api/scenes/${sceneId}/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -320,28 +401,44 @@ function activateSceneInModal(sceneId, sceneName) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            // Show a brief success message
-            const btn = event.target.closest('button');
-            const originalContent = btn.innerHTML;
-            btn.innerHTML = '<i class="fas fa-check mr-1"></i>Activated!';
-            btn.classList.add('bg-green-100', 'border-green-400');
-            setTimeout(() => {
-                btn.innerHTML = originalContent;
-                btn.classList.remove('bg-green-100', 'border-green-400');
-            }, 2000);
+            showToast('Scene Activated', `Scene "${sceneName}" has been activated`, 'success');
+            
+            if (currentRoomId) {
+                setTimeout(() => {
+                    fetch(`/api/rooms/${currentRoomId}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                displayRoomDetails(data.room);
+                            }
+                        })
+                        .catch(err => {
+                            console.error('Error reloading room details:', err);
+                        });
+                }, 800);
+            }
         } else {
-                showToast('Error', 'Failed to activate scene: ' + (data.error || 'Unknown error'), 'error');
+            showToast('Error', 'Failed to activate scene: ' + (data.error || 'Unknown error'), 'error');
         }
     })
     .catch(err => {
         console.error('Error activating scene:', err);
-            showToast('Error', 'Failed to activate scene', 'error');
+        showToast('Error', 'Failed to activate scene', 'error');
     });
 }
 
 function showError(message) {
     document.getElementById('error-message').textContent = message;
     document.getElementById('error-state').classList.remove('hidden');
+    const roomsContainer = document.getElementById('rooms-container');
+    if (roomsContainer) roomsContainer.classList.add('hidden');
+    const loadingState = document.getElementById('loading-state');
+    if (loadingState) loadingState.classList.add('hidden');
+
+    const modal = document.getElementById('room-details-modal');
+    if (modal) {
+        modal.remove();
+    }
 }
 
 function showToast(title, message, type = 'success') {

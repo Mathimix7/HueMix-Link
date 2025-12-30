@@ -3,13 +3,31 @@
 {% block title %}Rooms Overview - HueMix-Link{% endblock %}
 
 {% block content %}
-<div class="max-w-6xl mx-auto">
-    <!-- Page Header -->
-    <div class="mb-8 text-center">
-        <h1 class="text-4xl font-bold bg-gradient-to-r from-blue-700 via-blue-500 to-blue-700 bg-clip-text text-transparent mb-2">
-            🏠 Rooms Overview
-        </h1>
-        <p class="text-gray-600">All your smart home rooms at a glance</p>
+
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-purple-700 via-purple-500 to-purple-700 bg-clip-text text-transparent mb-1 flex items-center">
+                   Rooms Overview
+                </h1>
+                <p class="text-gray-600">All your smart home rooms at a glance</p>
+            </div>
+            <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                <i class="fas fa-arrow-left mr-2"></i>Back to Home
+            </a>
+        </div>
+    </div>
+
+    <!-- Error State -->
+    <div id="error-state" class="hidden bg-red-50 border-2 border-red-200 rounded-2xl shadow-lg p-8 text-center mb-8">
+        <i class="fas fa-exclamation-circle text-5xl text-red-500 mb-4"></i>
+        <h2 class="text-2xl font-bold text-gray-900 mb-2">Unable to Load Rooms</h2>
+        <p id="error-message" class="text-gray-600 mb-4">Please check your bridge connection</p>
+        <a href="/" class="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
+            <i class="fas fa-arrow-left mr-2"></i>Back to Home
+        </a>
     </div>
 
     <!-- Rooms Container -->
@@ -73,17 +91,24 @@
         try {
             const response = await fetch('/api/rooms-overview/data');
             const data = await response.json();
-            
+
+            const errorState = document.getElementById('error-state');
+            const errorMsg = document.getElementById('error-message');
+            const roomsContainer = document.getElementById('rooms-container');
+
             if (data.success) {
-                const container = document.getElementById('rooms-container');
-                
+                // Hide error state
+                if (errorState) errorState.classList.add('hidden');
+                if (errorMsg) errorMsg.textContent = '';
+                if (roomsContainer) roomsContainer.classList.remove('hidden');
+
                 if (data.rooms.length === 0) {
-                    container.innerHTML = '<div class="text-center text-gray-500 py-8">No rooms found</div>';
+                    roomsContainer.innerHTML = '<div class="text-center text-gray-500 py-8">No rooms found</div>';
                     return;
                 }
-                
-                container.innerHTML = '';
-                
+
+                roomsContainer.innerHTML = '';
+
                 data.rooms.forEach(room => {
                     // Create room card
                     const card = document.createElement('div');
@@ -106,7 +131,6 @@
                             const dot = document.createElement('div');
                             dot.className = 'w-7 h-7 rounded-lg border-2 border-white shadow-md hover:scale-110 transition-transform room-swatch';
                             dot.style.backgroundColor = light.color_hex;
-                            // Store metadata on data- attributes for the custom tooltip
                             dot.dataset.lightName = light.name || '';
                             dot.dataset.colorName = light.color_name || '';
                             dot.dataset.brightness = (typeof light.brightness !== 'undefined' && light.brightness !== null) ? light.brightness : '';
@@ -115,7 +139,6 @@
                             colorsDiv.appendChild(dot);
                         });
                     } else if (room.colors && room.colors.length > 0) {
-                        // Fallback to earlier color array if per-light info isn't present
                         room.colors.forEach(color => {
                             const dot = document.createElement('div');
                             dot.className = 'w-7 h-7 rounded-lg border-2 border-white shadow-md hover:scale-110 transition-transform';
@@ -123,14 +146,9 @@
                             colorsDiv.appendChild(dot);
                         });
                     }
-                    
                     card.appendChild(colorsDiv);
-                    
-                    // Scene badge
                     const sceneDiv = document.createElement('div');
                     sceneDiv.className = 'px-4 py-2 bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg text-sm text-gray-600 font-medium min-w-[140px] text-right flex-shrink-0 border border-gray-200';
-                    
-                    // Show scene name (or id) and the room's average brightness
                     const sceneName = room.current_scene || room.current_scene_id || '—';
                     const avgBrightness = (typeof room.avg_brightness !== 'undefined' && room.avg_brightness !== null) ? `${room.avg_brightness}%` : '—';
                     if (sceneName && sceneName !== '—') {
@@ -141,19 +159,23 @@
                         sceneDiv.textContent = '—';
                         sceneDiv.className = 'px-4 py-2 bg-gray-50 rounded-lg text-sm text-gray-400 font-medium min-w-[140px] text-right flex-shrink-0 border border-gray-100';
                     }
-                    
                     card.appendChild(sceneDiv);
-                    
-                    container.appendChild(card);
+                    roomsContainer.appendChild(card);
                 });
             } else {
-                const container = document.getElementById('rooms-container');
-                container.innerHTML = '<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-center">Error: ' + (data.error || 'Unknown error') + '</div>';
+                // Show error state, hide main content
+                if (errorState) errorState.classList.remove('hidden');
+                if (errorMsg) errorMsg.textContent = data.error || 'Unknown error';
+                if (roomsContainer) roomsContainer.classList.add('hidden');
             }
         } catch (error) {
             console.error('Error loading rooms:', error);
-            const container = document.getElementById('rooms-container');
-            container.innerHTML = '<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-center">Failed to load rooms data</div>';
+            const errorState = document.getElementById('error-state');
+            const errorMsg = document.getElementById('error-message');
+            const roomsContainer = document.getElementById('rooms-container');
+            if (errorState) errorState.classList.remove('hidden');
+            if (errorMsg) errorMsg.textContent = 'Failed to load rooms data';
+            if (roomsContainer) roomsContainer.classList.add('hidden');
         }
     }
 

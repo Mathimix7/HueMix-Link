@@ -74,8 +74,12 @@ class HueStateManager:
             
             existing_on = self._lights.get(light_id, {}).get('on') if light_id in self._lights else None
             final_on = state.get('on') if 'on' in state else existing_on
-            if 'brightness' not in state and final_on is not None:
+            old_bri = self._lights.get(light_id, {}).get('brightness') if light_id in self._lights else False
+            if 'brightness' not in state and final_on is not None and (old_bri is None or old_bri == 0 or old_bri == 100):
                 state['brightness'] = 100 if final_on else 0
+
+            print(f"Updating light {light_id} with state: {state}")
+
 
             # Skip empty updates
             if not state:

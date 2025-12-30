@@ -40,7 +40,6 @@ def get_topology():
             radio_mac = server.get('radio_mac')
             if not radio_mac:
                 continue
-            
             nodes.append({
                 'id': radio_mac,
                 'type': 'gateway',
@@ -48,14 +47,13 @@ def get_topology():
                 'ip': server.get('ip_address'),
                 'wifi_mac': server.get('mac_address')
             })
-        
+
         # Add lightstrip nodes and routing edges
         lightstrips = data_manager.read_json(FILE_LIGHTSTRIPS, default=[])
         for strip in lightstrips:
             light_mac = strip.get('mac_address')
             if not light_mac:
                 continue
-            
             nodes.append({
                 'id': light_mac,
                 'type': 'light',
@@ -63,7 +61,6 @@ def get_topology():
                 'room': strip.get('room_id'),
                 'num_leds': strip.get('number_colors', 40)
             })
-            
             # Add routing edge to gateway
             last_gateway_mac = strip.get('last_gateway_mac')
             if last_gateway_mac:
@@ -73,25 +70,24 @@ def get_topology():
                     'type': 'route',
                     'is_active': True
                 })
-        
+
         # Add button nodes
         buttons = data_manager.read_json(FILE_BUTTONS, default=[])
         for button in buttons:
             button_mac = button.get('mac_address')
             if not button_mac:
                 continue
-            
             rssi = button.get('rssi')
-            
+            print(button)
+            config = button.get('config', {}) if button.get('config') else {}
             nodes.append({
                 'id': button_mac,
                 'type': 'button',
                 'label': button.get('name', f"Button {button_mac[-8:]}"),
-                'room': button.get('config', {}).get('room_id'),
+                'room': config.get('room_id', None),
                 'rssi': rssi,
                 'configured': button.get('configured', False)
             })
-            
             # Add edge to last seen gateway
             last_gateway = button.get('last_seen_gateway')
             if last_gateway:
@@ -109,6 +105,7 @@ def get_topology():
         })
     
     except Exception as e:
+        raise e
         return jsonify({
             'success': False,
             'error': str(e),

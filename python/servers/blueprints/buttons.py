@@ -15,6 +15,21 @@ def get_buttons():
     return data_manager.read_json(FILE_BUTTONS, default=[])
 
 
+def get_button_press_states():
+    """Return a dict of button_id to last_pressed timestamp (ISO string or None)."""
+    buttons = get_buttons()
+    result = {}
+    for button in buttons:
+        result[button['id']] = button.get('last_seen')
+    return result
+
+@buttons_bp.route('/api/press_states', methods=['GET'])
+def get_press_states():
+    """API endpoint to get last press state for all buttons."""
+    press_states = get_button_press_states()
+    return jsonify({"success": True, "press_states": press_states})
+
+
 def save_buttons(buttons):
     """Save buttons to JSON file."""
     data_manager.write_json(FILE_BUTTONS, buttons)

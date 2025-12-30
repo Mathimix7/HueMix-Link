@@ -27,6 +27,16 @@
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
 }
+
+/* Flash animation for button press */
+.flash-press {
+    animation: flash-press-bg 0.7s cubic-bezier(0.4,0,0.2,1);
+}
+@keyframes flash-press-bg {
+    0% { background-color: #e5e7eb; } /* Tailwind gray-200 */
+    60% { background-color: #d1d5db; } /* Tailwind gray-300 */
+    100% { background-color: transparent; }
+}
 </style>
 
 <!-- Toast Notification -->
@@ -273,6 +283,46 @@ let draggedElement = null;
 let deleteDeviceId = null;
 let deleteDeviceName = null;
 
+// --- Button Press Flash Logic ---
+let lastPressStates = {};
+
+function pollButtonPressStates() {
+    fetch('/buttons/api/press_states')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.press_states) {
+                const pressStates = data.press_states;
+                for (const [id, lastPressed] of Object.entries(pressStates)) {
+                    if (lastPressed && lastPressStates[id] && lastPressStates[id] !== lastPressed) {
+                        flashButtonRow(id);
+                    }
+                    lastPressStates[id] = lastPressed;
+                }
+            }
+        })
+        .catch(err => {/* ignore errors for polling */});
+}
+
+function flashButtonRow(deviceId) {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    const rows = Array.from(tbody.children);
+    for (const row of rows) {
+        if (row.dataset && row.dataset.deviceId === deviceId) {
+            row.classList.remove('flash-press');
+            void row.offsetWidth;
+            row.classList.add('flash-press');
+            setTimeout(() => row.classList.remove('flash-press'), 800);
+            break;
+        }
+    }
+}
+
+// Start polling after devices are loaded
+window.addEventListener('DOMContentLoaded', function() {
+    setInterval(pollButtonPressStates, 1000);
+});
+
 // Toast notification functions
 function showToast(title, message, type = 'success') {
     const toast = document.getElementById('toast-notification');
@@ -386,6 +436,7 @@ function renderDevices() {
     devices.forEach(device => {
         const row = document.createElement('tr');
         row.className = 'hover:bg-gray-50';
+        row.dataset.deviceId = device.id;
         row.innerHTML = `
             <td class="px-6 py-4 whitespace-nowrap">
                 <div class="flex items-center">
@@ -408,7 +459,7 @@ function renderDevices() {
                 <button onclick="openConfigModal('${device.id}')" class="text-green-600 hover:text-green-900 inline-flex items-center">
                     <i class="fas fa-cog mr-1"></i> Configure
                 </button>
-                <button onclick="deleteDevice('${device.id}', '${device.name.replace(/'/g, "\\'")}')" class="text-red-600 hover:text-red-900 inline-flex items-center">
+                <button onclick="deleteDevice('${device.id}', '${device.name.replace(/'/g, "\\'")})" class="text-red-600 hover:text-red-900 inline-flex items-center">
                     <i class="fas fa-trash mr-1"></i> Delete
                 </button>
             </td>

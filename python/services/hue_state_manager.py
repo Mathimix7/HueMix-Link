@@ -78,9 +78,6 @@ class HueStateManager:
             if 'brightness' not in state and final_on is not None and (old_bri is None or old_bri == 0 or old_bri == 100):
                 state['brightness'] = 100 if final_on else 0
 
-            print(f"Updating light {light_id} with state: {state}")
-
-
             # Skip empty updates
             if not state:
                 return

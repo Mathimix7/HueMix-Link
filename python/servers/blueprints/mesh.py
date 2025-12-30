@@ -78,7 +78,7 @@ def get_topology():
             if not button_mac:
                 continue
             rssi = button.get('rssi')
-            print(button)
+
             config = button.get('config', {}) if button.get('config') else {}
             nodes.append({
                 'id': button_mac,

@@ -161,6 +161,39 @@ def restore_backup():
             'error': str(e)
         }), 500
 
+@admin_bp.route('/backups/delete', methods=['POST'])
+def delete_backup():
+    """Delete a specific backup file."""
+    try:
+        data = request.get_json()
+        if not data or 'filename' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'No filename provided'
+            }), 400
+
+        filename = secure_filename(data['filename'])
+        backup_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backups')
+        backup_path = os.path.join(backup_dir, filename)
+
+        if not os.path.exists(backup_path):
+            return jsonify({
+                'success': False,
+                'error': 'Backup file not found'
+            }), 404
+
+        os.remove(backup_path)
+
+        return jsonify({
+            'success': True,
+            'message': f'Backup {filename} deleted.'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @admin_bp.route('/home_id', methods=['GET'])
 def get_home_id():
     """Get the current HOME_ID."""

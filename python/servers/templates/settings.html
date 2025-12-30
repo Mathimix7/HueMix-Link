@@ -232,6 +232,10 @@
                                         class="px-3 py-1.5 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-700 transition-colors">
                                     <i class="fas fa-undo mr-1"></i>Restore
                                 </button>
+                                <button onclick="confirmDeleteBackup('${b.name}')" 
+                                        class="px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors">
+                                    <i class="fas fa-trash-alt mr-1"></i>Delete
+                                </button>
                             </div>
                         </div>
                     `).join('');
@@ -335,6 +339,35 @@
         })
         .catch(err => {
             showToast('Error restoring backup', 'error');
+        });
+    }
+
+    function confirmDeleteBackup(filename) {
+        showModal(
+            'Delete Backup?',
+            `Are you sure you want to delete the backup file "${filename}"? This action cannot be undone!`,
+            () => deleteBackup(filename)
+        );
+    }
+
+    function deleteBackup(filename) {
+        showToast('Deleting backup...', 'info');
+        fetch('/admin/backups/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({filename: filename})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Backup deleted successfully!', 'success');
+                loadBackupList();
+            } else {
+                showToast('Failed to delete: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error deleting backup', 'error');
         });
     }
 

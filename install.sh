@@ -380,7 +380,7 @@ cleanup_local_domain() {
   fi
 
   # Stop Avahi
-  if systemctl list-unit-files | grep -q avahi-daemon; then
+  if systemctl list-unit-files avahi-daemon.service &>/dev/null; then
     run systemctl stop avahi-daemon.service avahi-daemon.socket || true
     run systemctl disable avahi-daemon.service avahi-daemon.socket || true
   fi
@@ -442,7 +442,7 @@ main_install() {
   WAS_ACTIVE=0
   SERVICE_EXISTS=0
   if command -v systemctl >/dev/null 2>&1; then
-    if systemctl list-unit-files | grep -q "^${SERVICE_NAME}.service"; then
+    if systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null; then
       SERVICE_EXISTS=1
     fi
     if [ "$SERVICE_EXISTS" -eq 1 ] && systemctl is-active --quiet "${SERVICE_NAME}.service"; then

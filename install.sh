@@ -13,7 +13,7 @@ FORCE=0
 DELETE=0
 NO_RESTART=0
 ASSUME_YES=0
-LOCAL=0
+LOCAL=1
 EXT_PORT=5000
 OLD_HOSTNAME_FILE="$APP_DIR/.prev-hostname"
 
@@ -68,7 +68,7 @@ ${blue}${bold}Usage:${reset} $0 [${magenta}install${reset}|${magenta}uninstall${
   ${gray}--delete${reset}        When installing, delete config files in app dir
   ${gray}--no-restart${reset}    Do not stop or restart the service during update
   ${gray}--show-version${reset}  Show installed and source version information and exit
-  ${gray}--local${reset}         Create huemixlink.local host entry
+  ${gray}--no-local${reset}      Do not create huemixlink.local host entry
   ${gray}--port <port>${reset}   External port to expose website (default: ${EXT_PORT})
   ${gray}-h|--help${reset}       Show this help message
 EOF
@@ -85,7 +85,7 @@ parse_args() {
       --no-restart) NO_RESTART=1; shift ;;
       --port) shift; EXT_PORT="$1"; shift ;;
       --show-version) SHOW_VERSION=1; shift ;;
-      --local) LOCAL=1; shift ;;
+      --no-local) LOCAL=0; shift ;;
       --yes|-y) ASSUME_YES=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "Unknown argument: $1" ;;

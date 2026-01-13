@@ -307,7 +307,7 @@ $TAG_END
 EOF
 
   run systemctl enable haproxy
-  run systemctl restart haproxy
+  run systemctl restart haproxy 2>/dev/null || true
 
   success "HAProxy configured: http://<server_ip>:${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
 }

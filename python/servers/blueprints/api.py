@@ -19,7 +19,7 @@ bridge_controller = BridgeController()
 
 @api_bp.route('/rooms', methods=['GET'])
 def get_rooms():
-    """Get all rooms from state manager."""
+    """Get all rooms from state manager with their scenes."""
     config = bridge_controller.load_config()
     
     if not config or not config.get('ip'):
@@ -34,16 +34,31 @@ def get_rooms():
         # Get rooms from state manager
         all_rooms = hue_state_manager.get_all_rooms()
         
+        # Get all scenes from Hue Bridge
+        hue = hue_service.get_controller()
+        all_scenes = hue.get_scenes() if hue else []
+        
         # Format rooms for frontend
         rooms = []
         for room_id, room_state in all_rooms.items():
             light_count = len(room_state.get('lights', []))
             
+            # Get scenes for this room
+            room_scenes = [
+                {
+                    "id": scene["id"],
+                    "name": scene["metadata"]["name"]
+                }
+                for scene in all_scenes
+                if scene.get("group", {}).get("rid") == room_id
+            ]
+            
             rooms.append({
                 "id": room_id,
                 "name": room_state.get('name', 'Unknown'),
                 "light_count": light_count,
-                "is_on": room_state.get('is_on', False)
+                "is_on": room_state.get('is_on', False),
+                "scenes": room_scenes
             })
         
         # Sort by name

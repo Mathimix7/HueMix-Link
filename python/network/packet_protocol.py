@@ -11,7 +11,7 @@ from constants import (
     PKT_PAIR_CONFIRM, PKT_LIGHT_RAW, PKT_SYS_CMD, PKT_GW_LIST_UPD,
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT,
     PKT_PING_DEVICE, PKT_PING,
-    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT,
+    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE,
     FNV_OFFSET_BASIS, FNV_PRIME, FNV_MASK
 )
 from services.home_id_manager import home_id_manager
@@ -399,8 +399,8 @@ class PacketDecoder:
             if dev_type == DEV_GATEWAY and len(payload) >= 7:
                 # Gateway: hash only first 7 bytes (type + radio MAC)
                 payload_to_hash = payload[:7]
-            elif dev_type == DEV_BUTTON and len(payload) >= 1:
-                # Button: hash only device type byte
+            elif dev_type in (DEV_BUTTON, DEV_REMOTE) and len(payload) >= 1:
+                # Button/Remote: hash only device type byte
                 payload_to_hash = payload[:1]
             elif dev_type == DEV_LIGHT and len(payload) >= 5:
                 # Light: mask RSSI byte to 0 before hashing
@@ -487,6 +487,10 @@ class PacketDecoder:
         elif dev_type == DEV_BUTTON and len(payload) >= 2:
             # Button: RSSI at byte 1
             result['rssi'] = MACFormatter.parse_rssi(payload[1])
+
+        elif dev_type == DEV_REMOTE and len(payload) >= 2:
+            # Remote: RSSI at byte 1
+            result['rssi'] = MACFormatter.parse_rssi(payload[1])
         
         elif dev_type == DEV_LIGHT and len(payload) >= 5:
             # Light: RSSI(1) + RGBW(1) + LED_COUNT(2 big-endian)
@@ -505,14 +509,22 @@ class PacketDecoder:
         Returns:
             Dictionary with event info:
             {
-                'action': ACT_CLICK/ACT_HOLDING/ACT_RELEASE/ACT_SYNC
+                'action': ACT_CLICK/ACT_HOLDING/ACT_RELEASE/ACT_SYNC,
+                'button_index': (Optional) Index for remote buttons (0-3)
             }
         """
         if len(payload) < 1:
             return None
         
         action = struct.unpack("<B", payload[0:1])[0]
-        return {'action': action}
+        result = {'action': action}
+        
+        # Remote buttons send: [action (CLICK/HOLDING/RELEASE), button_index (0-3)]
+        if len(payload) >= 2:
+            button_index = struct.unpack("<B", payload[1:2])[0]
+            result['button_index'] = button_index
+        
+        return result
     
     def parse_delivery_report(self, payload: bytes) -> Optional[dict]:
         """Parse delivery report payload.

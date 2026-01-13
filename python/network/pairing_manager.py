@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 from network.device_manager import device_manager
 from services.data_manager import data_manager
-from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, FILE_PAIRING_HISTORY
+from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, FILE_PAIRING_HISTORY
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,8 @@ class PairingManager:
                 type_map = {
                     'gateway': DEV_GATEWAY,
                     'button': DEV_BUTTON,
-                    'light': DEV_LIGHT
+                    'light': DEV_LIGHT,
+                    'remote': DEV_REMOTE
                 }
                 self._allowed_types = [type_map[t.lower()] for t in device_types if t.lower() in type_map]
             else:

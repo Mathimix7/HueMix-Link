@@ -26,12 +26,19 @@ PKT_PING = 0xFF
 DEV_GATEWAY = 1
 DEV_BUTTON = 2
 DEV_LIGHT = 3
+DEV_REMOTE = 4
 
 # ===== Button Action Codes =====
 ACT_CLICK = 1
 ACT_HOLDING = 2
 ACT_RELEASE = 3
 ACT_SYNC = 9
+
+# ===== Remote Button Action Types =====
+REMOTE_ACTION_NORMAL = 'normal'                    # Hold = brightness, Click = scene cycle
+REMOTE_ACTION_TOGGLE = 'toggle'                    # Hold = None, Click = toggle on/off
+REMOTE_ACTION_BRIGHTNESS_UP = 'brightness_up'      # Hold = Increase brightness, Click = Increase brightness
+REMOTE_ACTION_BRIGHTNESS_DOWN = 'brightness_down'  # Hold = Decrease brightness, Click = Decrease brightness
 
 # ===== System Commands =====
 CMD_NIGHT_MODE_ON = 1   # LED OFF

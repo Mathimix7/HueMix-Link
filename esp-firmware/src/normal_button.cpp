@@ -168,6 +168,7 @@ void sendPacket(uint8_t type, uint8_t action) {
   if (type == PKT_BTN_EVENT) {
     pkt.payload.btn.action = action;
     pkt.payload.btn.battery_mv = 3300; 
+    pkt.payload.raw[3] = 255;
     pkt.signature = calculateHash((uint8_t*)&pkt.payload, sizeof(Payload_Button), HOME_ID);
   } else if (type == PKT_HELLO) {
     pkt.payload.raw[0] = DEV_BUTTON;

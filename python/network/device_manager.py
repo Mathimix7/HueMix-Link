@@ -229,13 +229,14 @@ class DeviceManager:
                 return button
         return None
     
-    def update_button_tracking(self, button_mac: str, gateway_radio_mac: str, rssi: int):
+    def update_button_tracking(self, button_mac: str, gateway_radio_mac: str, rssi: int, battery_mv: int = None):
         """Update button tracking information.
         
         Args:
             button_mac: Button MAC address
             gateway_radio_mac: Gateway that received the signal
             rssi: Signal strength
+            battery_mv: Battery voltage in millivolts (optional)
         """
         def update_func(buttons):
             for button in buttons:
@@ -243,11 +244,42 @@ class DeviceManager:
                     button['last_seen_gateway'] = gateway_radio_mac.upper()
                     button['rssi'] = rssi
                     button['last_seen'] = datetime.now().isoformat()
+                    
+                    # Update battery if provided
+                    if battery_mv is not None:
+                        button['battery_mv'] = battery_mv
+                        button['battery_percent'] = self._calculate_battery_percent(battery_mv)
+                        button['battery_last_updated'] = datetime.now().isoformat()
+                    
                     break
             
             return buttons
         
         data_manager.update_json(FILE_BUTTONS, update_func)
+    
+    def _calculate_battery_percent(self, voltage_mv: int) -> int:
+        """Calculate battery percentage from voltage using Li-Ion curve.
+        
+        ESP32 requires minimum 3.3V for WiFi operation, so we use:
+        - 4.2V (4200mV) = 100%
+        - 3.3V (3300mV) = 0%
+        
+        Args:
+            voltage_mv: Battery voltage in millivolts
+            
+        Returns:
+            Battery percentage (0-100)
+        """
+        if voltage_mv == 3300: # TODO: HARDCODED VALUE OF BUTTONS WITH NO ADC, NEEDS FIXING
+            return None
+        
+        if voltage_mv >= 4200:
+            return 100
+        elif voltage_mv <= 3300:
+            return 0
+        else:
+            # Linear approximation between 3.3V and 4.2V
+            return int((voltage_mv - 3300) / 9)  # (4200 - 3300) / 100 = 9
     
     def add_button(self, mac_address: str, name: str, device_type: int = DEV_BUTTON) -> Dict:
         """Add new button/remote to registry.

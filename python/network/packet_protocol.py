@@ -391,7 +391,7 @@ class PacketDecoder:
         msg_id = struct.unpack("<B", data[17:18])[0]
         payload = data[18:] if len(data) > 18 else b''
         
-        # Determine payload portion to hash based on packet type (matching test.py logic)
+        # Determine payload portion to hash based on packet type
         payload_to_hash = payload
         
         if pkt_type == PKT_HELLO and len(payload) > 0:
@@ -510,19 +510,27 @@ class PacketDecoder:
             Dictionary with event info:
             {
                 'action': ACT_CLICK/ACT_HOLDING/ACT_RELEASE/ACT_SYNC,
+                'battery_mv': Battery voltage in millivolts (uint16),
                 'button_index': (Optional) Index for remote buttons (0-3)
             }
         """
-        if len(payload) < 1:
+        if len(payload) < 3:
             return None
         
+        # Payload structure: action(1 byte) + battery_mv(2 bytes) + button_index(1 byte)
         action = struct.unpack("<B", payload[0:1])[0]
-        result = {'action': action}
+        battery_mv = struct.unpack("<H", payload[1:3])[0]  # uint16 little-endian
         
-        # Remote buttons send: [action (CLICK/HOLDING/RELEASE), button_index (0-3)]
-        if len(payload) >= 2:
-            button_index = struct.unpack("<B", payload[1:2])[0]
-            result['button_index'] = button_index
+        result = {
+            'action': action,
+            'battery_mv': battery_mv
+        }
+        print(len(payload), payload, action, battery_mv, struct.unpack("<B", payload[3:4])[0], struct.unpack("<B", payload[1:2])[0])
+        # Remote buttons include button_index at byte 3
+        if len(payload) >= 4:
+            button_index = struct.unpack("<B", payload[3:4])[0]
+            if 0 <= button_index <= 3:
+                result['button_index'] = button_index
         
         return result
     

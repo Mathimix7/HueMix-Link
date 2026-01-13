@@ -865,6 +865,7 @@ class NetworkServer:
             return
         
         action = event_data['action']
+        battery_mv = event_data.get('battery_mv')
         button_index = event_data.get('button_index')
         
         action_str = {1: "CLICK", 2: "HOLD", 3: "RELEASE", 9: "SYNC"}.get(action, f"UNKNOWN({action})")
@@ -895,7 +896,7 @@ class NetworkServer:
                     break
         
         if gateway_radio_mac:
-            device_manager.update_button_tracking(button_mac, gateway_radio_mac, 0)
+            device_manager.update_button_tracking(button_mac, gateway_radio_mac, 0, battery_mv=battery_mv)
         
         # Call event handler
         if self._button_event_handler:

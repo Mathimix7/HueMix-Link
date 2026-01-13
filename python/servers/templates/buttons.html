@@ -37,6 +37,42 @@
     60% { background-color: #d1d5db; } /* Tailwind gray-300 */
     100% { background-color: transparent; }
 }
+
+/* Custom tooltip */
+.battery-tooltip {
+    position: relative;
+    display: inline-flex;
+}
+.battery-tooltip .tooltip-content {
+    visibility: hidden;
+    position: absolute;
+    z-index: 1000;
+    bottom: 125%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #1f2937;
+    color: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+}
+.battery-tooltip .tooltip-content::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #1f2937;
+}
+.battery-tooltip:hover .tooltip-content {
+    visibility: visible;
+    opacity: 1;
+}
 </style>
 
 <!-- Toast Notification -->
@@ -89,6 +125,7 @@
                     <tr>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device Name</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">MAC Address</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Battery</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                     </tr>
@@ -502,6 +539,57 @@ function renderDevices() {
         macSpan.textContent = device.mac_address;
         macCell.appendChild(macSpan);
 
+        // Battery cell
+        const batteryCell = document.createElement('td');
+        batteryCell.className = 'px-6 py-4 whitespace-nowrap';
+        
+        if (device.battery_percent !== undefined && device.battery_percent !== null) {
+            const batteryWrap = document.createElement('div');
+            batteryWrap.className = 'flex items-center space-x-2 battery-tooltip';
+            
+            // Format last updated time nicely
+            let lastUpdatedText = 'Never';
+            if (device.battery_last_updated) {
+                const lastUpdate = new Date(device.battery_last_updated);
+                lastUpdatedText = lastUpdate.toLocaleString();
+            }
+            
+            // Create custom tooltip
+            const tooltipContent = document.createElement('div');
+            tooltipContent.className = 'tooltip-content';
+            tooltipContent.innerHTML = `<div><strong>Voltage:</strong> ${device.battery_mv || 'N/A'} mV</div><div><strong>Updated:</strong> ${lastUpdatedText}</div>`;
+            
+            const batteryIcon = document.createElement('i');
+            let iconClass, textColor;
+            
+            if (device.battery_percent >= 60) {
+                iconClass = 'fa-battery-full';
+                textColor = 'text-green-600';
+            } else if (device.battery_percent >= 20) {
+                iconClass = 'fa-battery-half';
+                textColor = 'text-yellow-600';
+            } else {
+                iconClass = 'fa-battery-quarter';
+                textColor = 'text-red-600';
+            }
+            
+            batteryIcon.className = `fas ${iconClass} ${textColor}`;
+            
+            const batteryText = document.createElement('span');
+            batteryText.className = `text-sm font-medium ${textColor}`;
+            batteryText.textContent = `${device.battery_percent}%`;
+            
+            batteryWrap.appendChild(batteryIcon);
+            batteryWrap.appendChild(batteryText);
+            batteryWrap.appendChild(tooltipContent);
+            batteryCell.appendChild(batteryWrap);
+        } else {
+            const naSpan = document.createElement('span');
+            naSpan.className = 'text-sm text-gray-400 flex items-center space-x-2';
+            naSpan.innerHTML = '<i class="fas fa-battery-empty text-gray-400"></i><span>N/A</span>';
+            batteryCell.appendChild(naSpan);
+        }
+
         // Status cell
         const statusCell = document.createElement('td');
         statusCell.className = 'px-6 py-4 whitespace-nowrap';
@@ -550,6 +638,7 @@ function renderDevices() {
 
         row.appendChild(nameCell);
         row.appendChild(macCell);
+        row.appendChild(batteryCell);
         row.appendChild(statusCell);
         row.appendChild(actionsCell);
 

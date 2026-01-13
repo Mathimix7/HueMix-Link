@@ -176,8 +176,7 @@ void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {
   if (type == PKT_BTN_EVENT) {
     pkt.payload.btn.action = action;
     pkt.payload.btn.battery_mv = battery_mv;
-    // Encode button index in the second byte of payload
-    pkt.payload.raw[1] = buttonIndex;
+    pkt.payload.raw[3] = buttonIndex;
     pkt.signature = calculateHash((uint8_t*)&pkt.payload, sizeof(Payload_Button), HOME_ID);
   } else if (type == PKT_HELLO) {
     pkt.payload.raw[0] = DEV_REMOTE;

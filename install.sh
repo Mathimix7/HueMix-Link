@@ -306,8 +306,8 @@ backend huemixlink_back
 $TAG_END
 EOF
 
-  run systemctl enable haproxy
-  run systemctl restart haproxy &>/dev/null || true
+  run systemctl enable haproxy >/dev/null 2>&1
+  run systemctl --quiet restart haproxy 2>&1 | grep -v "backend huemixlink_back has no server available" || true
 
   success "HAProxy configured: http://<server_ip>:${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
 }

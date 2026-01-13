@@ -160,11 +160,13 @@ class AutomationEngine:
         
         # Handle different action types
         if action_type == REMOTE_ACTION_NORMAL:
-            # CLICK = scene cycle, HOLDING = brightness adjust
+            # CLICK = scene cycle, HOLDING = brightness adjust, RELEASE = toggle direction
             if action == ACT_CLICK:
                 self._handle_remote_normal_action_click(remote_mac, button_config, room_id)
             elif action == ACT_HOLDING:
                 self._handle_remote_normal_action_holding(remote_mac, button_config, room_id)
+            elif action == ACT_RELEASE:
+                self._handle_remote_normal_action_release(remote_mac, button_config)
         
         elif action_type == REMOTE_ACTION_TOGGLE:
             # Only respond to CLICK, ignore HOLDING
@@ -271,16 +273,38 @@ class AutomationEngine:
                 }
             
             state = self._button_states[state_key]
-            
-            # Toggle brightness direction
-            state['brightness_direction'] = -state['brightness_direction']
-            logger.info(f"Remote {remote_mac} button {button_index}: Brightness direction {'UP' if state['brightness_direction'] > 0 else 'DOWN'}")
+            logger.info(f"Remote {remote_mac} button {button_index}: Brightness {'UP' if state['brightness_direction'] > 0 else 'DOWN'}")
         
         # Adjust brightness
         try:
             self._adjust_room_brightness(room_id, state['brightness_direction'])
         except Exception as e:
             logger.error(f"Failed to adjust brightness: {e}")
+    
+    def _handle_remote_normal_action_release(self, remote_mac: str, button_config: Dict):
+        """Handle normal remote button RELEASE action (toggle brightness direction).
+        
+        Args:
+            remote_mac: Remote MAC address
+            button_config: Button configuration
+        """
+        # Use remote_mac + button_index as state key
+        button_index = button_config.get('index', 0)
+        state_key = f"{remote_mac}_{button_index}"
+        
+        with self._button_lock:
+            if state_key not in self._button_states:
+                self._button_states[state_key] = {
+                    'scene_index': 0,
+                    'last_press': 0,
+                    'brightness_direction': -1
+                }
+            
+            state = self._button_states[state_key]
+            state['brightness_direction'] *= -1
+            
+            direction_str = 'UP' if state['brightness_direction'] > 0 else 'DOWN'
+            logger.info(f"Remote {remote_mac} button {button_index}: Brightness direction toggled to {direction_str}")
     
     def _handle_remote_toggle_action(self, room_id: str):
         """Handle toggle action - turn room on/off.

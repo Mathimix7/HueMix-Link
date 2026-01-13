@@ -177,7 +177,7 @@ void sendHello() {
   WiFi.macAddress(pkt.sourceMAC);
   
   // Payload: [Type(3), RSSI_Hole, Flags, CountH, CountL]
-  pkt.payload.raw[0] = 3; 
+  pkt.payload.raw[0] = DEV_LIGHT; 
   pkt.payload.raw[1] = 0; 
   pkt.payload.raw[2] = IS_RGBW ? 1 : 0;
   pkt.payload.raw[3] = (uint8_t)((numLeds >> 8) & 0xFF);

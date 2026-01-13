@@ -9,7 +9,7 @@
 #define SERIAL_START       0xFE    
 #define SERIAL_END         0xFD
 #define SERIAL_HANDSHAKE   0x11    
-#define SERIAL_REQ_HANDSHAKE 0x12 // <--- NEW: Net Node requests MAC
+#define SERIAL_REQ_HANDSHAKE 0x12
 
 // --- PACKET TYPES ---
 enum PacketType {
@@ -28,6 +28,12 @@ enum PacketType {
   PKT_PING         = 0xFF,
   PKT_PING_DEVICE  = 0xFE
 };
+
+// --- DEVICE TYPES ---
+#define DEV_GATEWAY 1
+#define DEV_BUTTON  2
+#define DEV_LIGHT   3
+#define DEV_REMOTE  4
 
 // --- ACTION CODES ---
 #define ACT_CLICK        1

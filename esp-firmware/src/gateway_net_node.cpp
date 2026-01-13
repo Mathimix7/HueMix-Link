@@ -117,7 +117,7 @@ void sendGatewayHello() {
   HueMixLinkPacket pkt;
   pkt.type = PKT_HELLO;
   WiFi.macAddress(pkt.sourceMAC);
-  pkt.payload.raw[0] = 1; 
+  pkt.payload.raw[0] = DEV_GATEWAY; 
   memcpy(&pkt.payload.raw[1], radioNodeMAC, 6);
   pkt.signature = calculateHash(pkt.payload.raw, 7, HOME_ID);
   udp.beginPacket(server_ip, server_port);

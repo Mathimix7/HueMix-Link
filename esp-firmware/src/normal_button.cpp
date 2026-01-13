@@ -40,7 +40,6 @@ Bounce button;
 Bounce auxButton;
 
 bool wakeupExt0 = false; 
-unsigned long lastButtonPress = 0;
 volatile bool ackReceived = false;
 unsigned long lastActivityTime = 0;
 unsigned long lastHoldSend = 0;
@@ -171,7 +170,7 @@ void sendPacket(uint8_t type, uint8_t action) {
     pkt.payload.btn.battery_mv = 3300; 
     pkt.signature = calculateHash((uint8_t*)&pkt.payload, sizeof(Payload_Button), HOME_ID);
   } else if (type == PKT_HELLO) {
-    pkt.payload.raw[0] = 2; 
+    pkt.payload.raw[0] = DEV_BUTTON;
     pkt.signature = calculateHash(pkt.payload.raw, 1, 0); 
   }
 
@@ -327,9 +326,27 @@ void loop() {
     }
   }
 
-  if (button.fell() || wakeupExt0) {
-    wakeupExt0 = false; 
-    lastButtonPress = millis();
+  if (wakeupExt0) {
+    if (digitalRead(PIN_BTN) == HIGH) {
+      // Button was released during wakeup
+      if (HOME_ID == 0) {
+        sendPacket(PKT_HELLO, 0);
+      } else {
+        sendPacket(PKT_BTN_EVENT, ACT_CLICK);
+      }
+      lastActivityTime = millis();
+      wakeupExt0 = false; 
+      buttonPressed = false; 
+    } else {
+      // Still holding button, continue to normal state
+      buttonHoldStartTime = millis();
+      buttonPressed = true;
+      lastActivityTime = millis();
+      wakeupExt0 = false; 
+    }
+  }
+
+  if (button.fell()) {
     buttonHoldStartTime = millis();
     buttonPressed = true;
     lastActivityTime = millis();
@@ -346,7 +363,6 @@ void loop() {
   if (millis() - holdingIntervalUpdate >= HOLD_INTERVAL && isHolding) {
     if (HOME_ID != 0) sendPacket(PKT_BTN_EVENT, ACT_HOLDING);
     holdingIntervalUpdate = millis();
-    lastButtonPress = millis();
     lastActivityTime = millis();
   }
 

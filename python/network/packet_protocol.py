@@ -525,7 +525,6 @@ class PacketDecoder:
             'action': action,
             'battery_mv': battery_mv
         }
-        print(len(payload), payload, action, battery_mv, struct.unpack("<B", payload[3:4])[0], struct.unpack("<B", payload[1:2])[0])
         # Remote buttons include button_index at byte 3
         if len(payload) >= 4:
             button_index = struct.unpack("<B", payload[3:4])[0]

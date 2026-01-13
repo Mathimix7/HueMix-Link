@@ -18,7 +18,7 @@ from services.home_id_manager import home_id_manager
 from constants import (
     DEFAULT_UDP_IP, DEFAULT_UDP_PORT, DEFAULT_GATEWAY_PORT,
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_GW_LIST_UPD, PKT_PING, PKT_PING_DEVICE,
-    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT,
+    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE,
     MAX_GATEWAY_ATTEMPTS, GATEWAY_DELIVERY_TIMEOUT_SECONDS,
     TIMEOUT_SOCKET,
     RSSI_AUTO_PAIR_THRESHOLD, MAX_GATEWAYS_PER_PACKET,
@@ -584,6 +584,9 @@ class NetworkServer:
         
         elif dev_type == DEV_LIGHT:
             self._handle_light_hello(src_mac, hello_data, sender_ip, is_paired)
+        
+        elif dev_type == DEV_REMOTE:
+            self._handle_remote_hello(src_mac, hello_data, sender_ip, is_paired)
     
     def _handle_gateway_hello(self, wifi_mac: str, hello_data: Dict, sender_ip: str, is_paired: bool):
         """Handle HELLO from gateway.
@@ -793,6 +796,61 @@ class NetworkServer:
     
             self.automation_engine.send_current_colors_to_light(light_mac)
     
+    def _handle_remote_hello(self, remote_mac: str, hello_data: Dict, sender_ip: str, is_paired: bool):
+        """Handle HELLO from remote control device.
+        
+        Args:
+            remote_mac: Remote MAC
+            hello_data: Parsed HELLO data
+            sender_ip: Gateway IP that forwarded
+            is_paired: Whether remote is paired
+        """
+        rssi = hello_data.get('rssi', -100)
+        
+        # Find gateway radio MAC by IP
+        gateway_radio_mac = None
+        with self._gateway_lock:
+            for radio_mac, info in self._gateway_table.items():
+                if info['ip_address'] == sender_ip:
+                    gateway_radio_mac = radio_mac
+                    break
+        
+        if not is_paired:
+            # Unpaired remote - check pairing mode or RSSI
+            logger.info(f"🎮 Unpaired remote detected: {remote_mac} (RSSI: {rssi} dBm)")
+            
+            should_pair = False
+            pairing_mode_active = False
+            
+            # Check if pairing mode is active
+            if self._pairing_handler:
+                if self._pairing_handler(remote_mac, DEV_REMOTE, rssi):
+                    should_pair = True
+                    pairing_mode_active = True
+            
+            # If pairing mode not active, check RSSI threshold
+            if not pairing_mode_active and rssi > RSSI_AUTO_PAIR_THRESHOLD:
+                should_pair = True
+            
+            if should_pair:
+                self._send_pair_confirm(remote_mac, sender_ip)
+                device_manager.add_button(remote_mac, f"Remote {remote_mac[-8:]}", device_type=DEV_REMOTE)
+                
+                if pairing_mode_active:
+                    logger.info(f"🎮 Paired remote via pairing mode: {remote_mac}")
+                    pairing_manager.record_device_paired(remote_mac, DEV_REMOTE, f"Remote {remote_mac[-8:]}", 'long_range')
+                else:
+                    logger.info(f"🎮 Auto-paired remote (RSSI: {rssi} dBm): {remote_mac}")
+                    pairing_manager.record_device_paired(remote_mac, DEV_REMOTE, f"Remote {remote_mac[-8:]}", 'short_range')
+            else:
+                logger.warning(f"Remote {remote_mac} RSSI too weak for auto-pairing: {rssi} dBm (use pairing mode to pair anyway)")
+        else:
+            # Paired remote - update tracking
+            if gateway_radio_mac:
+                device_manager.update_button_tracking(remote_mac, gateway_radio_mac, rssi)
+            
+            logger.debug(f"Remote {remote_mac} online (RSSI: {rssi} dBm)")
+    
     def _handle_button_event(self, button_mac: str, payload: bytes, sender_ip: str):
         """Handle button event.
         
@@ -807,16 +865,26 @@ class NetworkServer:
             return
         
         action = event_data['action']
+        button_index = event_data.get('button_index')
+        
         action_str = {1: "CLICK", 2: "HOLD", 3: "RELEASE", 9: "SYNC"}.get(action, f"UNKNOWN({action})")
         
-        logger.info(f"🔘 Button {button_mac} -> {action_str}")
+        if button_index is not None:
+            logger.info(f"🔘 Remote {button_mac} button {button_index} -> {action_str}")
+        else:
+            logger.info(f"🔘 Button {button_mac} -> {action_str}")
         
-        # Auto-add button if it doesn't exist
+        # Auto-add button/remote if it doesn't exist
         button = device_manager.get_button_by_mac(button_mac)
         if not button:
-            logger.info(f"Auto-registering button: {button_mac}")
-            device_manager.add_button(button_mac, f"Button {button_mac[-8:]}")
-            pairing_manager.record_device_paired(button_mac, DEV_BUTTON, f"Button {button_mac[-8:]}", 'short_range')
+            if button_index is None:
+                logger.info(f"Auto-registering button: {button_mac}")
+                device_manager.add_button(button_mac, f"Button {button_mac[-8:]}")
+                pairing_manager.record_device_paired(button_mac, DEV_BUTTON, f"Button {button_mac[-8:]}", 'short_range')
+            else:
+                logger.info(f"Auto-registering remote: {button_mac}")
+                device_manager.add_button(button_mac, f"Remote {button_mac[-8:]}", device_type=DEV_REMOTE)
+                pairing_manager.record_device_paired(button_mac, DEV_REMOTE, f"Remote {button_mac[-8:]}", 'short_range')
         
         # Find gateway for tracking
         gateway_radio_mac = None
@@ -831,7 +899,7 @@ class NetworkServer:
         
         # Call event handler
         if self._button_event_handler:
-            self._button_event_handler(button_mac, action, 0)
+            self._button_event_handler(button_mac, action, 0, button_index=button_index)
     
     def _handle_delivery_report(self, payload: bytes, sender_ip: str):
         """Handle delivery report from gateway.

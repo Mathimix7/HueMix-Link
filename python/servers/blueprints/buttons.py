@@ -162,6 +162,31 @@ def configure_button():
     return jsonify({"success": True, "config": config})
 
 
+@buttons_bp.route('/api/remote/<device_id>/configure', methods=['POST'])
+def configure_remote(device_id):
+    """Configure a remote with per-button actions and room mappings."""
+    data = request.get_json()
+    
+    buttons_config = data.get('buttons', [])
+    
+    config = {
+        'device_id': device_id,
+        'device_type': 'remote',
+        'buttons': buttons_config
+    }
+    
+    # Save configuration
+    save_button_config(device_id, config)
+    
+    # Notify UDP server about the configuration update
+    config_notifier.notify_change('remote_config', {
+        'device_id': device_id,
+        'config': config
+    })
+    
+    return jsonify({"success": True, "config": config})
+
+
 @buttons_bp.route('/api/<device_id>/config', methods=['GET'])
 def get_button_config_route(device_id):
     """Get button configuration."""

@@ -274,6 +274,48 @@
     </div>
 </div>
 
+<!-- Remote Configuration Modal -->
+<div id="remote-config-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeRemoteConfigModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full max-h-[90vh] overflow-y-auto">
+            <!-- Modal Header -->
+            <div class="bg-gradient-to-r from-pink-600 to-pink-500 px-4 py-5 sm:px-6">
+                <h3 class="text-lg leading-6 font-semibold text-white flex items-center">
+                    <i class="fas fa-gamepad mr-2"></i>Configure Remote Control
+                </h3>
+                <p class="text-pink-100 text-sm mt-1">Set up each button's action and target room</p>
+            </div>
+            
+            <!-- Modal Body -->
+            <div class="bg-white px-4 py-5 sm:px-6">
+                <!-- Button Tabs -->
+                <div class="border-b border-gray-200 mb-6">
+                    <div id="remote-tabs" class="flex space-x-2">
+                        <!-- Tabs will be rendered here -->
+                    </div>
+                </div>
+                
+                <!-- Button Configuration Panel -->
+                <div id="remote-button-config" class="mb-6">
+                    <!-- Configuration will be rendered here -->
+                </div>
+            </div>
+            
+            <!-- Modal Footer -->
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="saveRemoteConfiguration()" class="w-full inline-flex items-center justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-pink-600 text-base font-medium text-white hover:bg-pink-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm transition-colors">
+                    <i class="fas fa-save mr-2"></i>Save Configuration
+                </button>
+                <button type="button" onclick="closeRemoteConfigModal()" class="mt-3 w-full inline-flex items-center justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm transition-colors">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 let devices = [];
 let rooms = [];
@@ -437,33 +479,80 @@ function renderDevices() {
         const row = document.createElement('tr');
         row.className = 'hover:bg-gray-50';
         row.dataset.deviceId = device.id;
-        row.innerHTML = `
-            <td class="px-6 py-4 whitespace-nowrap">
-                <div class="flex items-center">
-                    <i class="fas fa-microchip mr-2 text-pink-500 flex-shrink-0"></i>
-                    <span class="text-sm font-medium text-gray-900">${device.name}</span>
-                </div>
-            </td>
-            <td class="px-6 py-4 whitespace-nowrap">
-                <span class="text-sm text-gray-500 font-mono">${device.mac_address}</span>
-            </td>
-            <td class="px-6 py-4 whitespace-nowrap">
-                ${device.configured 
-                    ? '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center"><i class="fas fa-check-circle mr-1"></i> Configured</span>'
-                    : '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 items-center"><i class="fas fa-circle mr-1"></i> Not Configured</span>'}
-            </td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-                <button onclick="openRenameModal('${device.id}')" class="text-pink-600 hover:text-pink-900 inline-flex items-center">
-                    <i class="fas fa-edit mr-1"></i> Rename
-                </button>
-                <button onclick="openConfigModal('${device.id}')" class="text-green-600 hover:text-green-900 inline-flex items-center">
-                    <i class="fas fa-cog mr-1"></i> Configure
-                </button>
-                <button onclick="deleteDevice('${device.id}', '${device.name.replace(/'/g, "\\'")})" class="text-red-600 hover:text-red-900 inline-flex items-center">
-                    <i class="fas fa-trash mr-1"></i> Delete
-                </button>
-            </td>
-        `;
+
+        // Name cell
+        const nameCell = document.createElement('td');
+        nameCell.className = 'px-6 py-4 whitespace-nowrap';
+        const nameWrap = document.createElement('div');
+        nameWrap.className = 'flex items-center';
+        const icon = document.createElement('i');
+        icon.className = 'fas fa-microchip mr-2 text-pink-500 flex-shrink-0';
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'text-sm font-medium text-gray-900';
+        nameSpan.textContent = device.name;
+        nameWrap.appendChild(icon);
+        nameWrap.appendChild(nameSpan);
+        nameCell.appendChild(nameWrap);
+
+        // MAC cell
+        const macCell = document.createElement('td');
+        macCell.className = 'px-6 py-4 whitespace-nowrap';
+        const macSpan = document.createElement('span');
+        macSpan.className = 'text-sm text-gray-500 font-mono';
+        macSpan.textContent = device.mac_address;
+        macCell.appendChild(macSpan);
+
+        // Status cell
+        const statusCell = document.createElement('td');
+        statusCell.className = 'px-6 py-4 whitespace-nowrap';
+        const statusSpan = document.createElement('span');
+        if (device.configured) {
+            statusSpan.className = 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center';
+            statusSpan.innerHTML = '<i class="fas fa-check-circle mr-1"></i> Configured';
+        } else {
+            statusSpan.className = 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 items-center';
+            statusSpan.innerHTML = '<i class="fas fa-circle mr-1"></i> Not Configured';
+        }
+        statusCell.appendChild(statusSpan);
+
+        // Actions cell
+        const actionsCell = document.createElement('td');
+        actionsCell.className = 'px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2';
+
+        // Rename button
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'text-pink-600 hover:text-pink-900 inline-flex items-center';
+        renameBtn.innerHTML = '<i class="fas fa-edit mr-1"></i> Rename';
+        renameBtn.addEventListener('click', () => openRenameModal(device.id));
+
+        // Configure button
+        const configBtn = document.createElement('button');
+        configBtn.className = 'text-green-600 hover:text-green-900 inline-flex items-center';
+        configBtn.innerHTML = '<i class="fas fa-cog mr-1"></i> Configure';
+        console.log("Device type for device", device.id, "is", device.device_type);
+        if (device.device_type === 4) { // Remote Control
+            console.log("Configuring remote control:", device.id);
+            configBtn.addEventListener('click', () => openRemoteConfigModal(device.id));
+        } else { // Button Device
+            console.log("Configuring button device:", device.id);
+            configBtn.addEventListener('click', () => openConfigModal(device.id));
+        }
+
+        // Delete button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'text-red-600 hover:text-red-900 inline-flex items-center';
+        deleteBtn.innerHTML = '<i class="fas fa-trash mr-1"></i> Delete';
+        deleteBtn.addEventListener('click', () => deleteDevice(device.id, device.name));
+
+        actionsCell.appendChild(renameBtn);
+        actionsCell.appendChild(configBtn);
+        actionsCell.appendChild(deleteBtn);
+
+        row.appendChild(nameCell);
+        row.appendChild(macCell);
+        row.appendChild(statusCell);
+        row.appendChild(actionsCell);
+
         tbody.appendChild(row);
     });
 }
@@ -1014,6 +1103,631 @@ function confirmDelete() {
     .catch(err => {
         console.error('Error deleting device:', err);
         showToast('Error', 'Failed to delete device', 'error');
+    });
+}
+
+// --- Remote Configuration Functions ---
+let remoteDeviceId = null;
+let remoteConfig = {
+    buttons: [
+        { index: 0, action_type: 'toggle', room_id: '', scenes: [] },
+        { index: 1, action_type: 'brightness_up', room_id: '', scenes: [] },
+        { index: 2, action_type: 'brightness_down', room_id: '', scenes: [] },
+        { index: 3, action_type: 'normal', room_id: '', scenes: [] }
+    ]
+};
+
+function openRemoteConfigModal(deviceId) {
+    const device = devices.find(d => d.id === deviceId);
+    
+    remoteDeviceId = deviceId;
+    
+    // Reset to default config for this device
+    remoteConfig = {
+        buttons: [
+            { index: 0, action_type: 'toggle', room_id: '', scenes: [] },
+            { index: 1, action_type: 'brightness_up', room_id: '', scenes: [] },
+            { index: 2, action_type: 'brightness_down', room_id: '', scenes: [] },
+            { index: 3, action_type: 'normal', room_id: '', scenes: [] }
+        ]
+    };
+    
+    // Load existing remote configuration if available
+    fetch(`/buttons/api/${deviceId}/config`)
+        .then(response => response.json())
+        .then(data => {
+            console.log('Loaded remote config:', data);
+            if (data.success && data.config && data.config.device_type === 'remote' && data.config.buttons) {
+                // Merge loaded buttons with default structure to ensure all properties exist
+                remoteConfig.buttons = data.config.buttons.map((btn, idx) => ({
+                    index: idx,
+                    action_type: btn.action_type || 'normal',
+                    room_id: btn.room_id || '',
+                    scenes: Array.isArray(btn.scenes) ? btn.scenes : []
+                }));
+                console.log('Merged remote config:', remoteConfig);
+            }
+            
+            // Show modal first
+            document.getElementById('remote-config-modal').classList.remove('hidden');
+            
+            // Load rooms for remote modal - wait for it to complete
+            loadRemoteRooms();
+        })
+        .catch(err => {
+            console.error('Error loading remote config:', err);
+            document.getElementById('remote-config-modal').classList.remove('hidden');
+            loadRemoteRooms();
+        });
+}
+
+function loadRemoteRooms() {
+    // Fetch rooms and populate the global rooms array
+    fetch('/api/rooms')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                rooms = data.rooms;
+                console.log('Loaded rooms with scenes:', rooms);
+                // Now render the UI after rooms are loaded
+                renderRemoteConfigTabs();
+                // Select first button by default
+                selectRemoteButton(0);
+            } else {
+                console.error('Failed to load rooms:', data.error);
+                rooms = [];
+                renderRemoteConfigTabs();
+                selectRemoteButton(0);
+                showToast('Error', 'Failed to load rooms', 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error loading rooms:', err);
+            rooms = [];
+            renderRemoteConfigTabs();
+            selectRemoteButton(0);
+            showToast('Error', 'Failed to load rooms', 'error');
+        });
+}
+
+function closeRemoteConfigModal() {
+    document.getElementById('remote-config-modal').classList.add('hidden');
+    remoteDeviceId = null;
+}
+
+function renderRemoteConfigTabs() {
+    const tabsContainer = document.getElementById('remote-tabs');
+    tabsContainer.innerHTML = '';
+    
+    for (let i = 0; i < 4; i++) {
+        const button = remoteConfig.buttons[i];
+        const tab = document.createElement('button');
+        tab.type = 'button';
+        tab.className = `px-4 py-2 font-medium text-sm rounded-t-lg transition-colors ${
+            i === 0 
+                ? 'bg-pink-600 text-white' 
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+        }`;
+        tab.onclick = () => selectRemoteButton(i);
+        tab.innerHTML = `
+            <i class="fas fa-circle mr-2"></i>
+            Button ${i + 1}
+            ${button.action_type ? `<span class="text-xs ml-2">(${getActionTypeLabel(button.action_type)})</span>` : ''}
+        `;
+        tabsContainer.appendChild(tab);
+    }
+}
+
+function selectRemoteButton(index) {
+    const button = remoteConfig.buttons[index];
+    const tabsContainer = document.getElementById('remote-tabs');
+    
+    // Update tab styling
+    Array.from(tabsContainer.children).forEach((tab, i) => {
+        if (i === index) {
+            tab.className = 'px-4 py-2 font-medium text-sm rounded-t-lg transition-colors bg-pink-600 text-white';
+        } else {
+            tab.className = 'px-4 py-2 font-medium text-sm rounded-t-lg transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200';
+        }
+    });
+    
+    // Render button configuration panel
+    renderRemoteButtonConfig(index);
+}
+
+function renderRemoteButtonConfig(index) {
+    const button = remoteConfig.buttons[index];
+    const panelContainer = document.getElementById('remote-button-config');
+    
+    panelContainer.innerHTML = `
+        <div class="space-y-6">
+            <!-- Action Type Selection -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    <i class="fas fa-bolt mr-2 text-yellow-500"></i>Action Type
+                </label>
+                <div class="grid grid-cols-2 gap-3">
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'normal' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="normal" 
+                            ${button.action_type === 'normal' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'normal')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">Scene Cycle</span>
+                            <span class="text-xs text-gray-500">Click: cycle scenes<br>Hold: brightness</span>
+                        </span>
+                    </label>
+                    
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'toggle' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="toggle" 
+                            ${button.action_type === 'toggle' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'toggle')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">Toggle On/Off</span>
+                            <span class="text-xs text-gray-500">Turn room on/off</span>
+                        </span>
+                    </label>
+                    
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'brightness_up' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="brightness_up" 
+                            ${button.action_type === 'brightness_up' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'brightness_up')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">Brightness Up</span>
+                            <span class="text-xs text-gray-500">Increase brightness</span>
+                        </span>
+                    </label>
+                    
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'brightness_down' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="brightness_down" 
+                            ${button.action_type === 'brightness_down' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'brightness_down')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">Brightness Down</span>
+                            <span class="text-xs text-gray-500">Decrease brightness</span>
+                        </span>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Room Selection -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    <i class="fas fa-door-open mr-2 text-blue-500"></i>Select Room
+                </label>
+                <select id="remote-room-select" onchange="updateRemoteButtonRoom(${index})" 
+                    class="w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-pink-500 focus:border-pink-500">
+                    <option value="">-- Select a room --</option>
+                    ${rooms.map(room => `
+                        <option value="${room.id}" ${button.room_id === room.id ? 'selected' : ''}>
+                            ${room.name}
+                        </option>
+                    `).join('')}
+                </select>
+            </div>
+            
+            <!-- Scenes Selection (for normal action type) -->
+            ${button.action_type === 'normal' ? `
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        <i class="fas fa-palette mr-2 text-purple-500"></i>Select Scenes (drag to reorder)
+                    </label>
+                    <div id="remote-available-scenes" class="grid grid-cols-2 gap-3 mb-4 max-h-64 overflow-y-auto p-2 border border-gray-200 rounded-lg">
+                        <!-- Available scenes will be loaded here -->
+                    </div>
+                    <div id="remote-selected-scenes" class="space-y-2 min-h-[100px] border-2 border-dashed border-gray-300 rounded-lg p-4 bg-gray-50">
+                        <p class="text-gray-400 text-center py-4">No scenes selected yet</p>
+                    </div>
+                </div>
+            ` : ''}
+        </div>
+    `;
+    
+    // Load available scenes for this button's room if applicable
+    if (button.action_type === 'normal' && button.room_id) {
+        // Use setTimeout to ensure DOM is ready
+        setTimeout(() => {
+            loadRemoteRoomScenes(button.room_id, index);
+        }, 0);
+    }
+}
+
+function loadRemoteRoomScenes(roomId, buttonIndex) {
+    const room = rooms.find(r => r.id === roomId);
+    
+    console.log(`Loading scenes for room ${roomId}, button ${buttonIndex}. Room:`, room);
+    
+    if (!room) {
+        console.warn(`Room ${roomId} not found in rooms array`);
+        const availableScenesDiv = document.getElementById('remote-available-scenes');
+        if (availableScenesDiv) availableScenesDiv.innerHTML = '<p class="text-red-400 text-center py-4">Room not found</p>';
+        return;
+    }
+    
+    if (!room.scenes || room.scenes.length === 0) {
+        // Clear scenes display if room has no scenes
+        const availableScenesDiv = document.getElementById('remote-available-scenes');
+        const selectedScenesDiv = document.getElementById('remote-selected-scenes');
+        if (availableScenesDiv) availableScenesDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes available in this room</p>';
+        if (selectedScenesDiv) selectedScenesDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes selected</p>';
+        console.log(`Room ${roomId} has no scenes or scenes property`);
+        return;
+    }
+    
+    const button = remoteConfig.buttons[buttonIndex];
+    const availableScenesDiv = document.getElementById('remote-available-scenes');
+    
+    if (!availableScenesDiv) {
+        console.warn('remote-available-scenes div not found');
+        return;
+    }
+    
+    console.log(`Rendering ${room.scenes.length} scenes for room ${roomId}`);
+    
+    // Store scenes in window scope for drag/drop handlers
+    window.remoteCurrentScenes = {
+        buttonIndex: buttonIndex,
+        roomId: roomId,
+        scenes: room.scenes
+    };
+    
+    // Render available scenes
+    availableScenesDiv.innerHTML = '';
+    room.scenes.forEach(scene => {
+        const isSelected = button.scenes.includes(scene.id);
+        const sceneCard = document.createElement('div');
+        sceneCard.className = `border-2 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors remote-scene-card ${
+            isSelected 
+                ? 'border-pink-500 bg-pink-50' 
+                : 'border-gray-200 bg-white'
+        }`;
+        sceneCard.id = `remote-scene-${scene.id}`;
+        sceneCard.onclick = () => toggleRemoteScene(buttonIndex, scene.id);
+        sceneCard.innerHTML = `
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium flex-1">${scene.name}</span>
+                <i class="fas ${isSelected ? 'fa-check-circle' : 'fa-plus-circle'} text-pink-600 flex-shrink-0"></i>
+            </div>
+        `;
+        availableScenesDiv.appendChild(sceneCard);
+    });
+    
+    // Render selected scenes with drag handles
+    renderRemoteSelectedScenes(buttonIndex);
+}
+
+function renderRemoteSelectedScenes(buttonIndex) {
+    const button = remoteConfig.buttons[buttonIndex];
+    const selectedScenesDiv = document.getElementById('remote-selected-scenes');
+    
+    console.log(`Rendering selected scenes for button ${buttonIndex}:`, button.scenes);
+    
+    if (!selectedScenesDiv) {
+        console.warn('remote-selected-scenes div not found');
+        return;
+    }
+    
+    if (button.scenes.length === 0) {
+        selectedScenesDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes selected yet</p>';
+        return;
+    }
+    
+    selectedScenesDiv.innerHTML = '';
+    button.scenes.forEach((sceneId, index) => {
+        // Find scene object from rooms
+        let sceneName = sceneId;
+        for (const room of rooms) {
+            const scene = room.scenes.find(s => s.id === sceneId);
+            if (scene) {
+                sceneName = scene.name;
+                break;
+            }
+        }
+        
+        const sceneItem = document.createElement('div');
+        sceneItem.className = 'bg-white border border-gray-300 rounded-lg p-3 cursor-move hover:shadow-md transition-shadow';
+        sceneItem.draggable = true;
+        sceneItem.dataset.index = index;
+        sceneItem.dataset.buttonIndex = buttonIndex;
+        sceneItem.innerHTML = `
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <i class="fas fa-grip-vertical text-gray-400"></i>
+                    <span class="font-medium">${sceneName}</span>
+                </div>
+                <button onclick="event.stopPropagation(); removeRemoteScene(${buttonIndex}, ${index})" class="text-red-600 hover:text-red-800">
+                    <i class="fas fa-times-circle"></i>
+                </button>
+            </div>
+        `;
+        
+        // Drag events
+        sceneItem.addEventListener('dragstart', handleRemoteSceneDragStart);
+        sceneItem.addEventListener('dragover', handleRemoteSceneDragOver);
+        sceneItem.addEventListener('drop', handleRemoteSceneDrop);
+        sceneItem.addEventListener('dragend', handleRemoteSceneDragEnd);
+        sceneItem.addEventListener('dragenter', handleRemoteSceneDragEnter);
+        sceneItem.addEventListener('dragleave', handleRemoteSceneDragLeave);
+        
+        selectedScenesDiv.appendChild(sceneItem);
+    });
+}
+
+function updateRemoteButtonActionType(index, actionType) {
+    remoteConfig.buttons[index].action_type = actionType;
+    // Reset scenes when action type changes to non-normal
+    if (actionType !== 'normal') {
+        remoteConfig.buttons[index].scenes = [];
+    }
+    renderRemoteButtonConfig(index);
+    // Update only the current button's tab label, don't re-render all tabs
+    const tabsContainer = document.getElementById('remote-tabs');
+    if (tabsContainer && tabsContainer.children[index]) {
+        const tab = tabsContainer.children[index];
+        tab.innerHTML = `
+            <i class="fas fa-circle mr-2"></i>
+            Button ${index + 1}
+            <span class="text-xs ml-2">(${getActionTypeLabel(actionType)})</span>
+        `;
+    }
+}
+
+function updateRemoteButtonRoom(index) {
+    const roomSelect = document.getElementById('remote-room-select');
+    const newRoomId = roomSelect.value;
+    
+    // Only reset scenes if the room actually changed
+    if (newRoomId !== remoteConfig.buttons[index].room_id) {
+        remoteConfig.buttons[index].room_id = newRoomId;
+        remoteConfig.buttons[index].scenes = [];
+    }
+    
+    // Reload scenes for new room
+    if (newRoomId) {
+        loadRemoteRoomScenes(newRoomId, index);
+    }
+}
+
+function toggleRemoteScene(buttonIndex, sceneId) {
+    const button = remoteConfig.buttons[buttonIndex];
+    const idx = button.scenes.indexOf(sceneId);
+    
+    console.log(`Toggle scene ${sceneId} for button ${buttonIndex}, currently at index ${idx}`);
+    
+    if (idx > -1) {
+        // Remove scene
+        button.scenes.splice(idx, 1);
+        console.log(`Removed scene, new scenes:`, button.scenes);
+    } else {
+        // Add scene and activate for preview
+        button.scenes.push(sceneId);
+        console.log(`Added scene, new scenes:`, button.scenes);
+        
+        // Activate scene for preview
+        fetch(`/api/scenes/${sceneId}/activate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Success', 'Scene activated', 'success');
+            } else {
+                showToast('Error', 'Failed to activate scene: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error activating scene:', err);
+            showToast('Error', 'Failed to activate scene', 'error');
+        });
+    }
+    
+    // Re-render the entire available scenes section to update icons
+    const room = rooms.find(r => r.id === button.room_id);
+    if (room) {
+        const availableScenesDiv = document.getElementById('remote-available-scenes');
+        if (availableScenesDiv) {
+            availableScenesDiv.innerHTML = '';
+            room.scenes.forEach(scene => {
+                const isSelected = button.scenes.includes(scene.id);
+                const sceneCard = document.createElement('div');
+                sceneCard.className = `border-2 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors remote-scene-card ${
+                    isSelected 
+                        ? 'border-pink-500 bg-pink-50' 
+                        : 'border-gray-200 bg-white'
+                }`;
+                sceneCard.id = `remote-scene-${scene.id}`;
+                sceneCard.onclick = () => toggleRemoteScene(buttonIndex, scene.id);
+                sceneCard.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-medium flex-1">${scene.name}</span>
+                        <i class="fas ${isSelected ? 'fa-check-circle' : 'fa-plus-circle'} text-pink-600 flex-shrink-0"></i>
+                    </div>
+                `;
+                availableScenesDiv.appendChild(sceneCard);
+            });
+        }
+    }
+    
+    renderRemoteSelectedScenes(buttonIndex);
+}
+
+function removeRemoteScene(buttonIndex, sceneIndex) {
+    remoteConfig.buttons[buttonIndex].scenes.splice(sceneIndex, 1);
+    renderRemoteSelectedScenes(buttonIndex);
+    
+    // Re-render available scenes to update icons
+    const button = remoteConfig.buttons[buttonIndex];
+    const room = rooms.find(r => r.id === button.room_id);
+    if (room) {
+        const availableScenesDiv = document.getElementById('remote-available-scenes');
+        if (availableScenesDiv) {
+            availableScenesDiv.innerHTML = '';
+            room.scenes.forEach(scene => {
+                const isSelected = button.scenes.includes(scene.id);
+                const sceneCard = document.createElement('div');
+                sceneCard.className = `border-2 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors remote-scene-card ${
+                    isSelected 
+                        ? 'border-pink-500 bg-pink-50' 
+                        : 'border-gray-200 bg-white'
+                }`;
+                sceneCard.id = `remote-scene-${scene.id}`;
+                sceneCard.onclick = () => toggleRemoteScene(buttonIndex, scene.id);
+                sceneCard.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-medium flex-1">${scene.name}</span>
+                        <i class="fas ${isSelected ? 'fa-check-circle' : 'fa-plus-circle'} text-pink-600 flex-shrink-0"></i>
+                    </div>
+                `;
+                availableScenesDiv.appendChild(sceneCard);
+            });
+        }
+    }
+}
+
+let remoteScenesDraggedElement = null;
+
+// Drag and Drop handlers for remote scenes
+function handleRemoteSceneDragStart(e) {
+    remoteScenesDraggedElement = this;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', this.innerHTML);
+    this.classList.add('opacity-40');
+}
+
+function handleRemoteSceneDragOver(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+    e.dataTransfer.dropEffect = 'move';
+    
+    // Remove border from all items first
+    document.querySelectorAll('#remote-selected-scenes > div').forEach(item => {
+        if (item !== remoteScenesDraggedElement) {
+            item.classList.remove('border-pink-500', 'bg-pink-50');
+        }
+    });
+    
+    // Add visual feedback to current item
+    if (this !== remoteScenesDraggedElement) {
+        this.classList.add('border-pink-500', 'bg-pink-50');
+    }
+    
+    return false;
+}
+
+function handleRemoteSceneDragEnter(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+}
+
+function handleRemoteSceneDragLeave(e) {
+    // Handled in dragover now
+}
+
+function handleRemoteSceneDrop(e) {
+    if (e.stopPropagation) {
+        e.stopPropagation();
+    }
+    e.preventDefault();
+
+    // Remove all highlighting
+    document.querySelectorAll('#remote-selected-scenes > div').forEach(item => {
+        item.classList.remove('border-pink-500', 'bg-pink-50');
+    });
+
+    if (remoteScenesDraggedElement !== this) {
+        const draggedIndex = parseInt(remoteScenesDraggedElement.dataset.index);
+        const targetIndex = parseInt(this.dataset.index);
+        const buttonIndex = parseInt(remoteScenesDraggedElement.dataset.buttonIndex);
+
+        const draggedScene = remoteConfig.buttons[buttonIndex].scenes[draggedIndex];
+        remoteConfig.buttons[buttonIndex].scenes.splice(draggedIndex, 1);
+        remoteConfig.buttons[buttonIndex].scenes.splice(targetIndex, 0, draggedScene);
+        
+        renderRemoteSelectedScenes(buttonIndex);
+    }
+
+    return false;
+}
+
+function handleRemoteSceneDragEnd(e) {
+    this.classList.remove('opacity-40');
+    document.querySelectorAll('#remote-selected-scenes > div').forEach(item => {
+        item.classList.remove('border-pink-500', 'bg-pink-50');
+    });
+}
+
+function findSceneById(sceneId) {
+    for (const room of rooms) {
+        const scene = room.scenes.find(s => s.id === sceneId);
+        if (scene) return scene;
+    }
+    return null;
+}
+
+function getActionTypeLabel(actionType) {
+    const labels = {
+        'normal': 'Scene Cycle',
+        'toggle': 'Toggle On/Off',
+        'brightness_up': 'Brightness Up',
+        'brightness_down': 'Brightness Down'
+    };
+    return labels[actionType] || actionType;
+}
+
+function saveRemoteConfiguration() {
+    if (!remoteDeviceId) return;
+    
+    const button = document.querySelector('#remote-config-modal button[onclick*="saveRemoteConfiguration"]');
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Saving...';
+    
+    fetch(`/buttons/api/remote/${remoteDeviceId}/configure`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(remoteConfig)
+    })
+    .then(response => response.json())
+    .then(data => {
+        button.disabled = false;
+        button.innerHTML = '<i class="fas fa-save mr-2"></i>Save Configuration';
+        
+        if (data.success) {
+            showToast('Remote Configured', 'Remote device configuration saved successfully', 'success');
+            closeRemoteConfigModal();
+            loadDevices();
+        } else {
+            showToast('Error', data.error || 'Failed to save configuration', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error saving remote config:', err);
+        button.disabled = false;
+        button.innerHTML = '<i class="fas fa-save mr-2"></i>Save Configuration';
+        showToast('Error', 'Failed to save configuration', 'error');
     });
 }
 </script>

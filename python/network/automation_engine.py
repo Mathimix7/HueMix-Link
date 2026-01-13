@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from typing import Dict, List, Tuple, Optional
-from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS
+from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN
 from controllers.hue_controller import Hue
 from controllers.color_controller import color_controller
 from services.hue_state_manager import hue_state_manager
@@ -83,15 +83,16 @@ class AutomationEngine:
     
     # ===== Button Event Handling =====
     
-    def handle_button_event(self, button_mac: str, action: int, rssi: int):
+    def handle_button_event(self, button_mac: str, action: int, rssi: int, button_index: int = None):
         """Handle button event.
         
         Args:
-            button_mac: Button MAC address
+            button_mac: Button/Remote MAC address
             action: ACT_CLICK/ACT_HOLDING/ACT_RELEASE
             rssi: Signal strength
+            button_index: For remote buttons, index of which button was pressed (0-3)
         """
-        # Get button configuration
+        # Get button/remote configuration
         button = device_manager.get_button_by_mac(button_mac)
         if not button:
             logger.warning(f"Unknown button: {button_mac}")
@@ -102,6 +103,12 @@ class AutomationEngine:
             return
         
         config = button.get('config', {})
+        
+        # Handle remote button events (detected by presence of button_index)
+        if button_index is not None:
+            self._handle_remote_button_event(button_mac, button, button_index, action)
+            return
+        
         room_id = config.get('room_id')
         
         if not room_id:
@@ -117,6 +124,182 @@ class AutomationEngine:
         
         elif action == ACT_RELEASE:
             self._handle_button_release(button_mac, button, room_id)
+    
+    def _handle_remote_button_event(self, remote_mac: str, remote: Dict, button_index: int, action: int):
+        """Handle remote button press.
+        
+        Args:
+            remote_mac: Remote MAC address
+            remote: Remote configuration
+            button_index: Index of pressed button (0-3)
+            action: ACT_CLICK or ACT_HOLDING
+        """
+        config = remote.get('config', {})
+        buttons_config = config.get('buttons', [])
+        
+        # Find config for this button
+        button_config = None
+        for btn in buttons_config:
+            if btn.get('index') == button_index:
+                button_config = btn
+                break
+        
+        if not button_config:
+            logger.warning(f"Remote {remote_mac} button {button_index} has no configuration")
+            return
+        
+        action_type = button_config.get('action_type', None)
+        room_id = button_config.get('room_id')
+        
+        action_str = {ACT_CLICK: "CLICK", ACT_HOLDING: "HOLDING"}.get(action, f"UNKNOWN({action})")
+        logger.info(f"Remote {remote_mac} button {button_index}: {action_str} -> {action_type} action in room {room_id}")
+        
+        if not room_id:
+            logger.warning(f"Remote {remote_mac} button {button_index} has no room configured")
+            return
+        
+        # Handle different action types
+        if action_type == REMOTE_ACTION_NORMAL:
+            # CLICK = scene cycle, HOLDING = brightness adjust
+            if action == ACT_CLICK:
+                self._handle_remote_normal_action_click(remote_mac, button_config, room_id)
+            elif action == ACT_HOLDING:
+                self._handle_remote_normal_action_holding(remote_mac, button_config, room_id)
+        
+        elif action_type == REMOTE_ACTION_TOGGLE:
+            # Only respond to CLICK, ignore HOLDING
+            if action == ACT_CLICK:
+                self._handle_remote_toggle_action(room_id)
+        
+        elif action_type == REMOTE_ACTION_BRIGHTNESS_UP:
+            # Both CLICK and HOLDING do the same - increase brightness
+            if action in (ACT_CLICK, ACT_HOLDING):
+                try:
+                    self._adjust_room_brightness(room_id, 1)
+                except Exception as e:
+                    logger.error(f"Failed to increase brightness: {e}")
+        
+        elif action_type == REMOTE_ACTION_BRIGHTNESS_DOWN:
+            # Both CLICK and HOLDING do the same - decrease brightness
+            if action in (ACT_CLICK, ACT_HOLDING):
+                try:
+                    self._adjust_room_brightness(room_id, -1)
+                except Exception as e:
+                    logger.error(f"Failed to decrease brightness: {e}")
+    
+    def _handle_remote_normal_action_click(self, remote_mac: str, button_config: Dict, room_id: str):
+        """Handle normal remote button CLICK action (scene cycling).
+        
+        Args:
+            remote_mac: Remote MAC address
+            button_config: Button configuration
+            room_id: Room ID to control
+        """
+        scenes = button_config.get('scenes', [])
+        
+        if not scenes:
+            logger.warning(f"Remote {remote_mac} button has no scenes configured")
+            return
+        
+        # Use remote_mac + button_index as state key
+        button_index = button_config.get('index', 0)
+        state_key = f"{remote_mac}_{button_index}"
+        
+        now = time.time()
+        
+        with self._button_lock:
+            if state_key not in self._button_states:
+                self._button_states[state_key] = {
+                    'scene_index': 0,
+                    'last_press': 0,
+                    'brightness_direction': -1
+                }
+            
+            state = self._button_states[state_key]
+            
+            # Check if timeout expired
+            time_since_last = now - state['last_press']
+            
+            if time_since_last > self.scene_timeout:
+                # Timeout expired - turn off room
+                room_state = hue_state_manager.get_room_state(room_id)
+                room_is_on = room_state.get('is_on', False) if room_state else False
+                
+                if room_is_on:
+                    logger.info(f"Remote {remote_mac}: Timeout expired, turning off room {room_id}")
+                    self._turn_off_room(room_id)
+                    state['scene_index'] = 0
+                    state['last_press'] = now
+                    return
+                else:
+                    logger.debug(f"Remote {remote_mac}: Timeout expired, reset to scene 0")
+                    state['scene_index'] = 0
+            
+            # Get current scene
+            scene_id = scenes[state['scene_index']]
+            
+            # Advance to next scene
+            state['scene_index'] = (state['scene_index'] + 1) % len(scenes)
+            state['last_press'] = now
+            
+            logger.info(f"Remote {remote_mac} button {button_index}: Activating scene {scene_id}")
+        
+        # Activate scene
+        try:
+            self._activate_scene(room_id, scene_id)
+        except Exception as e:
+            logger.error(f"Failed to activate scene {scene_id}: {e}")
+    
+    def _handle_remote_normal_action_holding(self, remote_mac: str, button_config: Dict, room_id: str):
+        """Handle normal remote button HOLDING action (brightness adjustment).
+        
+        Args:
+            remote_mac: Remote MAC address
+            button_config: Button configuration
+            room_id: Room ID to control
+        """
+        # Use remote_mac + button_index as state key
+        button_index = button_config.get('index', 0)
+        state_key = f"{remote_mac}_{button_index}"
+        
+        with self._button_lock:
+            if state_key not in self._button_states:
+                self._button_states[state_key] = {
+                    'scene_index': 0,
+                    'last_press': 0,
+                    'brightness_direction': -1
+                }
+            
+            state = self._button_states[state_key]
+            
+            # Toggle brightness direction
+            state['brightness_direction'] = -state['brightness_direction']
+            logger.info(f"Remote {remote_mac} button {button_index}: Brightness direction {'UP' if state['brightness_direction'] > 0 else 'DOWN'}")
+        
+        # Adjust brightness
+        try:
+            self._adjust_room_brightness(room_id, state['brightness_direction'])
+        except Exception as e:
+            logger.error(f"Failed to adjust brightness: {e}")
+    
+    def _handle_remote_toggle_action(self, room_id: str):
+        """Handle toggle action - turn room on/off.
+        
+        Args:
+            room_id: Room ID to toggle
+        """
+        try:
+            room_state = hue_state_manager.get_room_state(room_id)
+            room_is_on = room_state.get('is_on', False) if room_state else False
+            
+            if room_is_on:
+                logger.info(f"Remote toggle: Turning off room {room_id}")
+                self._turn_off_room(room_id)
+            else:
+                logger.info(f"Remote toggle: Turning on room {room_id}")
+                self._turn_on_room(room_id)
+        except Exception as e:
+            logger.error(f"Failed to toggle room: {e}")
     
     def _handle_button_click(self, button_mac: str, button: Dict, room_id: str):
         """Handle button click - cycle scenes or turn off.
@@ -277,6 +460,26 @@ class AutomationEngine:
         hue_state_manager.set_room_scene(room_id, None, old_scene_id, source='button')
         
         logger.info(f"Turned off room {room_id}")
+    
+    def _turn_on_room(self, room_id: str):
+        """Turn on all lights in a room.
+        
+        Args:
+            room_id: Room ID
+        """
+        # Turn on room via grouped_light
+        room_state = hue_state_manager.get_room_state(room_id)
+        
+        if not room_state:
+            logger.error(f"Room {room_id} not found in state manager")
+            return
+        
+        grouped_light_id = room_state.get('grouped_light_id')
+        if grouped_light_id:
+            payload = {'on': {'on': True}}
+            self.hue._put_resource('grouped_light', grouped_light_id, payload)
+        
+        logger.info(f"Turned on room {room_id}")
     
     def _adjust_room_brightness(self, room_id: str, direction: int):
         """Adjust room brightness.

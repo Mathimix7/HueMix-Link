@@ -7,7 +7,7 @@ import logging
 from typing import Optional, List, Dict
 from datetime import datetime
 from services.data_manager import data_manager
-from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS
+from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS, DEV_BUTTON
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -249,15 +249,16 @@ class DeviceManager:
         
         data_manager.update_json(FILE_BUTTONS, update_func)
     
-    def add_button(self, mac_address: str, name: str) -> Dict:
-        """Add new button to registry.
+    def add_button(self, mac_address: str, name: str, device_type: int = DEV_BUTTON) -> Dict:
+        """Add new button/remote to registry.
         
         Args:
-            mac_address: Button MAC address
+            mac_address: Device MAC address
             name: Display name
+            device_type: DEV_BUTTON or DEV_REMOTE (default DEV_BUTTON)
             
         Returns:
-            Created button dict
+            Created device dict
         """
         def update_func(buttons):
             # Check if already exists
@@ -270,6 +271,7 @@ class DeviceManager:
                 'id': uuid.uuid4().hex,
                 'name': name,
                 'mac_address': mac_address.upper(),
+                'device_type': device_type,
                 'configured': False,
                 'config': {
                     'device_id': None,

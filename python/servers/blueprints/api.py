@@ -628,7 +628,8 @@ def get_pairing_devices():
         type_names = {
             1: 'Gateway',
             2: 'Button',
-            3: 'Light'
+            3: 'Light',
+            4: 'Remote'
         }
         
         for device in paired_devices:

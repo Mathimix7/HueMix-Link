@@ -428,7 +428,8 @@ async function loadPairedDevices() {
                 const typeIcons = {
                     1: '🔌', // Gateway
                     2: '🔘', // Button
-                    3: '💡'  // Light
+                    3: '💡', // Light
+                    4: '🎛️'  // Remote
                 };
                 const icon = typeIcons[device.type] || '❓';
                 
@@ -449,7 +450,8 @@ async function loadPairedDevices() {
                 const configUrls = {
                     1: '/gateways',  // Gateway
                     2: '/buttons',   // Button
-                    3: '/lightstrips' // Light
+                    3: '/lightstrips', // Light
+                    4: '/buttons'    // Remote
                 };
                 const configUrl = configUrls[device.type] || '#';
                 
@@ -609,6 +611,10 @@ async function confirmRename() {
             endpoint = `/lightstrips/api/lightstrips/${renameDeviceId}`;
             method = 'PUT';
             body = { name: newName };
+        } else if (renameDeviceType === 4) { // Remote
+            endpoint = `/buttons/api/devices/${renameDeviceId}/rename`;
+            method = 'POST';
+            body = { name: newName };
         }
         
         const response = await fetch(endpoint, {
@@ -667,6 +673,8 @@ async function confirmDelete() {
             endpoint = `/buttons/api/devices/${deleteDeviceId}`;
         } else if (deleteDeviceType === 3) { // Lightstrip
             endpoint = `/lightstrips/api/lightstrips/${deleteDeviceId}`;
+        } else if (deleteDeviceType === 4) { // Remote
+            endpoint = `/buttons/api/devices/${deleteDeviceId}`;
         }
         
         const response = await fetch(endpoint, {

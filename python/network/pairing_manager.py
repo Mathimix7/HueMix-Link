@@ -188,7 +188,7 @@ class PairingManager:
                     if gateway:
                         device_copy['name'] = gateway.get('name', device['name'])
                         device_copy['id'] = gateway.get('id')
-                elif device['type'] == DEV_BUTTON:
+                elif device['type'] == DEV_BUTTON or device['type'] == DEV_REMOTE:
                     button = device_manager.get_button_by_mac(device['mac'])
                     if button:
                         device_copy['name'] = button.get('name', device['name'])

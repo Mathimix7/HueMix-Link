@@ -162,10 +162,10 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
 
 void getBatteryVoltage() {
   // Read calibrated battery voltage from ADC pin 35 with voltage divider
-  // Divider: 1MΩ and 270kΩ, ratio = 1270/270 ≈ 4.704
+  // Divider: 1MΩ and 270kΩ, ratio = 1300/300 ≈ 4.333
   uint32_t raw = analogRead(PIN_BATTERY);
   uint32_t vout_mv = esp_adc_cal_raw_to_voltage(raw, &adc_chars);
-  battery_mv = (vout_mv * 1270) / 270;
+  battery_mv = (vout_mv * 1300) / 300;
 }
 
 void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {

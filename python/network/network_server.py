@@ -15,12 +15,16 @@ import struct
 from services.data_manager import data_manager
 from services.config_change_notifier import config_notifier
 from services.home_id_manager import home_id_manager
+from services.ota_manager import ota_manager, OTAState
 from constants import (
     DEFAULT_UDP_IP, DEFAULT_UDP_PORT, DEFAULT_GATEWAY_PORT,
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_GW_LIST_UPD, PKT_PING, PKT_PING_DEVICE,
+    PKT_OTA_READY, PKT_OTA_CHUNK_ACK, PKT_OTA_ABORT,
     DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE,
     MAX_GATEWAY_ATTEMPTS, GATEWAY_DELIVERY_TIMEOUT_SECONDS,
-    TIMEOUT_SOCKET,
+    TIMEOUT_SOCKET, OTA_READY_TIMEOUT, OTA_CHUNK_DATA_SIZE,
+    OTA_CHUNK_ACK_TIMEOUT, OTA_CHUNK_MAX_RETRIES, OTA_CHECKPOINT_INTERVAL,
+    OTA_POST_UPDATE_TIMEOUT,
     RSSI_AUTO_PAIR_THRESHOLD, MAX_GATEWAYS_PER_PACKET,
     FILE_GATEWAYS, FILE_LIGHTSTRIPS
 )
@@ -81,6 +85,10 @@ class NetworkServer:
         # Device ping response tracking: device_mac -> {event, rssi_map, timestamp}
         self._pending_device_pings: Dict[str, Dict] = {}
         self._device_ping_lock = threading.RLock()
+        
+        # OTA chunk ACK tracking: device_mac -> {event, last_chunk_index}
+        self._ota_ack_events: Dict[str, Dict] = {}
+        self._ota_ack_lock = threading.RLock()
         
         # Gateway LED state tracking
         self._gateway_leds_enabled = True
@@ -277,6 +285,10 @@ class NetworkServer:
             # Start LED scheduler thread
             self._led_scheduler_thread = threading.Thread(target=self._led_scheduler_loop, daemon=True, name="LED-Scheduler")
             self._led_scheduler_thread.start()
+            
+            # Start OTA timeout monitor thread
+            self._ota_timeout_thread = threading.Thread(target=self._ota_timeout_monitor, daemon=True, name="OTA-Timeout-Monitor")
+            self._ota_timeout_thread.start()
             
             # Perform initial LED sync for all gateways
             threading.Thread(target=self._initial_led_sync, daemon=True, name="Initial-LED-Sync").start()
@@ -555,6 +567,15 @@ class NetworkServer:
         elif pkt_type == PKT_PING_DEVICE:
             self._handle_ping_device_response(src_mac, payload, sender_ip)
         
+        elif pkt_type == PKT_OTA_READY:
+            self._handle_ota_ready(src_mac, payload, sender_ip)
+        
+        elif pkt_type == PKT_OTA_CHUNK_ACK:
+            self._handle_ota_chunk_ack(src_mac, payload)
+        
+        elif pkt_type == PKT_OTA_ABORT:
+            self._handle_ota_abort_from_device(src_mac, payload)
+        
         elif pkt_type == PKT_GW_LIST_UPD:
             # Gateway received our list - no action needed
             pass
@@ -622,7 +643,47 @@ class NetworkServer:
                 self._gateway_table[radio_mac]['last_seen'] = datetime.now()
 
         # Update device manager
-        device_manager.update_gateway(wifi_mac, radio_mac, sender_ip)
+        device_manager.update_gateway(
+            wifi_mac, 
+            radio_mac, 
+            sender_ip, 
+            version_net=hello_data.get('version_net'),
+            version_radio=hello_data.get('version_radio')
+        )
+        
+        # Check if net node has a pending OTA validation
+        session = ota_manager.get_session(wifi_mac)
+        if session and session.state == OTAState.VALIDATING:
+            # Check if version matches expected firmware
+            expected_version = f"{session.version[0]}.{session.version[1]}.{session.version[2]}"
+            current_version_net = hello_data.get('version_net', '0.0.0')
+            
+            # Gateway net firmware validation
+            if current_version_net == expected_version:
+                logger.info(f"✅ OTA validation SUCCESS (NET): {wifi_mac} now running {current_version_net}")
+                ota_manager.update_session_state(wifi_mac, OTAState.COMPLETE, "Firmware validated successfully")
+            else:
+                error_msg = f"Version mismatch: expected {expected_version}, got {current_version_net}"
+                logger.error(f"❌ OTA validation FAILED (NET): {wifi_mac} - {error_msg}")
+                ota_manager.update_session_state(wifi_mac, OTAState.FAILED, error_msg)
+        
+        # Check if radio node has a pending OTA validation
+        if radio_mac:
+            session = ota_manager.get_session(radio_mac)
+            if session and session.state == OTAState.VALIDATING:
+                # Check if version matches expected firmware
+                expected_version = f"{session.version[0]}.{session.version[1]}.{session.version[2]}"
+                current_version_radio = hello_data.get('version_radio', '0.0.0')
+                
+                # Gateway radio firmware validation
+                if current_version_radio == expected_version:
+                    logger.info(f"✅ OTA validation SUCCESS (RADIO): {radio_mac} now running {current_version_radio}")
+                    ota_manager.update_session_state(radio_mac, OTAState.COMPLETE, "Firmware validated successfully")
+                else:
+                    error_msg = f"Version mismatch: expected {expected_version}, got {current_version_radio}"
+                    logger.error(f"❌ OTA validation FAILED (RADIO): {radio_mac} - {error_msg}")
+                    ota_manager.update_session_state(radio_mac, OTAState.FAILED, error_msg)
+        
         # If gateway is paired, check if LEDs should be off based on its schedule
         if is_paired:
             leds_should_be_off = self._should_leds_be_off(wifi_mac)
@@ -660,6 +721,20 @@ class NetworkServer:
         """
         rssi = hello_data.get('rssi', -100)
         
+        # Check if this device has a pending OTA validation
+        session = ota_manager.get_session(button_mac)
+        if session and session.state == OTAState.VALIDATING:
+            expected_version = f"{session.version[0]}.{session.version[1]}.{session.version[2]}"
+            current_version = hello_data.get('version', '0.0.0')
+            
+            if current_version == expected_version:
+                logger.info(f"✅ OTA validation SUCCESS: {button_mac} now running {current_version}")
+                ota_manager.update_session_state(button_mac, OTAState.COMPLETE, "Firmware validated successfully")
+            else:
+                error_msg = f"Version mismatch: expected {expected_version}, got {current_version}"
+                logger.error(f"❌ OTA validation FAILED: {button_mac} - {error_msg}")
+                ota_manager.update_session_state(button_mac, OTAState.FAILED, error_msg)
+        
         # Find gateway radio MAC by IP
         gateway_radio_mac = None
         with self._gateway_lock:
@@ -689,6 +764,10 @@ class NetworkServer:
                 self._send_pair_confirm(button_mac, sender_ip)
                 device_manager.add_button(button_mac, f"Button {button_mac[-8:]}")
                 
+                # Update with version, platform, and RSSI from this HELLO packet
+                if gateway_radio_mac:
+                    device_manager.update_button_tracking(button_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
+                
                 if pairing_mode_active:
                     logger.info(f"🔘 Paired button via pairing mode: {button_mac}")
                     pairing_manager.record_device_paired(button_mac, DEV_BUTTON, f"Button {button_mac[-8:]}", 'long_range')
@@ -700,7 +779,7 @@ class NetworkServer:
         else:
             # Paired button - update tracking
             if gateway_radio_mac:
-                device_manager.update_button_tracking(button_mac, gateway_radio_mac, rssi)
+                device_manager.update_button_tracking(button_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
             
             logger.debug(f"Button {button_mac} online (RSSI: {rssi} dBm)")
     
@@ -716,6 +795,20 @@ class NetworkServer:
         rssi = hello_data.get('rssi', -100)
         num_leds = hello_data.get('num_leds', 60)
         is_rgbw = hello_data.get('is_rgbw', False)
+        
+        # Check if this device has a pending OTA validation
+        session = ota_manager.get_session(light_mac)
+        if session and session.state == OTAState.VALIDATING:
+            expected_version = f"{session.version[0]}.{session.version[1]}.{session.version[2]}"
+            current_version = hello_data.get('version', '0.0.0')
+            
+            if current_version == expected_version:
+                logger.info(f"✅ OTA validation SUCCESS: {light_mac} now running {current_version}")
+                ota_manager.update_session_state(light_mac, OTAState.COMPLETE, "Firmware validated successfully")
+            else:
+                error_msg = f"Version mismatch: expected {expected_version}, got {current_version}"
+                logger.error(f"❌ OTA validation FAILED: {light_mac} - {error_msg}")
+                ota_manager.update_session_state(light_mac, OTAState.FAILED, error_msg)
         
         # Find gateway radio MAC by IP
         gateway_radio_mac = None
@@ -744,11 +837,24 @@ class NetworkServer:
             
             if should_pair:
                 self._send_pair_confirm(light_mac, sender_ip)
-                device_manager.add_lightstrip(light_mac, f"Light {light_mac[-8:]}", num_leds, is_rgbw)
+                device_manager.add_lightstrip(
+                    light_mac, 
+                    f"Light {light_mac[-8:]}", 
+                    num_leds, 
+                    is_rgbw,
+                    model_id=hello_data.get('model_id')
+                )
                 
                 # Set initial gateway
                 if gateway_radio_mac:
-                    device_manager.update_light_gateway(light_mac, gateway_radio_mac)
+                    device_manager.update_light_gateway(
+                        light_mac, 
+                        gateway_radio_mac, 
+                        rssi=rssi, 
+                        version=hello_data.get('version'),
+                        platform=hello_data.get('platform'),
+                        model_id=hello_data.get('model_id')
+                    )
                 
                 # Send gateway list to newly paired light
                 with self._gateway_lock:
@@ -772,13 +878,26 @@ class NetworkServer:
             if not light:
                 # Device has home_id but was deleted from config - re-add it
                 logger.info(f"💡 Re-registering previously paired light: {light_mac}")
-                device_manager.add_lightstrip(light_mac, f"Light {light_mac[-8:]}", num_leds, is_rgbw)
+                device_manager.add_lightstrip(
+                    light_mac, 
+                    f"Light {light_mac[-8:]}", 
+                    num_leds, 
+                    is_rgbw,
+                    model_id=hello_data.get('model_id')
+                )
                 # Record in pairing history as a reconnected device
                 pairing_manager.record_device_paired(light_mac, DEV_LIGHT, f"Light {light_mac[-8:]}", 'short_range')
                 
                 # Set initial gateway and send gateway list
                 if gateway_radio_mac:
-                    device_manager.update_light_gateway(light_mac, gateway_radio_mac)
+                    device_manager.update_light_gateway(
+                        light_mac, 
+                        gateway_radio_mac, 
+                        rssi=rssi, 
+                        version=hello_data.get('version'),
+                        platform=hello_data.get('platform'),
+                        model_id=hello_data.get('model_id')
+                    )
                 
                 with self._gateway_lock:
                     all_gateway_macs = list(self._gateway_table.keys())
@@ -789,7 +908,14 @@ class NetworkServer:
             
             # Update gateway that successfully received HELLO
             if gateway_radio_mac:
-                device_manager.update_light_gateway(light_mac, gateway_radio_mac)
+                device_manager.update_light_gateway(
+                    light_mac, 
+                    gateway_radio_mac, 
+                    rssi=rssi, 
+                    version=hello_data.get('version'),
+                    platform=hello_data.get('platform'),
+                    model_id=hello_data.get('model_id')
+                )
                 logger.debug(f"Light {light_mac} online via {gateway_radio_mac} / {sender_ip} (RSSI: {rssi} dBm)")
             else:
                 logger.warning(f"Light {light_mac} HELLO from unknown gateway {sender_ip}")
@@ -806,6 +932,20 @@ class NetworkServer:
             is_paired: Whether remote is paired
         """
         rssi = hello_data.get('rssi', -100)
+        
+        # Check if this device has a pending OTA validation
+        session = ota_manager.get_session(remote_mac)
+        if session and session.state == OTAState.VALIDATING:
+            expected_version = f"{session.version[0]}.{session.version[1]}.{session.version[2]}"
+            current_version = hello_data.get('version', '0.0.0')
+            
+            if current_version == expected_version:
+                logger.info(f"✅ OTA validation SUCCESS: {remote_mac} now running {current_version}")
+                ota_manager.update_session_state(remote_mac, OTAState.COMPLETE, "Firmware validated successfully")
+            else:
+                error_msg = f"Version mismatch: expected {expected_version}, got {current_version}"
+                logger.error(f"❌ OTA validation FAILED: {remote_mac} - {error_msg}")
+                ota_manager.update_session_state(remote_mac, OTAState.FAILED, error_msg)
         
         # Find gateway radio MAC by IP
         gateway_radio_mac = None
@@ -836,6 +976,10 @@ class NetworkServer:
                 self._send_pair_confirm(remote_mac, sender_ip)
                 device_manager.add_button(remote_mac, f"Remote {remote_mac[-8:]}", device_type=DEV_REMOTE)
                 
+                # Update with version, platform, and RSSI from this HELLO packet
+                if gateway_radio_mac:
+                    device_manager.update_button_tracking(remote_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
+                
                 if pairing_mode_active:
                     logger.info(f"🎮 Paired remote via pairing mode: {remote_mac}")
                     pairing_manager.record_device_paired(remote_mac, DEV_REMOTE, f"Remote {remote_mac[-8:]}", 'long_range')
@@ -847,7 +991,7 @@ class NetworkServer:
         else:
             # Paired remote - update tracking
             if gateway_radio_mac:
-                device_manager.update_button_tracking(remote_mac, gateway_radio_mac, rssi)
+                device_manager.update_button_tracking(remote_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
             
             logger.debug(f"Remote {remote_mac} online (RSSI: {rssi} dBm)")
     
@@ -867,10 +1011,15 @@ class NetworkServer:
         action = event_data['action']
         battery_mv = event_data.get('battery_mv')
         button_index = event_data.get('button_index')
+        version = event_data.get('version')
+        platform = event_data.get('platform')
         
         action_str = {1: "CLICK", 2: "HOLD", 3: "RELEASE", 9: "SYNC"}.get(action, f"UNKNOWN({action})")
         
-        if button_index is not None:
+        # Determine if this is a normal button (index -1) or remote (index >= 0)
+        is_remote = button_index is not None and button_index >= 0
+        
+        if is_remote:
             logger.info(f"🔘 Remote {button_mac} button {button_index} -> {action_str}")
         else:
             logger.info(f"🔘 Button {button_mac} -> {action_str}")
@@ -878,14 +1027,14 @@ class NetworkServer:
         # Auto-add button/remote if it doesn't exist
         button = device_manager.get_button_by_mac(button_mac)
         if not button:
-            if button_index is None:
-                logger.info(f"Auto-registering button: {button_mac}")
-                device_manager.add_button(button_mac, f"Button {button_mac[-8:]}")
-                pairing_manager.record_device_paired(button_mac, DEV_BUTTON, f"Button {button_mac[-8:]}", 'short_range')
-            else:
+            if is_remote:
                 logger.info(f"Auto-registering remote: {button_mac}")
                 device_manager.add_button(button_mac, f"Remote {button_mac[-8:]}", device_type=DEV_REMOTE)
                 pairing_manager.record_device_paired(button_mac, DEV_REMOTE, f"Remote {button_mac[-8:]}", 'short_range')
+            else:
+                logger.info(f"Auto-registering button: {button_mac}")
+                device_manager.add_button(button_mac, f"Button {button_mac[-8:]}")
+                pairing_manager.record_device_paired(button_mac, DEV_BUTTON, f"Button {button_mac[-8:]}", 'short_range')
         
         # Find gateway for tracking
         gateway_radio_mac = None
@@ -896,7 +1045,14 @@ class NetworkServer:
                     break
         
         if gateway_radio_mac:
-            device_manager.update_button_tracking(button_mac, gateway_radio_mac, 0, battery_mv=battery_mv)
+            device_manager.update_button_tracking(
+                button_mac, 
+                gateway_radio_mac, 
+                0, 
+                battery_mv=battery_mv,
+                version=version,
+                platform=platform
+            )
         
         # Call event handler
         if self._button_event_handler:
@@ -1527,6 +1683,476 @@ class NetworkServer:
                         
         except Exception as e:
             logger.error(f"Failed to parse ping device response: {e}")
+    
+    def start_ota_update(self, device_mac: str, device_type: int, firmware_path: str) -> bool:
+        """Start OTA firmware update for a device.
+        
+        Args:
+            device_mac: Target device MAC address
+            device_type: Device type constant
+            firmware_path: Path to firmware binary file
+            
+        Returns:
+            True if OTA initiated successfully, False otherwise
+        """
+        # Create OTA session
+        session = ota_manager.create_session(device_mac, device_type, firmware_path)
+        if not session:
+            logger.error(f"Failed to create OTA session for {device_mac}")
+            return False
+        
+        try:
+            # Generate message ID
+            with self._delivery_lock:
+                msg_id = self._next_msg_id
+                self._next_msg_id = (self._next_msg_id + 1) % 256
+            
+            # Send OTA_NOTIFY packet
+            packet = self.encoder.encode_ota_notify(
+                device_mac,
+                session.firmware_size,
+                session.sha256_hash,
+                session.version,
+                msg_id
+            )
+            
+            # Determine target gateway
+            is_gateway = False
+            gateway_ip = None
+            
+            with self._gateway_lock:
+                for radio_mac, info in self._gateway_table.items():
+                    if info['wifi_mac'] == device_mac or radio_mac == device_mac:
+                        gateway_ip = info['ip_address']
+                        is_gateway = True
+                        break
+            
+            # Send packet
+            if is_gateway:
+                # Direct send to gateway
+                self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                logger.info(f"📡 OTA_NOTIFY sent to gateway {device_mac} at {gateway_ip}")
+            else:
+                # Send via gateway mesh (no delivery tracking - device responds with PKT_OTA_READY instead)
+                success = self._send_with_fallback(device_mac, packet, wait_for_delivery=False)
+                if not success:
+                    ota_manager.update_session_state(device_mac, OTAState.FAILED, "Failed to send OTA_NOTIFY")
+                    return False
+                logger.info(f"📡 OTA_NOTIFY sent to device {device_mac}")
+            
+            # Update session state
+            ota_manager.update_session_state(device_mac, OTAState.WAITING_READY)
+            
+            # Start timeout thread
+            threading.Thread(
+                target=self._ota_ready_timeout,
+                args=(device_mac,),
+                daemon=True,
+                name=f"OTA-Ready-Timeout-{device_mac[-8:]}"
+            ).start()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to start OTA for {device_mac}: {e}")
+            ota_manager.update_session_state(device_mac, OTAState.FAILED, str(e))
+            return False
+    
+    def _ota_ready_timeout(self, device_mac: str):
+        """Timeout thread waiting for PKT_OTA_READY response.
+        
+        Args:
+            device_mac: Device MAC address
+        """
+        time.sleep(OTA_READY_TIMEOUT)
+        
+        session = ota_manager.get_session(device_mac)
+        if session and session.state == OTAState.WAITING_READY:
+            logger.warning(f"⏱️  OTA ready timeout for {device_mac}")
+            ota_manager.update_session_state(device_mac, OTAState.FAILED, "Timeout waiting for OTA_READY")
+    
+    def _handle_ota_ready(self, src_mac: str, payload: bytes, sender_ip: str):
+        """Handle OTA_READY response from device.
+        
+        Args:
+            src_mac: Source device MAC
+            payload: Raw payload
+            sender_ip: Sender IP
+        """
+        ready_data = self.decoder.parse_ota_ready(payload)
+        if not ready_data:
+            logger.warning(f"Invalid OTA_READY from {src_mac}")
+            return
+        
+        battery_mv = ready_data.get('battery_mv', 0)
+        firmware_size_in_ready = ready_data.get('firmware_size', 0)
+        
+        logger.info(f"📡 OTA_READY received from {src_mac} (battery: {battery_mv}mV, fw_size: {firmware_size_in_ready})")
+        
+        # Check if session exists
+        session = ota_manager.get_session(src_mac)
+        if not session:
+            logger.warning(f"No OTA session for {src_mac}")
+            return
+        
+        # Store battery voltage
+        ota_manager.set_battery_voltage(src_mac, battery_mv)
+        
+        # If firmware_size is 0, this is an unsolicited PKT_OTA_READY from device waking up
+        # The device is in OTA_WAITING_NOTIFY state and needs PKT_OTA_NOTIFY to transition
+        if firmware_size_in_ready == 0 and session.state == OTAState.WAITING_READY:
+            logger.info(f"📡 Device {src_mac} woke up in OTA mode - re-sending OTA_NOTIFY")
+            
+            # Small delay to allow ESP-NOW peer connection to stabilize after device wakeup
+            time.sleep(0.2)
+            
+            # Generate new message ID
+            with self._delivery_lock:
+                msg_id = self._next_msg_id
+                self._next_msg_id = (self._next_msg_id + 1) % 256
+            
+            # Re-send OTA_NOTIFY packet
+            packet = self.encoder.encode_ota_notify(
+                src_mac,
+                session.firmware_size,
+                session.sha256_hash,
+                session.version,
+                msg_id
+            )
+            
+            # Send via gateway mesh
+            success = self._send_with_fallback(src_mac, packet, wait_for_delivery=False)
+            if success:
+                logger.info(f"📡 OTA_NOTIFY re-sent to {src_mac}")
+            else:
+                logger.error(f"Failed to re-send OTA_NOTIFY to {src_mac}")
+            return
+        
+        # Normal PKT_OTA_READY response (firmware_size matches session)
+        if session.state != OTAState.WAITING_READY:
+            logger.warning(f"Unexpected OTA_READY from {src_mac} in state {session.state}")
+            return
+        
+        # Start chunk transfer in background thread
+        threading.Thread(
+            target=self._send_ota_chunks,
+            args=(src_mac,),
+            daemon=True,
+            name=f"OTA-Transfer-{src_mac[-8:]}"
+        ).start()
+    
+    def _handle_ota_chunk_ack(self, src_mac: str, payload: bytes):
+        """Handle OTA_CHUNK_ACK (checkpoint) from device.
+        
+        Args:
+            src_mac: Device MAC address
+            payload: Raw payload bytes
+        """
+        ack_data = self.decoder.parse_ota_chunk_ack(payload)
+        if not ack_data:
+            logger.warning(f"Invalid OTA_CHUNK_ACK from {src_mac}")
+            return
+        
+        last_chunk_index = ack_data['chunk_index']
+        
+        logger.debug(f"📦 OTA checkpoint ACK from {src_mac}: last_chunk={last_chunk_index}")
+        
+        # Signal the waiting transfer thread
+        with self._ota_ack_lock:
+            if src_mac in self._ota_ack_events:
+                self._ota_ack_events[src_mac]['last_chunk_index'] = last_chunk_index
+                self._ota_ack_events[src_mac]['event'].set()
+    
+    def _handle_ota_abort_from_device(self, src_mac: str, payload: bytes):
+        """Handle OTA_ABORT notification from device (device-initiated abort).
+        
+        Args:
+            src_mac: Device MAC address
+            payload: Raw payload bytes (reason_code)
+        """
+        if len(payload) < 1:
+            logger.warning(f"Invalid OTA_ABORT from {src_mac}: missing reason_code")
+            return
+        
+        reason_code = payload[0]
+        logger.error(f"🚫 Device {src_mac} aborted OTA update (reason_code={reason_code})")
+        
+        # Update OTA session to ABORTED state
+        ota_manager.update_session_state(device_mac=src_mac, new_state=OTAState.ABORTED, failure_reason=f"Device abort (code={reason_code})")
+    
+    def _send_ota_chunks(self, device_mac: str):
+        """Send firmware chunks to device.
+        
+        Args:
+            device_mac: Target device MAC
+        """
+        session = ota_manager.get_session(device_mac)
+        if not session:
+            return
+        
+        try:
+            # Update state
+            ota_manager.update_session_state(device_mac, OTAState.TRANSFERRING)
+            
+            # Read firmware file
+            with open(session.firmware_path, 'rb') as f:
+                firmware_data = f.read()
+            
+            # Calculate chunks
+            total_chunks = (len(firmware_data) + OTA_CHUNK_DATA_SIZE - 1) // OTA_CHUNK_DATA_SIZE
+            session.total_chunks = total_chunks
+            
+            logger.info(f"📦 Starting OTA transfer to {device_mac}: {len(firmware_data)} bytes in {total_chunks} chunks")
+            
+            # Lock to first successful gateway for entire transfer
+            locked_gateway_ip = None
+            
+            # Determine if target is gateway and if it's radio node (via UART passthrough)
+            is_gateway = False
+            is_radio_node = False
+            with self._gateway_lock:
+                for radio_mac, info in self._gateway_table.items():
+                    if info['wifi_mac'] == device_mac:
+                        # Updating net node directly
+                        locked_gateway_ip = info['ip_address']
+                        is_gateway = True
+                        break
+                    elif radio_mac == device_mac:
+                        # Updating radio node via UART passthrough through net node
+                        locked_gateway_ip = info['ip_address']
+                        is_gateway = True
+                        is_radio_node = True
+                        break
+            
+            # Set chunk delay based on target type
+            # Radio node needs more delay due to UART passthrough buffering (460800 baud = ~46ms per 264-byte packet)
+            if is_gateway and not is_radio_node:
+                chunk_delay = 0.008
+            else:
+                chunk_delay = 0.016
+            
+            logger.info(f"📦 Starting OTA transfer to {device_mac}: {len(firmware_data)} bytes in {total_chunks} chunks (radio_node={is_radio_node}, delay={chunk_delay}s)")
+            
+            # Send chunks with checkpoint-based ACK
+            chunk_idx = 0
+            retry_count = 0
+            
+            while chunk_idx < total_chunks:
+                # Check if session still active
+                if session.state != OTAState.TRANSFERRING:
+                    logger.warning(f"OTA transfer aborted for {device_mac}")
+                    return
+                
+                # Prepare ACK tracking for this batch
+                with self._ota_ack_lock:
+                    self._ota_ack_events[device_mac] = {
+                        'event': threading.Event(),
+                        'last_chunk_index': -1
+                    }
+                
+                # Send a batch of chunks (up to checkpoint interval)
+                batch_start = chunk_idx
+                batch_end = min(chunk_idx + OTA_CHECKPOINT_INTERVAL, total_chunks)
+                
+                for i in range(batch_start, batch_end):
+                    # Extract chunk data
+                    offset = i * OTA_CHUNK_DATA_SIZE
+                    chunk_data = firmware_data[offset:offset + OTA_CHUNK_DATA_SIZE]
+                    
+                    # Generate message ID
+                    with self._delivery_lock:
+                        msg_id = self._next_msg_id
+                        self._next_msg_id = (self._next_msg_id + 1) % 256
+                    
+                    # Encode chunk packet
+                    packet = self.encoder.encode_ota_chunk(device_mac, i, chunk_data, msg_id)
+                    
+                    # Send chunk
+                    success = False
+                    if is_gateway:
+                        try:
+                            self.sock.sendto(packet, (locked_gateway_ip, self.gateway_port))
+                            success = True
+                        except Exception as e:
+                            logger.error(f"Failed to send chunk {i}: {e}")
+                    else:
+                        # Send via gateway mesh routing
+                        if locked_gateway_ip is None:
+                            _, gateway_mac = device_manager.get_light_gateway(device_mac)
+                            if gateway_mac:
+                                with self._gateway_lock:
+                                    for radio_mac, info in self._gateway_table.items():
+                                        if radio_mac.upper() == gateway_mac.upper():
+                                            locked_gateway_ip = info['ip_address']
+                                            break
+                            if locked_gateway_ip is None:
+                                with self._gateway_lock:
+                                    if self._gateway_table:
+                                        locked_gateway_ip = list(self._gateway_table.values())[0]['ip_address']
+                        
+                        if locked_gateway_ip:
+                            try:
+                                self.sock.sendto(packet, (locked_gateway_ip, self.gateway_port))
+                                success = True
+                            except Exception as e:
+                                logger.error(f"Failed to send chunk {i}: {e}")
+                    
+                    if not success:
+                        ota_manager.update_session_state(device_mac, OTAState.FAILED, f"Failed to send chunk {i}")
+                        return
+                    
+                    # Delay between chunks (longer for radio node due to UART passthrough)
+                    time.sleep(chunk_delay)
+                
+                # Always send checkpoint request after each batch (we just sent batch_end - batch_start chunks)
+                # Small delay to let ESP32 process chunks and clear buffers before checkpoint
+                time.sleep(0.05)
+                
+                # Try checkpoint request up to 5 times before retrying the entire batch
+                checkpoint_retry = 0
+                ack_received = False
+                
+                while checkpoint_retry < 5 and not ack_received:
+                    # Generate new message ID for checkpoint request
+                    with self._delivery_lock:
+                        checkpoint_msg_id = self._next_msg_id
+                        self._next_msg_id = (self._next_msg_id + 1) % 256
+                    
+                    # Clear the event before sending checkpoint request (to wait for fresh ACK)
+                    with self._ota_ack_lock:
+                        event = self._ota_ack_events[device_mac]['event']
+                        event.clear()  # Reset event to wait for new ACK
+                    
+                    # Send checkpoint request to device
+                    checkpoint_packet = self.encoder.encode_ota_checkpoint_req(device_mac, checkpoint_msg_id)
+                    if is_gateway:
+                        self.sock.sendto(checkpoint_packet, (locked_gateway_ip, self.gateway_port))
+                    else:
+                        if locked_gateway_ip:
+                            self.sock.sendto(checkpoint_packet, (locked_gateway_ip, self.gateway_port))
+                    
+                    if checkpoint_retry == 0:
+                        logger.debug(f"📍 Sent checkpoint request after chunk {batch_end - 1}, waiting for ACK...")
+                    else:
+                        logger.info(f"📍 Retrying checkpoint request (attempt {checkpoint_retry + 1}/5)...")
+                    
+                    ack_received = event.wait(timeout=OTA_CHUNK_ACK_TIMEOUT)
+                    
+                    if not ack_received:
+                        checkpoint_retry += 1
+                        if checkpoint_retry < 5:
+                            time.sleep(0.1)  # Small delay before retry
+                
+                if ack_received:
+                    with self._ota_ack_lock:
+                        last_chunk_index = self._ota_ack_events[device_mac]['last_chunk_index']
+                    
+                    if last_chunk_index == batch_end - 1:
+                        # All chunks in batch received successfully
+                        logger.debug(f"✅ Checkpoint confirmed: chunks {batch_start}-{batch_end - 1} received")
+                        chunk_idx = batch_end
+                        retry_count = 0  # Reset retry counter on success
+                        
+                        # Update progress
+                        bytes_sent = chunk_idx * OTA_CHUNK_DATA_SIZE
+                        if bytes_sent > len(firmware_data):
+                            bytes_sent = len(firmware_data)
+                        ota_manager.update_progress(device_mac, chunk_idx, total_chunks, bytes_sent)
+                    else:
+                        # Some chunks were lost - resume from last received + 1
+                        chunk_idx = last_chunk_index + 1
+                        retry_count = 0  # Reset retry counter, we're making progress
+                        logger.warning(f"⚠️ Packet loss detected: resuming from chunk {chunk_idx} (expected {batch_end - 1}, got {last_chunk_index})")
+                else:
+                    # No ACK received - retry the batch
+                    retry_count += 1
+                    if retry_count >= OTA_CHUNK_MAX_RETRIES:
+                        logger.error(f"❌ Max retries ({OTA_CHUNK_MAX_RETRIES}) exceeded for batch starting at chunk {batch_start}")
+                        ota_manager.update_session_state(device_mac, OTAState.FAILED, f"Checkpoint ACK timeout after {OTA_CHUNK_MAX_RETRIES} retries")
+                        return
+                    logger.warning(f"⏱️ Checkpoint ACK timeout - retrying batch from chunk {batch_start} (attempt {retry_count}/{OTA_CHUNK_MAX_RETRIES})")
+                    # chunk_idx stays the same, will retry
+            
+            logger.info(f"✅ All chunks sent to {device_mac}, sending OTA_COMPLETE")
+            
+            # Send OTA_COMPLETE
+            with self._delivery_lock:
+                msg_id = self._next_msg_id
+                self._next_msg_id = (self._next_msg_id + 1) % 256
+            
+            complete_packet = self.encoder.encode_ota_complete(device_mac, session.sha256_hash, msg_id)
+            
+            if is_gateway:
+                self.sock.sendto(complete_packet, (locked_gateway_ip, self.gateway_port))
+            else:
+                self.sock.sendto(complete_packet, (locked_gateway_ip, self.gateway_port))
+            
+            # Update state
+            ota_manager.update_session_state(device_mac, OTAState.VALIDATING)
+            
+            # Wait for device to reboot and send new HELLO
+            logger.info(f"⏳ Waiting for {device_mac} to validate and reboot...")
+            
+        except Exception as e:
+            logger.error(f"OTA transfer failed for {device_mac}: {e}")
+            ota_manager.update_session_state(device_mac, OTAState.FAILED, str(e))
+    
+    def abort_ota_update(self, device_mac: str, reason: str = "User cancelled"):
+        """Abort an ongoing OTA update.
+        
+        Args:
+            device_mac: Device MAC address
+            reason: Reason for abort
+        """
+        session = ota_manager.get_session(device_mac)
+        if not session:
+            return
+        
+        try:
+            # Generate message ID
+            with self._delivery_lock:
+                msg_id = self._next_msg_id
+                self._next_msg_id = (self._next_msg_id + 1) % 256
+            
+            # Send OTA_ABORT packet
+            packet = self.encoder.encode_ota_abort(device_mac, reason_code=0, msg_id=msg_id)
+            
+            # Send to device
+            success = self._send_with_fallback(device_mac, packet, wait_for_delivery=False)
+            
+            logger.info(f"🛑 OTA aborted for {device_mac}: {reason}")
+            
+        except Exception as e:
+            logger.error(f"Failed to send OTA_ABORT: {e}")
+        finally:
+            # Update session state
+            ota_manager.update_session_state(device_mac, OTAState.ABORTED, reason)
+    
+    def _ota_timeout_monitor(self):
+        """Background thread to monitor OTA session timeouts."""
+        logger.info("OTA timeout monitor started")
+        
+        while self.running:
+            try:
+                time.sleep(5)  # Check every 5 seconds
+                
+                sessions = ota_manager.get_all_sessions()
+                for mac, session_data in sessions.items():
+                    state = session_data.get('state')
+                    
+                    # Check VALIDATING timeout (waiting for post-update HELLO)
+                    if state == OTAState.VALIDATING.value:
+                        session = ota_manager.get_session(mac)
+                        if session and session.validating_start_time:
+                            elapsed = (datetime.now() - session.validating_start_time).total_seconds()
+                            if elapsed > OTA_POST_UPDATE_TIMEOUT:
+                                logger.error(f"⏱️ OTA validation timeout for {mac}: No HELLO received after {elapsed:.0f}s")
+                                ota_manager.update_session_state(mac, OTAState.FAILED, f"Validation timeout - no HELLO after {elapsed:.0f}s")
+                
+            except Exception as e:
+                logger.error(f"Error in OTA timeout monitor: {e}")
+        
+        logger.info("OTA timeout monitor stopped")
 
 
 # Global singleton instance - will be reconfigured in main.py

@@ -15,6 +15,9 @@
 #include <Bounce2.h> 
 #include <Ticker.h> 
 #include <vector>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include "mbedtls/sha256.h"
 
 Preferences prefs;
 uint32_t HOME_ID = 0; 
@@ -37,7 +40,8 @@ WiFiManager wm;
 Ticker wifiTicker; 
 HueMixLinkPacket txPkt;  
 uint8_t udpBuffer[512];  
-uint8_t radioNodeMAC[6] = {0,0,0,0,0,0}; 
+uint8_t radioNodeMAC[6] = {0,0,0,0,0,0};
+uint8_t radioVersion[3] = {0, 0, 0};  // major, minor, patch
 
 Bounce btnMain = Bounce();
 Bounce btnAux = Bounce();
@@ -46,7 +50,30 @@ bool isHolding = false;
 unsigned long buttonHoldStartTime = 0;
 unsigned long holdingIntervalUpdate = 0;
 const int HOLD_TIME = 500;
-const int HOLD_INTERVAL = 500;  
+const int HOLD_INTERVAL = 500;
+
+// --- STARTUP HANDSHAKE REQUEST TIMEOUT ---
+unsigned long last_serial_activity = 0;
+#define SERIAL_IDLE_THRESHOLD 50  // Must be idle for 50ms before checking for handshake request
+
+// --- DATA LED BREATHING ---
+#define DATA_LED_PWM_FREQ 5000
+#define DATA_LED_PWM_RESOLUTION 8
+Ticker breathingTicker;
+int breathingDirection = 1;
+int breathingBrightness = 0;  
+
+// --- OTA STATE MACHINE ---
+enum OtaState { OTA_IDLE, OTA_RECEIVING, OTA_VALIDATING, OTA_COMPLETE };
+OtaState otaState = OTA_IDLE;
+const esp_partition_t *update_partition = nullptr;
+esp_ota_handle_t update_handle = 0;
+uint32_t expected_firmware_size = 0;
+uint32_t received_bytes = 0;
+uint16_t expected_chunk_index = 0;
+uint8_t expected_sha256[32];
+mbedtls_sha256_context sha256_ctx;
+unsigned long last_ota_activity = 0;  
 
 // --- SERIAL STATE MACHINE ---
 enum SerialState { S_IDLE, S_READING, S_FOOTER };
@@ -70,6 +97,32 @@ void flashDataLED(int times) {
   }
 }
 
+void updateBreathing() {
+  breathingBrightness += breathingDirection * 10;
+  if (breathingBrightness >= 255) {
+    breathingBrightness = 255;
+    breathingDirection = -1;
+  } else if (breathingBrightness <= 0) {
+    breathingBrightness = 0;
+    breathingDirection = 1;
+  }
+  ledcWrite(PIN_LED_DATA, nightMode ? 0 : breathingBrightness);
+}
+
+void startDataLedBreathing() {
+  ledcAttach(PIN_LED_DATA, DATA_LED_PWM_FREQ, DATA_LED_PWM_RESOLUTION);
+  breathingBrightness = 0;
+  breathingDirection = 1;
+  breathingTicker.attach_ms(30, updateBreathing);
+}
+
+void stopDataLedBreathing() {
+  breathingTicker.detach();
+  ledcDetach(PIN_LED_DATA);
+  pinMode(PIN_LED_DATA, OUTPUT);
+  digitalWrite(PIN_LED_DATA, LOW);
+}
+
 // --- HANDLE SERIAL PACKET ---
 void handleSerialPacket(uint8_t* data) {
   memcpy(&txPkt, data, sizeof(HueMixLinkPacket));
@@ -89,6 +142,8 @@ void handleSerialPacket(uint8_t* data) {
 
 // --- PARSER ---
 void parseSerialByte(uint8_t b) {
+  last_serial_activity = millis();
+  
   switch(rxState) {
     case S_IDLE:
       if (b == SERIAL_START) {
@@ -98,16 +153,377 @@ void parseSerialByte(uint8_t b) {
       break;
     case S_READING:
       rxRawBuffer[rxIndex++] = b;
-      if (rxIndex >= sizeof(HueMixLinkPacket)) rxState = S_FOOTER;
+      // Prevent buffer overflow
+      if (rxIndex > sizeof(HueMixLinkPacket)) {
+        Serial.printf("[NET] Buffer overflow - resync\n");
+        rxState = S_IDLE;
+        rxIndex = 0;
+        // Check if current byte is SERIAL_START for next packet
+        if (b == SERIAL_START) {
+          rxState = S_READING;
+          rxIndex = 0;
+        }
+      } else if (rxIndex >= sizeof(HueMixLinkPacket)) {
+        rxState = S_FOOTER;
+      }
       break;
     case S_FOOTER:
-      if (b == SERIAL_END) handleSerialPacket(rxRawBuffer);
-      else {
-        Serial.printf("[NET] Footer Err %02X. Resyncing...\n", b);
-        while(Serial2.available()) Serial2.read(); // Flush garbage
+      if (b == SERIAL_END) {
+        handleSerialPacket(rxRawBuffer);
+        rxState = S_IDLE;
+      } else if (b == SERIAL_START) {
+        // Possible packet corruption or misalignment, but current byte could be start of next packet
+        Serial.printf("[NET] Footer Err (got 0x%02X instead of 0x%02X), resyncing to next packet\n", b, SERIAL_END);
+        rxState = S_READING;
+        rxIndex = 0;
+      } else {
+        // Footer mismatch - garbage byte, resync by looking for SERIAL_START
+        Serial.printf("[NET] Footer Err (got 0x%02X), discarding packet\n", b);
+        rxState = S_IDLE;
       }
-      rxState = S_IDLE;
       break;
+  }
+}
+
+// --- OTA FUNCTIONS ---
+void abortOta(const char* reason) {
+  Serial.printf("[OTA] ABORT: %s\n", reason);
+  
+  // Notify server about the abort
+  HueMixLinkPacket abortPkt;
+  abortPkt.type = PKT_OTA_ABORT;
+  WiFi.macAddress(abortPkt.sourceMAC);
+  memset(abortPkt.targetMAC, 0, 6);
+  abortPkt.msgID = 0;
+  
+  // Encode reason as a simple code (0 = device-initiated abort)
+  abortPkt.payload.raw[0] = 0;  // reason_code
+  
+  // Calculate signature (1 byte payload)
+  abortPkt.signature = calculateHash(abortPkt.payload.raw, 1, HOME_ID);
+  
+  // Send abort notification to server
+  udp.beginPacket(server_ip, server_port);
+  udp.write((uint8_t*)&abortPkt, sizeof(HueMixLinkPacket));
+  udp.endPacket();
+  
+  Serial.printf("[OTA] Sent abort notification to server\n");
+  
+  // Clean up local state
+  if (update_handle) {
+    esp_ota_abort(update_handle);
+    update_handle = 0;
+  }
+  
+  // Stop DATA LED breathing
+  stopDataLedBreathing();
+  
+  otaState = OTA_IDLE;
+  expected_chunk_index = 0;
+  received_bytes = 0;
+}
+
+void handleOtaNotify(HueMixLinkPacket* pkt) {
+  // Check if this is for us (WiFi MAC)
+  uint8_t myWifiMac[6];
+  WiFi.macAddress(myWifiMac);
+  
+  if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
+    // Not for us, forward to radio node via UART
+    Serial2.write(SERIAL_START);
+    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
+    Serial2.write(SERIAL_END);
+    Serial2.flush(); 
+    return;
+  }
+  
+  // It's for us - handle OTA for ourselves
+  if (otaState != OTA_IDLE) {
+    Serial.println("[OTA] Busy with another update");
+    return;
+  }
+  
+  Serial.println("[OTA] NOTIFY received for WiFi node (self)");
+  
+  expected_firmware_size = pkt->payload.otaNotify.firmware_size;
+  memcpy(expected_sha256, pkt->payload.otaNotify.sha256_hash, 32);
+  
+  // Initialize update partition
+  update_partition = esp_ota_get_next_update_partition(NULL);
+  if (!update_partition) {
+    Serial.println("[OTA] No update partition available");
+    abortOta("No partition");
+    return;
+  }
+  
+  Serial.printf("[OTA] Starting update: %u bytes\n", expected_firmware_size);
+  Serial.printf("[OTA] Target partition: %s at 0x%x\n", update_partition->label, update_partition->address);
+  
+  esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA] Begin failed: %d\n", err);
+    abortOta("Begin failed");
+    return;
+  }
+  
+  mbedtls_sha256_init(&sha256_ctx);
+  mbedtls_sha256_starts(&sha256_ctx, 0); // 0 = SHA256 (not SHA224)
+  
+  last_ota_activity = millis();
+  otaState = OTA_RECEIVING;
+  expected_chunk_index = 0;
+  received_bytes = 0;
+  
+  // Start DATA LED breathing during OTA
+  startDataLedBreathing();
+  
+  // Send PKT_OTA_READY
+  HueMixLinkPacket ready;
+  ready.type = PKT_OTA_READY;
+  WiFi.macAddress(ready.sourceMAC);
+  memcpy(ready.targetMAC, pkt->sourceMAC, 6);
+  ready.payload.otaReady.firmware_size = expected_firmware_size;
+  ready.payload.otaReady.battery_mv = 0; // Not battery powered
+  ready.signature = calculateHash((uint8_t*)&ready.payload, sizeof(Payload_OtaReady), HOME_ID);
+  
+  udp.beginPacket(server_ip, server_port);
+  udp.write((uint8_t*)&ready, sizeof(HueMixLinkPacket));
+  udp.endPacket();
+  Serial.println("[OTA] Sent READY");
+}
+
+void handleOtaChunk(HueMixLinkPacket* pkt) {
+  // Check if this chunk is for us
+  uint8_t myWifiMac[6];
+  WiFi.macAddress(myWifiMac);
+  
+  if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
+    // Not for us, forward to radio node via UART
+    Serial2.write(SERIAL_START);
+    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
+    Serial2.write(SERIAL_END);
+    Serial2.flush();  // Wait for transmission to complete
+    return;
+  }
+  
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  
+  last_ota_activity = millis();
+  
+  uint16_t chunk_idx = pkt->payload.otaChunk.chunk_index;
+  uint8_t data_len = pkt->payload.otaChunk.data_len;
+  
+  // Check chunk order: accept current or future chunks, ignore duplicates
+  if (chunk_idx < expected_chunk_index) {
+    // This is a duplicate chunk we already received - ignore it silently
+    Serial.printf("[OTA] Ignoring duplicate chunk %d (already at %d)\n", chunk_idx, expected_chunk_index);
+    return;
+  }
+  
+  if (chunk_idx != expected_chunk_index) {
+    Serial.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
+    return;
+  }
+  
+  // Write chunk to partition
+  esp_err_t err = esp_ota_write(update_handle, pkt->payload.otaChunk.data, data_len);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA] Write failed at chunk %d: %d\n", chunk_idx, err);
+    abortOta("Write failed");
+    return;
+  }
+  
+  // Update SHA256
+  mbedtls_sha256_update(&sha256_ctx, pkt->payload.otaChunk.data, data_len);
+  
+  received_bytes += data_len;
+  expected_chunk_index++;
+  
+  if (chunk_idx % 50 == 0) {
+    Serial.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n", 
+      received_bytes, expected_firmware_size, 
+      (received_bytes * 100.0) / expected_firmware_size);
+  }
+}
+
+void sendOtaChunkAck(uint16_t last_chunk_index) {
+  HueMixLinkPacket pkt;
+  pkt.type = PKT_OTA_CHUNK_ACK;
+  WiFi.macAddress(pkt.sourceMAC);
+  memset(pkt.targetMAC, 0, 6); // Server doesn't need target MAC
+  pkt.msgID = 0;
+  
+  pkt.payload.otaChunkAck.last_chunk_index = last_chunk_index;
+  
+  // Calculate signature (2 bytes for last_chunk_index)
+  pkt.signature = calculateHash((uint8_t*)&pkt.payload.otaChunkAck, 2, HOME_ID);
+  
+  udp.beginPacket(server_ip, server_port);
+  udp.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
+  udp.endPacket();
+  
+  Serial.printf("[OTA] Sent checkpoint ACK: last_chunk=%d\n", last_chunk_index);
+}
+
+void handleOtaComplete(HueMixLinkPacket* pkt) {
+  // Check if this is for us
+  uint8_t myWifiMac[6];
+  WiFi.macAddress(myWifiMac);
+  
+  Serial.printf("[OTA] COMPLETE packet received (state=%d)\n", otaState);
+  
+  if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
+    // Not for us, forward to radio node via UART
+    Serial.println("[OTA] COMPLETE not for us, forwarding to radio");
+    Serial2.write(SERIAL_START);
+    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
+    Serial2.write(SERIAL_END);
+    Serial2.flush();  // Wait for transmission to complete
+    return;
+  }
+  
+  if (otaState != OTA_RECEIVING) {
+    Serial.printf("[OTA] COMPLETE rejected: wrong state (got %d)\n", otaState);
+    return;
+  }
+  
+  // Send final checkpoint ACK to confirm all chunks received
+  if (expected_chunk_index > 0) {
+    sendOtaChunkAck(expected_chunk_index - 1);
+  }
+  
+  Serial.println("[OTA] COMPLETE received, validating...");
+  otaState = OTA_VALIDATING;
+  
+  // Finalize SHA256
+  uint8_t calculated_sha256[32];
+  mbedtls_sha256_finish(&sha256_ctx, calculated_sha256);
+  mbedtls_sha256_free(&sha256_ctx);
+  
+  // Compare SHA256
+  if (memcmp(calculated_sha256, expected_sha256, 32) != 0) {
+    Serial.println("[OTA] SHA256 MISMATCH!");
+    Serial.print("[OTA] Expected: ");
+    for(int i=0; i<32; i++) Serial.printf("%02X", expected_sha256[i]);
+    Serial.println();
+    Serial.print("[OTA] Calculated: ");
+    for(int i=0; i<32; i++) Serial.printf("%02X", calculated_sha256[i]);
+    Serial.println();
+    abortOta("SHA256 mismatch");
+    return;
+  }
+  
+  Serial.println("[OTA] SHA256 verified!");
+  
+  // Finalize OTA
+  esp_err_t err = esp_ota_end(update_handle);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA] End failed: %d\n", err);
+    abortOta("End failed");
+    return;
+  }
+  update_handle = 0;
+  
+  // Set boot partition
+  err = esp_ota_set_boot_partition(update_partition);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA] Set boot partition failed: %d\n", err);
+    abortOta("Set boot failed");
+    return;
+  }
+  
+  Serial.println("[OTA] UPDATE SUCCESSFUL! Rebooting in 2 seconds...");
+  otaState = OTA_COMPLETE;
+  
+  for(int i=0; i<10; i++) {
+    digitalWrite(PIN_LED_WIFI, HIGH);
+    digitalWrite(PIN_LED_DATA, HIGH);
+    delay(100);
+    digitalWrite(PIN_LED_WIFI, LOW);
+    digitalWrite(PIN_LED_DATA, LOW);
+    delay(100);
+  }
+  
+  ESP.restart();
+}
+
+void handleOtaAbort(HueMixLinkPacket* pkt) {
+  // Check if this is for us
+  uint8_t myWifiMac[6];
+  WiFi.macAddress(myWifiMac);
+  
+  if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
+    // Not for us, forward to radio node via UART
+    Serial2.write(SERIAL_START);
+    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
+    Serial2.write(SERIAL_END);
+    Serial2.flush();  // Wait for transmission to complete
+    return;
+  }
+  
+  Serial.println("[OTA] ABORT received from server");
+  abortOta("Server abort");
+}
+
+void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
+  // Check if this is for us
+  uint8_t myWifiMac[6];
+  WiFi.macAddress(myWifiMac);
+  
+  if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
+    // Not for us, forward to radio node via UART
+    Serial2.write(SERIAL_START);
+    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
+    Serial2.write(SERIAL_END);
+    Serial2.flush();  // Wait for transmission to complete
+    return;
+  }
+  
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  
+  // Respond with last successfully received chunk (expected_chunk_index - 1)
+  uint16_t last_chunk = (expected_chunk_index > 0) ? (expected_chunk_index - 1) : 0;
+  sendOtaChunkAck(last_chunk);
+}
+
+void sendSerialHandshake() {
+  Serial.println("[NET] Requesting handshake from radio node...");
+  
+  while(Serial2.available()) Serial2.read();
+  
+  unsigned long startWait = millis();
+  unsigned long lastReq = 0;
+  bool radioReady = false;
+  
+  while(millis() - startWait < 5000) { 
+    if (millis() - lastReq > 200) { Serial2.write(SERIAL_REQ_HANDSHAKE); lastReq = millis(); }
+    if(Serial2.available() >= sizeof(SerialHandshake)) {
+      if(Serial2.peek() == SERIAL_HANDSHAKE) {
+        SerialHandshake h; Serial2.readBytes((uint8_t*)&h, sizeof(h));
+        bool v = false; for(int k=0;k<6;k++) if(h.mac[k]!=0) v=true;
+        if(v) { 
+          memcpy(radioNodeMAC, h.mac, 6);
+          radioVersion[0] = h.version_major;
+          radioVersion[1] = h.version_minor; 
+          radioVersion[2] = h.version_patch;
+          radioReady = true; 
+          break; 
+        }
+      } else { Serial2.read(); }
+    }
+    delay(10);
+  }
+  
+  if(radioReady) { 
+    Serial.print("[NET] Handshake OK! Radio MAC: ");
+    for(int i=0; i<6; i++) Serial.printf("%02X", radioNodeMAC[i]);
+    Serial.printf(" Version: %d.%d.%d\n", radioVersion[0], radioVersion[1], radioVersion[2]);
+  } else { 
+    Serial.println("[NET] Handshake FAILED (No response from radio)"); 
   }
 }
 
@@ -119,7 +535,30 @@ void sendGatewayHello() {
   WiFi.macAddress(pkt.sourceMAC);
   pkt.payload.raw[0] = DEV_GATEWAY; 
   memcpy(&pkt.payload.raw[1], radioNodeMAC, 6);
-  pkt.signature = calculateHash(pkt.payload.raw, 7, HOME_ID);
+  
+  // Parse version from build flag (format: "3.7.3") for NET NODE
+  #ifdef FIRMWARE_VERSION
+    const char* ver = FIRMWARE_VERSION;
+    uint8_t major = 0, minor = 0, patch = 0;
+    sscanf(ver, "%hhu.%hhu.%hhu", &major, &minor, &patch);
+    pkt.payload.raw[7] = major;   // Net node major
+    pkt.payload.raw[8] = minor;   // Net node minor
+    pkt.payload.raw[9] = patch;   // Net node patch
+    pkt.payload.raw[10] = 0;      // Net node build number
+  #else
+    pkt.payload.raw[7] = 0;
+    pkt.payload.raw[8] = 0;
+    pkt.payload.raw[9] = 0;
+    pkt.payload.raw[10] = 0;
+  #endif
+  
+  // Add RADIO NODE version (from handshake)
+  pkt.payload.raw[11] = radioVersion[0];  // Radio node major
+  pkt.payload.raw[12] = radioVersion[1];  // Radio node minor
+  pkt.payload.raw[13] = radioVersion[2];  // Radio node patch
+  pkt.payload.raw[14] = 0;                // Radio node build number
+  
+  pkt.signature = calculateHash(pkt.payload.raw, 15, HOME_ID);
   udp.beginPacket(server_ip, server_port);
   udp.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
   udp.endPacket();
@@ -145,8 +584,9 @@ void setup() {
   btnAux.attach(PIN_BTN_AUX, INPUT_PULLUP); btnAux.interval(25);
   Serial.begin(115200); 
   
-  Serial2.setRxBufferSize(4096); 
-  Serial2.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX); 
+  Serial2.setRxBufferSize(8192);
+  Serial2.setTxBufferSize(8192);
+  Serial2.begin(460800, SERIAL_8N1, PIN_RX, PIN_TX); 
   
   Serial.println("\n--- BOOTING NET NODE ---");
 
@@ -155,30 +595,9 @@ void setup() {
   }
   HOME_ID = prefs.getUInt("hid", 0);
   
-  Serial.print("Handshake... ");
-  unsigned long startWait = millis();
-  unsigned long lastReq = 0;
-  bool radioReady = false;
-  
-  while(Serial2.available()) Serial2.read();
-
-  while(millis() - startWait < 5000) { 
-    if (millis() - lastReq > 200) { Serial2.write(SERIAL_REQ_HANDSHAKE); lastReq = millis(); }
-    if(Serial2.available() >= sizeof(SerialHandshake)) {
-      if(Serial2.peek() == SERIAL_HANDSHAKE) {
-        SerialHandshake h; Serial2.readBytes((uint8_t*)&h, sizeof(h));
-        bool v = false; for(int k=0;k<6;k++) if(h.mac[k]!=0) v=true;
-        if(v) { memcpy(radioNodeMAC, h.mac, 6); radioReady = true; break; }
-      } else { Serial2.read(); }
-    }
-    delay(10);
-  }
-  if(radioReady) { 
-    Serial.print("OK! Radio MAC: ");
-    for(int i=0; i<6; i++) Serial.printf("%02X", radioNodeMAC[i]);
-    Serial.println();
-    flashDataLED(2); 
-  } else { Serial.println("FAILED (No Radio)"); }
+  last_serial_activity = millis();
+  sendSerialHandshake();
+  flashDataLED(2);
 
   WiFiManagerParameter custom_ip("server", "Server IP", "", 40);
   char portStr[6]; itoa(server_port, portStr, 10);
@@ -229,8 +648,27 @@ void sendBtnEvent(uint8_t action) {
   HueMixLinkPacket btnPkt;
   btnPkt.type = PKT_BTN_EVENT;
   WiFi.macAddress(btnPkt.sourceMAC);
-  btnPkt.payload.btn.battery_mv = 0; 
   btnPkt.payload.btn.action = action;
+  btnPkt.payload.btn.battery_mv = 0;
+  btnPkt.payload.btn.button_index = -1;  // Gateway button acts like normal button
+  
+  // Parse firmware version
+  #ifdef FIRMWARE_VERSION
+    const char* ver = FIRMWARE_VERSION;
+    uint8_t major = 0, minor = 0, patch = 0;
+    sscanf(ver, "%hhu.%hhu.%hhu", &major, &minor, &patch);
+    btnPkt.payload.btn.version_major = major;
+    btnPkt.payload.btn.version_minor = minor;
+    btnPkt.payload.btn.version_patch = patch;
+  #else
+    btnPkt.payload.btn.version_major = 0;
+    btnPkt.payload.btn.version_minor = 0;
+    btnPkt.payload.btn.version_patch = 0;
+  #endif
+  
+  // Gateway is always ESP32
+  btnPkt.payload.btn.platform = 0;
+  
   btnPkt.signature = calculateHash((uint8_t*)&btnPkt.payload, sizeof(Payload_Button), HOME_ID);
   if (WiFi.status() == WL_CONNECTED) {
     udp.beginPacket(server_ip, server_port);
@@ -262,7 +700,18 @@ void loop() {
         
         Serial.printf("[NET] UDP Recv Type 0x%02X (Len %d)\n", txPkt.type, len);
 
-        if (txPkt.type == PKT_PAIR_CONFIRM) {
+        // Handle OTA packets
+        if (txPkt.type == PKT_OTA_NOTIFY) {
+          handleOtaNotify(&txPkt);
+        } else if (txPkt.type == PKT_OTA_CHUNK) {
+          handleOtaChunk(&txPkt);
+        } else if (txPkt.type == PKT_OTA_CHECKPOINT_REQ) {
+          handleOtaCheckpointReq(&txPkt);
+        } else if (txPkt.type == PKT_OTA_COMPLETE) {
+          handleOtaComplete(&txPkt);
+        } else if (txPkt.type == PKT_OTA_ABORT) {
+          handleOtaAbort(&txPkt);
+        } else if (txPkt.type == PKT_PAIR_CONFIRM) {
           uint32_t incomingSig = txPkt.signature;
           uint32_t expectedSig = calculateHash((uint8_t*)&txPkt.payload, sizeof(Payload_Pairing), 0);
           if (incomingSig == expectedSig) {
@@ -324,10 +773,32 @@ void loop() {
     }
   }
 
-  // 2. SERIAL IN
-  while (Serial2.available() > 0) parseSerialByte(Serial2.read());
+  // 2. SERIAL IN - Check for handshake requests from radio node, then parse framed packets
+  while (Serial2.available() > 0) {
+    uint8_t b = Serial2.peek();
+    
+    // Check for raw handshake request from radio node (only when idle for 50ms+ to avoid false positives)
+    if (b == SERIAL_REQ_HANDSHAKE && (millis() - last_serial_activity) > SERIAL_IDLE_THRESHOLD) {
+      Serial2.read();  // Consume the byte
+      Serial.println("[NET] Received handshake request from radio node");
+      sendSerialHandshake();
+      
+      // After sending handshake, send HELLO to notify server of radio node's current version
+      delay(100);
+      sendGatewayHello();
+    } else {
+      // Process as regular framed packet
+      parseSerialByte(Serial2.read());
+    }
+  }
 
-  // 3. BUTTON HANDLING
+  // 3. OTA TIMEOUT CHECK
+  if (otaState == OTA_RECEIVING && millis() - last_ota_activity > 30000) {
+    Serial.println("[OTA] Timeout - no activity for 30s");
+    abortOta("Timeout");
+  }
+
+  // 4. BUTTON HANDLING
   if (btnMain.fell()) {
     buttonHoldStartTime = millis();
     buttonPressed = true;

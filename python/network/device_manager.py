@@ -52,13 +52,15 @@ class DeviceManager:
                 return server
         return None
     
-    def update_gateway(self, wifi_mac: str, radio_mac: str, ip_address: str) -> Dict:
+    def update_gateway(self, wifi_mac: str, radio_mac: str, ip_address: str, version_net: str = None, version_radio: str = None) -> Dict:
         """Update or create gateway entry.
         
         Args:
             wifi_mac: WiFi MAC address
             radio_mac: Radio MAC address for mesh routing
             ip_address: Current IP address
+            version_net: Net node firmware version
+            version_radio: Radio node firmware version
             
         Returns:
             Updated gateway dict
@@ -76,6 +78,10 @@ class DeviceManager:
                 gateway['radio_mac'] = radio_mac.upper()
                 gateway['ip_address'] = ip_address
                 gateway['last_used'] = datetime.now().isoformat()
+                if version_net:
+                    gateway['version_net'] = version_net
+                if version_radio:
+                    gateway['version_radio'] = version_radio
             else:
                 # Create new gateway
                 gateway = {
@@ -84,6 +90,8 @@ class DeviceManager:
                     'mac_address': wifi_mac.upper(),
                     'radio_mac': radio_mac.upper(),
                     'ip_address': ip_address,
+                    'version_net': version_net or '0.0.0',
+                    'version_radio': version_radio or '0.0.0',
                     'last_used': datetime.now().isoformat(),
                 }
                 servers.append(gateway)
@@ -130,14 +138,26 @@ class DeviceManager:
                 return strip
         return None
     
-    def update_light_gateway(self, light_mac: str, gateway_radio_mac: str):
-        """Update lightstrip's last successful gateway.
+    def get_all_lights(self) -> List[Dict]:
+        """Get all registered lightstrips.
+        
+        Returns:
+            List of lightstrip dicts
+        """
+        return data_manager.read_json(FILE_LIGHTSTRIPS, default=[])
+    
+    def update_light_gateway(self, light_mac: str, gateway_radio_mac: str, rssi: int = None, version: str = None, platform: str = None, model_id: int = None):
+        """Update lightstrip's last successful gateway and tracking info.
         
         Records the gateway that successfully delivered to this light.
         
         Args:
             light_mac: Light MAC address
             gateway_radio_mac: Gateway radio MAC that succeeded
+            rssi: Signal strength (optional)
+            version: Firmware version (optional)
+            platform: Platform type 'esp32' or 'esp8266' (optional)
+            model_id: Firmware variant ID (optional)
         """
         # Get gateway IP
         gateway_ip = self.get_gateway_ip_by_radio_mac(gateway_radio_mac)
@@ -150,6 +170,24 @@ class DeviceManager:
                 if strip.get('mac_address', '').upper() == light_mac.upper():
                     strip['gateway_ip'] = gateway_ip
                     strip['last_gateway_mac'] = gateway_radio_mac.upper()
+                    strip['last_seen'] = datetime.now().isoformat()
+                    
+                    # Update RSSI if provided
+                    if rssi is not None:
+                        strip['rssi'] = rssi
+                    
+                    # Update version if provided
+                    if version:
+                        strip['version'] = version
+                    
+                    # Update platform if provided
+                    if platform:
+                        strip['platform'] = platform
+                    
+                    # Update model_id if provided
+                    if model_id is not None:
+                        strip['model_id'] = model_id
+                    
                     logger.debug(f"Updated {light_mac} gateway: {gateway_radio_mac} ({gateway_ip})")
                     break
             return strips
@@ -172,7 +210,7 @@ class DeviceManager:
         return strip.get('gateway_ip'), strip.get('last_gateway_mac')
     
     def add_lightstrip(self, mac_address: str, name: str, num_leds: int, 
-                      is_rgbw: bool, room_id: Optional[str] = None) -> Dict:
+                      is_rgbw: bool, room_id: Optional[str] = None, model_id: int = None) -> Dict:
         """Add new lightstrip to registry.
         
         Args:
@@ -181,6 +219,7 @@ class DeviceManager:
             num_leds: Number of LEDs
             is_rgbw: Whether strip is RGBW or RGB
             room_id: Associated room ID
+            model_id: Firmware variant ID (optional)
             
         Returns:
             Created lightstrip dict
@@ -203,7 +242,12 @@ class DeviceManager:
                 'color_type': 'rgbw' if is_rgbw else 'rgb',
                 'overrides': {},
                 'gateway_ip': None,
-                'last_gateway_mac': None
+                'last_gateway_mac': None,
+                'version': '0.0.0',
+                'platform': None,
+                'model_id': model_id,
+                'rssi': None,
+                'last_seen': None
             }
             strips.append(new_strip)
             
@@ -229,7 +273,15 @@ class DeviceManager:
                 return button
         return None
     
-    def update_button_tracking(self, button_mac: str, gateway_radio_mac: str, rssi: int, battery_mv: int = None):
+    def get_all_buttons(self) -> List[Dict]:
+        """Get all registered buttons/remotes.
+        
+        Returns:
+            List of button dicts
+        """
+        return data_manager.read_json(FILE_BUTTONS, default=[])
+    
+    def update_button_tracking(self, button_mac: str, gateway_radio_mac: str, rssi: int, battery_mv: int = None, version: str = None, platform: str = None):
         """Update button tracking information.
         
         Args:
@@ -237,6 +289,8 @@ class DeviceManager:
             gateway_radio_mac: Gateway that received the signal
             rssi: Signal strength
             battery_mv: Battery voltage in millivolts (optional)
+            version: Firmware version (optional)
+            platform: Platform type 'esp32' or 'esp8266' (optional)
         """
         def update_func(buttons):
             for button in buttons:
@@ -250,6 +304,14 @@ class DeviceManager:
                         button['battery_mv'] = battery_mv
                         button['battery_percent'] = self._calculate_battery_percent(battery_mv)
                         button['battery_last_updated'] = datetime.now().isoformat()
+                    
+                    # Update version if provided
+                    if version:
+                        button['version'] = version
+                    
+                    # Update platform if provided
+                    if platform:
+                        button['platform'] = platform
                     
                     break
             
@@ -312,7 +374,12 @@ class DeviceManager:
                 },
                 'last_seen_gateway': None,
                 'rssi': None,
-                'last_seen': None
+                'last_seen': None,
+                'version': '0.0.0',
+                'platform': None,
+                'battery_mv': None,
+                'battery_percent': None,
+                'battery_last_updated': None
             }
             buttons.append(new_button)
             

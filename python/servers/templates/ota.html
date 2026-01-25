@@ -1,0 +1,950 @@
+{% extends "base.html" %}
+
+{% block title %}OTA Firmware Updates - HueMix-Link{% endblock %}
+
+{% block content %}
+<style>
+.rotate-360 {
+    animation: rotate360 0.5s linear;
+}
+@keyframes rotate360 {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+</style>
+<!-- Toast Notification -->
+<div id="toast-notification" class="hidden fixed top-4 right-4 z-50 max-w-md">
+    <div id="toast-container" class="rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0">
+        <div class="flex-shrink-0">
+            <i id="toast-icon" class="fas fa-check-circle text-2xl text-green-600"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <p id="toast-title" class="text-sm font-semibold text-gray-900"></p>
+            <p id="toast-message" class="text-sm text-gray-700 mt-1"></p>
+        </div>
+        <button onclick="hideToast()" class="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-orange-600 to-orange-400 bg-clip-text text-transparent mb-1">
+                    Firmware Updates
+                </h1>
+                <p class="text-gray-600">Over-the-air firmware management for all devices</p>
+            </div>
+            <div class="flex items-center space-x-3">
+                <button id="checkUpdatesBtn" class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors inline-flex items-center">
+                    <i id="check-updates-icon" class="fas fa-sync-alt mr-2 transition-transform duration-500"></i>Check for Updates
+                </button>
+                <button id="uploadBtn" class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors inline-flex items-center">
+                    <i class="fas fa-upload mr-2"></i>Upload Firmware
+                </button>
+                <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                    <i class="fas fa-arrow-left mr-2"></i>Back to Home
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Devices Table -->
+    <div class="bg-white rounded-2xl shadow-lg p-6 mb-6">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xl font-semibold text-gray-800">
+                <i class="fas fa-microchip mr-2 text-orange-600"></i>Available Devices
+            </h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Version</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Available Version</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="devicesTable" class="bg-white divide-y divide-gray-200">
+                    <tr>
+                        <td colspan="6" class="px-6 py-8 text-center text-gray-500">
+                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-gray-400" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Loading devices...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Update Progress Modal -->
+<div id="progressModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div class="p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold text-gray-800">Updating Firmware</h3>
+                <button id="closeProgressModal" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            
+            <div class="mb-4">
+                <div class="flex justify-between text-sm text-gray-600 mb-2">
+                    <span id="progressDevice">Device: --</span>
+                    <span id="progressPercent">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+                    <div id="progressBar" class="bg-blue-600 h-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+            
+            <div class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Status:</span>
+                    <span id="progressStatus" class="font-medium text-gray-800">Initializing...</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Chunks:</span>
+                    <span id="progressChunks" class="font-medium text-gray-800">0 / 0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Speed:</span>
+                    <span id="progressSpeed" class="font-medium text-gray-800">-- KB/s</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Elapsed:</span>
+                    <span id="progressElapsed" class="font-medium text-gray-800">0s</span>
+                </div>
+            </div>
+            
+            <div id="progressInstructions" class="hidden mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p class="text-sm text-yellow-800" id="instructionsText"></p>
+            </div>
+            
+            <div class="mt-6 flex gap-3">
+                <button id="abortBtn" class="flex-1 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition duration-200">
+                    Abort Update
+                </button>
+                <button id="retryBtn" class="hidden flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition duration-200">
+                    Retry
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Firmware Modal -->
+<div id="uploadModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div class="p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold text-gray-800">Upload Firmware</h3>
+                <button id="closeUploadModal" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            
+            <form id="uploadForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Device Type</label>
+                    <select id="uploadDeviceType" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="gateway_net">Gateway Net Node (WiFi)</option>
+                        <option value="gateway_radio">Gateway Radio Node (ESP-NOW)</option>
+                        <optgroup label="Lightstrips">
+                            <option value="lightstrip_model1">Lightstrip Model 1 (ESP32, RGB, WS2812B)</option>
+                            <option value="lightstrip_model2">Lightstrip Model 2 (ESP32, RGBW, SK6812)</option>
+                            <option value="lightstrip_model3">Lightstrip Model 3 (ESP8266, RGB, WS2812B)</option>
+                            <option value="lightstrip_model4">Lightstrip Model 4 (ESP8266, RGBW, SK6812)</option>
+                        </optgroup>
+                        <option value="button_esp32">Button ESP32</option>
+                        <option value="button_esp8266">Button ESP8266</option>
+                        <option value="remote_esp32">Remote ESP32</option>
+                        <!-- <option value="remote_esp8266">Remote ESP8266</option> -->
+                    </select>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Version (e.g., 3.7.4)</label>
+                    <input type="text" id="uploadVersion" placeholder="3.7.4" pattern="\d+\.\d+\.\d+" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+                    <p class="text-xs text-gray-500 mt-1">Format: major.minor.patch</p>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Firmware File (.bin)</label>
+                    <input type="file" id="uploadFile" accept=".bin" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                
+                <div id="uploadedInfo" class="hidden p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <p class="text-sm text-green-800 mb-2">✓ Firmware uploaded successfully!</p>
+                    <p class="text-xs text-green-700">This firmware is now available as an update for compatible devices.</p>
+                </div>
+                
+                <button type="submit" id="uploadSubmitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition duration-200">
+                    Upload
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+let availableFirmwares = {};
+let devices = [];
+let currentUpdateMac = null;
+let progressPollInterval = null;
+let activeSessions = {}; // Track active OTA sessions
+
+// Load devices on page load
+document.addEventListener('DOMContentLoaded', async () => {
+    await checkForUpdates(); // Auto-check for updates on page load
+    await loadActiveSessions(); // Load sessions first
+    await loadDevices(); // Then load devices
+    
+    // Event listeners
+    document.getElementById('checkUpdatesBtn').addEventListener('click', checkForUpdates);
+    document.getElementById('uploadBtn').addEventListener('click', () => {
+        document.getElementById('uploadModal').classList.remove('hidden');
+    });
+    document.getElementById('closeUploadModal').addEventListener('click', () => {
+        document.getElementById('uploadModal').classList.add('hidden');
+    });
+    document.getElementById('uploadForm').addEventListener('submit', uploadFirmware);
+    document.getElementById('closeProgressModal').addEventListener('click', closeProgressModal);
+    document.getElementById('abortBtn').addEventListener('click', abortUpdate);
+    document.getElementById('retryBtn').addEventListener('click', retryUpdate);
+});
+
+async function loadDevices() {
+    try {
+        const response = await fetch('/api/ota/devices');
+        const data = await response.json();
+        
+        if (data.success) {
+            devices = data.devices;
+            renderDevicesTable();
+        }
+    } catch (error) {
+        console.error('Failed to load devices:', error);
+        showError('Failed to load devices');
+    }
+}
+
+async function loadActiveSessions() {
+    try {
+        const response = await fetch('/api/ota/sessions');
+        const data = await response.json();
+        
+        if (data.success && data.sessions) {
+            activeSessions = {};
+            console.log('Active OTA sessions:', data.sessions);
+            
+            // Handle both array and object formats
+            const sessionsList = Array.isArray(data.sessions) 
+                ? data.sessions 
+                : Object.values(data.sessions);
+            
+            sessionsList.forEach(session => {
+                // Only track sessions that are in progress
+                if (['waiting_ready', 'transferring', 'validating'].includes(session.state)) {
+                    activeSessions[session.device_mac] = true;
+                }
+            });
+            renderDevicesTable();
+        }
+    } catch (error) {
+        console.error('Failed to load sessions:', error);
+    }
+}
+
+function renderDevicesTable() {
+    const tbody = document.getElementById('devicesTable');
+    
+    if (devices.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="px-6 py-8 text-center text-gray-500">No devices found</td>
+            </tr>
+        `;
+        return;
+    }
+    
+    // Group gateways by name (Net and Radio nodes share the same name)
+    const gatewayGroups = {};
+    const otherDevices = [];
+    
+    devices.forEach(device => {
+        if (device.type === 'gateway_net' || device.type === 'gateway_radio') {
+            const gatewayName = device.name;
+            if (!gatewayGroups[gatewayName]) {
+                gatewayGroups[gatewayName] = { net: null, radio: null, name: device.name, online: false };
+            }
+            if (device.type === 'gateway_net') {
+                gatewayGroups[gatewayName].net = device;
+                if (device.online) gatewayGroups[gatewayName].online = true;
+            } else {
+                gatewayGroups[gatewayName].radio = device;
+                if (device.online) gatewayGroups[gatewayName].online = true;
+            }
+        } else {
+            otherDevices.push(device);
+        }
+    });
+    
+    // Convert gateway groups to array and check for updates
+    const gateways = Object.entries(gatewayGroups).map(([name, group]) => {
+        const netHasUpdate = group.net && availableFirmwares['gateway_net'] && 
+            compareVersions(availableFirmwares['gateway_net'].version, group.net.version) > 0;
+        const radioHasUpdate = group.radio && availableFirmwares['gateway_radio'] && 
+            compareVersions(availableFirmwares['gateway_radio'].version, group.radio.version) > 0;
+        // Use Net node MAC for identification (WiFi MAC)
+        const mac = group.net?.mac_address || group.radio?.mac_address || name;
+        return { ...group, mac, hasUpdate: netHasUpdate || radioHasUpdate };
+    });
+    
+    // Check updates for other devices
+    otherDevices.forEach(device => {
+        // For buttons and remotes, match firmware based on platform
+        let firmwareKey = device.type;
+        if ((device.type === 'button' || device.type === 'remote') && device.platform) {
+            firmwareKey = `${device.type}_${device.platform}`;
+        }
+        // For lightstrips, match firmware based on model_id
+        else if (device.type === 'lightstrip' && device.model_id) {
+            firmwareKey = `lightstrip_model${device.model_id}`;
+        }
+        
+        const availableVersion = availableFirmwares[firmwareKey]?.version || '--';
+        device.hasUpdate = availableVersion !== '--' && compareVersions(availableVersion, device.version) > 0;
+        device.firmwareKey = firmwareKey; // Store for later use
+    });
+    
+    // Sort: updates first, then by type
+    const sortedGateways = gateways.sort((a, b) => {
+        if (a.hasUpdate !== b.hasUpdate) return b.hasUpdate - a.hasUpdate;
+        return a.name.localeCompare(b.name);
+    });
+    
+    const sortedOthers = otherDevices.sort((a, b) => {
+        if (a.hasUpdate !== b.hasUpdate) return b.hasUpdate - a.hasUpdate;
+        if (a.type !== b.type) return a.type.localeCompare(b.type);
+        return a.name.localeCompare(b.name);
+    });
+    
+    // Render gateways
+    let html = sortedGateways.map(gateway => {
+        const netVersion = gateway.net?.version || '--';
+        const radioVersion = gateway.radio?.version || '--';
+        const netAvailable = availableFirmwares['gateway_net']?.version || '--';
+        const radioAvailable = availableFirmwares['gateway_radio']?.version || '--';
+        const netHasUpdate = gateway.net && netAvailable !== '--' && compareVersions(netAvailable, netVersion) > 0;
+        const radioHasUpdate = gateway.radio && radioAvailable !== '--' && compareVersions(radioAvailable, radioVersion) > 0;
+        const netHasActiveOta = gateway.net && activeSessions[gateway.net.mac_address] || false;
+        const radioHasActiveOta = gateway.radio && activeSessions[gateway.radio.mac_address] || false;
+        
+        return `
+            <tr class="hover:bg-gray-50 ${gateway.hasUpdate ? 'bg-orange-50/30' : ''}">
+                <td class="px-6 py-4">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 h-10 w-10 flex items-center justify-center bg-purple-100 rounded-full">
+                            <i class="fas fa-server text-purple-600"></i>
+                        </div>
+                        <div class="ml-4">
+                            <div class="text-sm font-medium text-gray-900">${gateway.name}</div>
+                            <div class="text-xs text-gray-500">${gateway.mac}</div>
+                        </div>
+                    </div>
+                </td>
+                <td class="px-6 py-4">
+                    <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-purple-100 text-purple-800">
+                        Gateway
+                    </span>
+                </td>
+                <td class="px-6 py-4">
+                    <div class="flex flex-col space-y-1">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xs text-gray-500 w-12">Net:</span>
+                            <span class="text-sm text-gray-900">${netVersion}</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xs text-gray-500 w-12">Radio:</span>
+                            <span class="text-sm text-gray-900">${radioVersion}</span>
+                        </div>
+                    </div>
+                </td>
+                <td class="px-6 py-4">
+                    <div class="flex flex-col space-y-1">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xs text-gray-500 w-12">Net:</span>
+                            <span class="text-sm ${netHasUpdate ? 'text-orange-600 font-semibold' : 'text-gray-500'}">${netAvailable}</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xs text-gray-500 w-12">Radio:</span>
+                            <span class="text-sm ${radioHasUpdate ? 'text-orange-600 font-semibold' : 'text-gray-500'}">${radioAvailable}</span>
+                        </div>
+                    </div>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${gateway.online ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                        ${gateway.online ? 'Online' : 'Offline'}
+                    </span>
+                </td>
+                <td class="px-6 py-4">
+                    <div class="flex flex-col space-y-1">
+                        ${netHasActiveOta ? `
+                            <button onclick="reopenProgressModal('${gateway.net.mac_address}', 'gateway_net')"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs transition">
+                                View Progress
+                            </button>
+                        ` : netHasUpdate ? `
+                            <button onclick="startUpdate('${gateway.net.mac_address}', 'gateway_net', 'gateway_net')" 
+                                    class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-1 rounded text-xs transition">
+                                Update
+                            </button>
+                        ` : `
+                            <span class="text-gray-400 text-xs">Up to date</span>
+                        `}
+                        ${radioHasActiveOta ? `
+                            <button onclick="reopenProgressModal('${gateway.radio.mac_address}', 'gateway_radio')"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs transition">
+                                View Progress
+                            </button>
+                        ` : radioHasUpdate ? `
+                            <button onclick="startUpdate('${gateway.radio.mac_address}', 'gateway_radio', 'gateway_radio')" 
+                                    class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-1 rounded text-xs transition">
+                                Update
+                            </button>
+                        ` : `
+                            <span class="text-gray-400 text-xs">Up to date</span>
+                        `}
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    
+    // Render other devices
+    html += sortedOthers.map(device => {
+        const firmwareKey = device.firmwareKey || device.type;
+        const availableVersion = availableFirmwares[firmwareKey]?.version || '--';
+        const platformLabel = (device.type === 'button' || device.type === 'remote') && device.platform ? ` (${device.platform.toUpperCase()})` : '';
+        
+        // Model label for lightstrips
+        const modelNames = {
+            1: 'ESP32, RGB, WS2812B',
+            2: 'ESP32, RGBW, SK6812',
+            3: 'ESP8266, RGB, WS2812B',
+            4: 'ESP8266, RGBW, SK6812'
+        };
+        const modelLabel = device.type === 'lightstrip' && device.model_id ? ` (Model ${device.model_id}: ${modelNames[device.model_id] || 'Unknown'})` : '';
+        
+        const hasActiveOta = activeSessions[device.mac_address] || false;
+        
+        return `
+            <tr class="hover:bg-gray-50 ${device.hasUpdate ? 'bg-orange-50/30' : ''}">
+                <td class="px-6 py-4 whitespace-nowrap">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 h-10 w-10 flex items-center justify-center bg-${getTypeColor(device.type)}-100 rounded-full">
+                            <span class="text-${getTypeColor(device.type)}-600">${getTypeIcon(device.type)}</span>
+                        </div>
+                        <div class="ml-4">
+                            <div class="text-sm font-medium text-gray-900">${device.name}</div>
+                            <div class="text-xs text-gray-500">${device.mac_address}</div>
+                            ${modelLabel ? `<div class="text-xs text-${getTypeColor(device.type)}-600 mt-0.5">${modelLabel}</div>` : ''}
+                        </div>
+                    </div>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-${getTypeColor(device.type)}-100 text-${getTypeColor(device.type)}-800">
+                        ${device.type.charAt(0).toUpperCase() + device.type.slice(1)}${platformLabel}
+                    </span>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${device.version}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm ${device.hasUpdate ? 'text-orange-600 font-semibold' : 'text-gray-500'}">${availableVersion}</td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${device.online ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                        ${device.online ? 'Online' : 'Offline'}
+                    </span>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm">
+                    <div class="flex flex-col space-y-1">
+                        ${hasActiveOta ? `
+                            <button onclick="reopenProgressModal('${device.mac_address}', '${device.type}')"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded transition">
+                                View Progress
+                            </button>
+                        ` : device.hasUpdate ? `
+                            <button onclick="startUpdate('${device.mac_address}', '${device.type}', '${firmwareKey}')" 
+                                    class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-1.5 rounded transition">
+                                Update
+                            </button>
+                        ` : (device.platform || device.model_id) ? `
+                            <span class="text-gray-400">Up to date</span>
+                        ` : `
+                            <span class="text-yellow-600 text-xs">Platform unknown</span>
+                        `}
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    
+    tbody.innerHTML = html;
+}
+
+function getTypeColor(type) {
+    const colors = {
+        'gateway': 'purple',
+        'gateway_net': 'purple',
+        'gateway_radio': 'purple',
+        'lightstrip': 'yellow',
+        'button': 'pink',
+        'remote': 'pink'
+    };
+    return colors[type] || 'gray';
+}
+
+function getTypeIcon(type) {
+    const icons = {
+        'gateway': '<i class="fas fa-server"></i>',
+        'gateway_net': '<i class="fas fa-server"></i>',
+        'gateway_radio': '<i class="fas fa-server"></i>',
+        'lightstrip': '<i class="fas fa-lightbulb"></i>',
+        'button': '<i class="fas fa-microchip"></i>',
+        'remote': '<i class="fas fa-microchip"></i>'
+    };
+    return icons[type] || '<i class="fas fa-question"></i>';
+}
+
+function compareVersions(v1, v2) {
+    const parse = (v) => v.split('.').map(n => parseInt(n) || 0);
+    const a = parse(v1);
+    const b = parse(v2);
+    
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        const diff = (a[i] || 0) - (b[i] || 0);
+        if (diff !== 0) return diff > 0 ? 1 : -1;
+    }
+    return 0;
+}
+
+async function checkForUpdates() {
+    const icon = document.getElementById('check-updates-icon');
+    icon.classList.add('rotate-360');
+    
+    try {
+        const response = await fetch('/api/ota/check');
+        const data = await response.json();
+        
+        if (data.success) {
+            availableFirmwares = data.firmwares;
+            renderDevicesTable();
+            
+            const updateCount = Object.keys(availableFirmwares).length;
+            if (updateCount > 0) {
+                showToast('Firmware Available', `Version ${data.release.version} is available with ${updateCount} firmware file(s)`, 'info');
+            } else {
+                showInfo('No firmware files found in the latest release');
+            }
+        } else {
+            showError(data.error || 'Failed to check for updates');
+        }
+    } catch (error) {
+        console.error('Failed to check updates:', error);
+        showError('Failed to check for updates');
+    } finally {
+        setTimeout(() => {
+            icon.classList.remove('rotate-360');
+        }, 500);
+    }
+}
+
+async function startUpdate(deviceMac, deviceType, firmwareType) {
+    const firmware = availableFirmwares[firmwareType];
+    if (!firmware) {
+        showError('No firmware available for this device type');
+        return;
+    }
+    
+    // If firmware is from local upload, use it directly
+    if (firmware.source === 'local') {
+        // Start OTA update with local firmware
+        try {
+            const response = await fetch(`/api/ota/start/${deviceMac}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    firmware_path: firmware.filepath,
+                    firmware_type: firmwareType
+                })
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                currentUpdateMac = deviceMac;
+                activeSessions[deviceMac] = true; // Mark as active
+                showProgressModal(deviceMac, deviceType);
+                renderDevicesTable(); // Update button to "View Progress"
+            } else {
+                showError(data.error || 'Failed to start update');
+            }
+        } catch (error) {
+            console.error('Failed to start update:', error);
+            showError('Failed to start update');
+        }
+        return;
+    }
+    
+    // Download firmware from GitHub first
+    try {
+        // Map firmware type to device type code for download endpoint
+        let deviceTypeCode;
+        if (firmwareType === 'gateway_net' || firmwareType === 'gateway_radio' || firmwareType === 'gateway') {
+            deviceTypeCode = 1;
+        } else if (firmwareType === 'button') {
+            deviceTypeCode = 2;
+        } else if (firmwareType === 'lightstrip') {
+            deviceTypeCode = 3;
+        } else if (firmwareType === 'remote') {
+            deviceTypeCode = 4;
+        }
+        
+        const downloadResponse = await fetch(`/api/ota/download/${deviceTypeCode}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                download_url: firmware.download_url,
+                filename: firmware.filename
+            })
+        });
+        
+        const downloadData = await downloadResponse.json();
+        if (!downloadData.success) {
+            showError(downloadData.error || 'Failed to download firmware');
+            return;
+        }
+        
+        // Start OTA update
+        const response = await fetch(`/api/ota/start/${deviceMac}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                firmware_path: downloadData.filepath,
+                firmware_type: firmwareType
+            })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            currentUpdateMac = deviceMac;
+            activeSessions[deviceMac] = true; // Mark as active
+            showProgressModal(deviceMac, deviceType);
+            renderDevicesTable(); // Update button to "View Progress"
+        } else {
+            showError(data.error || 'Failed to start update');
+        }
+    } catch (error) {
+        console.error('Failed to start update:', error);
+        showError('Failed to start update');
+    }
+}
+
+function reopenProgressModal(deviceMac, deviceType) {
+    currentUpdateMac = deviceMac;
+    showProgressModal(deviceMac, deviceType);
+}
+
+function showProgressModal(deviceMac, deviceType) {
+    const device = devices.find(d => d.mac_address === deviceMac);
+    document.getElementById('progressDevice').textContent = `Device: ${device?.name || deviceMac}`;
+    document.getElementById('progressModal').classList.remove('hidden');
+    
+    // Show instructions for buttons
+    if (deviceType === 'button' || deviceType === 'remote') {
+        document.getElementById('progressInstructions').classList.remove('hidden');
+        document.getElementById('instructionsText').textContent = 
+            'Double-tap the reset button to begin update';
+    }
+    
+    // Start polling
+    startProgressPolling();
+}
+
+function startProgressPolling() {
+    if (progressPollInterval) {
+        clearInterval(progressPollInterval);
+    }
+    
+    progressPollInterval = setInterval(updateProgress, 500);
+    updateProgress(); // Immediate first call
+}
+
+async function updateProgress() {
+    if (!currentUpdateMac) return;
+    
+    try {
+        const response = await fetch(`/api/ota/status/${currentUpdateMac}`);
+        const data = await response.json();
+        
+        if (data.success && data.has_session) {
+            const session = data.session;
+            
+            document.getElementById('progressPercent').textContent = `${session.progress_percent}%`;
+            document.getElementById('progressBar').style.width = `${session.progress_percent}%`;
+            
+            // Format state name nicely
+            let formattedState = session.state;
+            if (formattedState === 'waiting_ready') {
+                formattedState = 'Waiting Ready';
+            } else {
+                formattedState = formattedState.charAt(0).toUpperCase() + formattedState.slice(1);
+            }
+            document.getElementById('progressStatus').textContent = formattedState;
+            
+            document.getElementById('progressChunks').textContent = `${session.chunks_sent} / ${session.total_chunks}`;
+            document.getElementById('progressSpeed').textContent = `${session.transfer_speed_kbps} KB/s`;
+            
+            // Show integer seconds only
+            document.getElementById('progressElapsed').textContent = `${Math.floor(session.elapsed_seconds)}s`;
+            
+            // Hide double-tap instruction once state moves past waiting_ready
+            const instructionsEl = document.getElementById('progressInstructions');
+            if (session.state !== 'waiting_ready' && session.state !== 'idle') {
+                instructionsEl.classList.add('hidden');
+            }
+            
+            if (session.state === 'complete') {
+                stopProgressPolling();
+                document.getElementById('abortBtn').classList.add('hidden');
+                document.getElementById('progressBar').classList.remove('bg-blue-600');
+                document.getElementById('progressBar').classList.add('bg-green-600');
+                showSuccess('Firmware update completed successfully!');
+                // Don't auto-close - let user dismiss manually
+            } else if (session.state === 'failed' || session.state === 'aborted') {
+                stopProgressPolling();
+                document.getElementById('abortBtn').classList.add('hidden');
+                document.getElementById('retryBtn').classList.remove('hidden');
+                document.getElementById('progressBar').classList.remove('bg-blue-600');
+                document.getElementById('progressBar').classList.add('bg-red-600');
+                showError(`Update ${session.state}: ${session.failure_reason || 'Unknown error'}`);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to update progress:', error);
+    }
+}
+
+function stopProgressPolling() {
+    if (progressPollInterval) {
+        clearInterval(progressPollInterval);
+        progressPollInterval = null;
+    }
+}
+
+async function closeProgressModal() {
+    stopProgressPolling();
+    document.getElementById('progressModal').classList.add('hidden');
+    document.getElementById('progressInstructions').classList.add('hidden');
+    document.getElementById('abortBtn').classList.remove('hidden');
+    document.getElementById('retryBtn').classList.add('hidden');
+    // Reset progress bar color
+    document.getElementById('progressBar').classList.remove('bg-green-600', 'bg-red-600');
+    document.getElementById('progressBar').classList.add('bg-blue-600');
+    // Reload sessions first, then devices to ensure button states are correct
+    await loadActiveSessions();
+    await loadDevices();
+    // Don't clear currentUpdateMac - allow re-opening the modal to check progress
+}
+
+async function abortUpdate() {
+    if (!currentUpdateMac) return;
+    
+    try {
+        const response = await fetch(`/api/ota/abort/${currentUpdateMac}`, { method: 'POST' });
+        const data = await response.json();
+        
+        if (data.success) {
+            showInfo('Update aborted');
+            // Don't close modal - let user see the aborted state
+        }
+    } catch (error) {
+        console.error('Failed to abort update:', error);
+    }
+}
+
+async function retryUpdate() {
+    if (!currentUpdateMac) return;
+    
+    // Find the device to get its type and firmware info
+    const device = devices.find(d => d.mac_address === currentUpdateMac);
+    if (!device) {
+        showError('Device not found');
+        return;
+    }
+    
+    // Determine firmware type based on device type and platform
+    let firmwareKey = device.type;
+    if ((device.type === 'button' || device.type === 'remote') && device.platform) {
+        firmwareKey = `${device.type}_${device.platform}`;
+    }
+    
+    // Reset UI
+    document.getElementById('retryBtn').classList.add('hidden');
+    document.getElementById('abortBtn').classList.remove('hidden');
+    document.getElementById('progressBar').classList.remove('bg-red-600');
+    document.getElementById('progressBar').classList.add('bg-blue-600');
+    document.getElementById('progressBar').style.width = '0%';
+    document.getElementById('progressPercent').textContent = '0%';
+    document.getElementById('progressStatus').textContent = 'Initializing...';
+    
+    // Show instructions again for buttons/remotes
+    if (device.type === 'button' || device.type === 'remote') {
+        document.getElementById('progressInstructions').classList.remove('hidden');
+        document.getElementById('instructionsText').textContent = 
+            'Double-tap the reset button to begin update';
+    }
+    
+    // Start the update again
+    startUpdate(currentUpdateMac, device.type, firmwareKey);
+}
+
+async function uploadFirmware(e) {
+    e.preventDefault();
+    
+    const fileInput = document.getElementById('uploadFile');
+    const deviceTypeSelect = document.getElementById('uploadDeviceType');
+    const versionInput = document.getElementById('uploadVersion');
+    const deviceType = deviceTypeSelect.value;
+    const version = versionInput.value.trim();
+    
+    if (!fileInput.files.length) {
+        showError('Please select a file');
+        return;
+    }
+    
+    if (!version) {
+        showError('Please enter a version');
+        return;
+    }
+    
+    // Validate version format
+    if (!/^\d+\.\d+\.\d+$/.test(version)) {
+        showError('Version must be in format X.Y.Z (e.g., 3.7.4)');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    formData.append('device_type', deviceType);
+    formData.append('version', version);
+    
+    try {
+        const response = await fetch('/api/ota/upload', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            // Show success message
+            document.getElementById('uploadedInfo').classList.remove('hidden');
+            
+            showSuccess(`Firmware v${version} uploaded successfully!`);
+            
+            // Auto-check for updates to refresh available firmwares
+            await checkForUpdates();
+            
+            // Reset form after short delay
+            setTimeout(() => {
+                document.getElementById('uploadModal').classList.add('hidden');
+                resetUploadForm();
+            }, 2000);
+        } else {
+            showError(data.error || 'Upload failed');
+        }
+    } catch (error) {
+        console.error('Upload failed:', error);
+        showError('Upload failed');
+    }
+}
+
+function resetUploadForm() {
+    document.getElementById('uploadFile').value = '';
+    document.getElementById('uploadVersion').value = '';
+    document.getElementById('uploadedInfo').classList.add('hidden');
+}
+
+function showToast(title, message, type = 'success') {
+    const toastNotification = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    const toastIcon = document.getElementById('toast-icon');
+    const toastTitle = document.getElementById('toast-title');
+    const toastMessage = document.getElementById('toast-message');
+
+    // Set content
+    toastTitle.textContent = title;
+    toastMessage.textContent = message;
+
+    // Set colors and icons based on type
+    if (type === 'success') {
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50';
+        toastIcon.className = 'fas fa-check-circle text-2xl text-green-600';
+    } else if (type === 'error') {
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-red-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-red-50';
+        toastIcon.className = 'fas fa-times-circle text-2xl text-red-600';
+    } else if (type === 'warning') {
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-yellow-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-yellow-50';
+        toastIcon.className = 'fas fa-exclamation-triangle text-2xl text-yellow-600';
+    } else if (type === 'info') {
+        toastContainer.className = 'rounded-lg shadow-2xl border-l-4 border-blue-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-blue-50';
+        toastIcon.className = 'fas fa-info-circle text-2xl text-blue-600';
+    }
+
+    // Show toast with animation
+    toastNotification.classList.remove('hidden');
+    setTimeout(() => {
+        toastContainer.classList.remove('translate-x-full', 'opacity-0');
+    }, 10);
+
+    // Auto hide after 4 seconds
+    setTimeout(() => {
+        hideToast();
+    }, 4000);
+}
+
+function hideToast() {
+    const toastNotification = document.getElementById('toast-notification');
+    const toastContainer = document.getElementById('toast-container');
+    
+    toastContainer.classList.add('translate-x-full', 'opacity-0');
+    setTimeout(() => {
+        toastNotification.classList.add('hidden');
+    }, 300);
+}
+
+function showError(message) {
+    showToast('Error', message, 'error');
+}
+
+function showSuccess(message) {
+    showToast('Success', message, 'success');
+}
+
+function showInfo(message) {
+    showToast('Info', message, 'info');
+}
+</script>
+{% endblock %}

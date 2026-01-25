@@ -19,6 +19,13 @@ PKT_HELLO = 0x10
 PKT_BTN_EVENT = 0x11
 PKT_SCENE_REQ = 0x12
 PKT_DELIVERY_RPT = 0x13
+PKT_OTA_NOTIFY = 0x20
+PKT_OTA_READY = 0x21
+PKT_OTA_CHUNK = 0x22
+PKT_OTA_COMPLETE = 0x23
+PKT_OTA_ABORT = 0x24
+PKT_OTA_CHUNK_ACK = 0x25
+PKT_OTA_CHECKPOINT_REQ = 0x26
 PKT_PING_DEVICE = 0xFE
 PKT_PING = 0xFF
 
@@ -78,6 +85,15 @@ PACKET_HEADER_SIZE = 18
 PACKET_PAYLOAD_SIZE = 185
 PACKET_TOTAL_SIZE = 203
 
+# ===== OTA Configuration =====
+OTA_CHUNK_DATA_SIZE = 182  # Bytes of actual firmware data per chunk
+OTA_READY_TIMEOUT = 10  # Seconds to wait for PKT_OTA_READY response
+OTA_CHUNK_ACK_TIMEOUT = 3  # Seconds to wait for checkpoint ACK
+OTA_CHUNK_MAX_RETRIES = 5  # Max retries for a chunk batch before aborting
+OTA_CHECKPOINT_INTERVAL = 10  # Send checkpoint ACK every N chunks
+OTA_POST_UPDATE_TIMEOUT = 30  # Seconds to wait for post-update HELLO
+OTA_MAX_FIRMWARE_SIZE = 2 * 1024 * 1024  # 2MB max firmware size
+
 # ===== FNV-1a Hash =====
 FNV_OFFSET_BASIS = 2166136261
 FNV_PRIME = 16777619
@@ -90,6 +106,7 @@ FILE_LIGHTSTRIPS = 'lightstrips.json'
 FILE_BRIDGE = 'bridge.json'
 FILE_CONFIG = 'config.json'
 FILE_PAIRING_HISTORY = 'pairing_history.json'
+FILE_OTA_SESSIONS = 'ota_sessions.json'
 
 # ===== Logging =====
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

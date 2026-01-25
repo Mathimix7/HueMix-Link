@@ -6,13 +6,19 @@
 #include "HueMixLink.h"
 #include <Preferences.h>
 #include <Bounce2.h>
+#include <Ticker.h>
 
 #if defined(ESP8266)
   #include <ESP8266WiFi.h>
   #include <espnow.h>
+  #include <Updater.h>
+  #include <bearssl/bearssl_hash.h>
 #else
   #include <WiFi.h>
   #include <esp_now.h>
+  #include <esp_ota_ops.h>
+  #include <esp_partition.h>
+  #include "mbedtls/sha256.h"
 #endif
 
 #if defined(ESP8266)
@@ -51,24 +57,436 @@ bool homeSetupDone = false;
 unsigned long ledTimer = 0;
 bool ledActive = false;
 
+// --- OTA STATE MACHINE ---
+enum OtaState { OTA_IDLE, OTA_WAITING_NOTIFY, OTA_RECEIVING, OTA_VALIDATING, OTA_COMPLETE };
+OtaState otaState = OTA_IDLE;
+#if defined(ESP32)
+  const esp_partition_t *update_partition = nullptr;
+  esp_ota_handle_t update_handle = 0;
+  mbedtls_sha256_context sha256_ctx;
+#else
+  br_sha256_context sha256_ctx;
+#endif
+uint32_t expected_firmware_size = 0;
+uint32_t received_bytes = 0;
+uint16_t expected_chunk_index = 0;
+uint8_t expected_sha256[32];
+unsigned long last_ota_activity = 0;
+unsigned long ota_wake_time = 0;
+bool ota_mode = false;
+
+// LED breathing (for OTA)
+#define LED_PWM_FREQ 5000
+#define LED_PWM_RESOLUTION 8
+Ticker breathingTicker;
+int breathingDirection = 1;
+int breathingBrightness = 0;
+bool breathingActive = false;
+volatile bool breathingUpdatePending = false;  // Flag for interrupt-safe LED update
+
+// Packet queue for ESP8266 interrupt-safe processing
+#ifdef ESP8266
+  #define PACKET_QUEUE_SIZE 10
+  struct PacketQueueItem {
+    HueMixLinkPacket packet;
+    uint8_t mac[6];
+    bool valid;
+  };
+  PacketQueueItem packetQueue[PACKET_QUEUE_SIZE];
+  volatile uint8_t packetQueueHead = 0;
+  volatile uint8_t packetQueueTail = 0;
+#endif
+
+// Double-tap detection
+unsigned long last_reset_press = 0;
+uint8_t reset_tap_count = 0;
+#define DOUBLE_TAP_WINDOW 500
+
 #if defined(ESP32)
   esp_now_peer_info_t peerInfo;
 #endif
 
 void triggerLed(int duration) {
+  if (breathingActive) {
+    return;
+  }
   digitalWrite(PIN_LED, LED_ACTIVE_HIGH);
   ledActive = true;
   ledTimer = millis() + duration;
 }
 
 void ledBlink(int times, int delayMs) {
+  if (breathingActive) {
+    return;
+  }
   for(int i=0; i<times; i++) {
     digitalWrite(PIN_LED, LED_ACTIVE_HIGH); delay(delayMs);
     digitalWrite(PIN_LED, !LED_ACTIVE_HIGH); delay(delayMs);
   }
 }
 
+void updateBreathing() {
+  breathingBrightness += breathingDirection * 10;
+  if (breathingBrightness >= 255) {
+    breathingBrightness = 255;
+    breathingDirection = -1;
+  } else if (breathingBrightness <= 0) {
+    breathingBrightness = 0;
+    breathingDirection = 1;
+  }
+  
+  // Set flag to update LED in main loop (interrupt-safe for ESP8266)
+  breathingUpdatePending = true;
+}
+
+void applyBreathingLed() {
+  // This function is called from main loop, not interrupt
+  if (!breathingActive || !breathingUpdatePending) return;
+  breathingUpdatePending = false;
+  
+  #ifdef ESP32
+    if (LED_ACTIVE_HIGH) {
+      ledcWrite(PIN_LED, breathingBrightness);
+    } else {
+      ledcWrite(PIN_LED, 255 - breathingBrightness);
+    }
+  #endif
+}
+
+void startLedBreathing() {
+  #ifdef ESP32
+    ledcAttach(PIN_LED, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+  #else
+    // ESP8266: Set PWM frequency and range
+    analogWriteFreq(LED_PWM_FREQ);
+    analogWriteRange(255);
+    pinMode(PIN_LED, OUTPUT);
+  #endif
+  breathingBrightness = 0;
+  breathingDirection = 1;
+  breathingTicker.attach_ms(30, updateBreathing);
+  breathingActive = true;
+}
+
+void stopLedBreathing() {
+  if (!breathingActive) return;
+  breathingTicker.detach();
+  #ifdef ESP32
+    ledcDetach(PIN_LED);
+  #endif
+  pinMode(PIN_LED, OUTPUT);
+  digitalWrite(PIN_LED, !LED_ACTIVE_HIGH);
+  breathingActive = false;
+}
+
+// --- OTA FUNCTIONS ---
+void abortOta(const char* reason) {
+  Serial.printf("[OTA] ABORT: %s\n", reason);
+  stopLedBreathing();
+  #if defined(ESP32)
+    if (update_handle) {
+      esp_ota_abort(update_handle);
+      update_handle = 0;
+    }
+  #else
+    Update.end();
+  #endif
+  otaState = OTA_IDLE;
+  expected_chunk_index = 0;
+  received_bytes = 0;
+  ota_mode = false;
+  ledBlink(3, 100); // Error indication
+}
+
 void saveGateways() { prefs.putBytes("gw", &gateways, sizeof(gateways)); }
+
+
+void handleOtaNotify(HueMixLinkPacket* pkt) {
+  if (otaState != OTA_WAITING_NOTIFY) {
+    Serial.println("[OTA] Not in OTA mode");
+    return;
+  }
+  
+  Serial.println("[OTA] NOTIFY received");
+  
+  expected_firmware_size = pkt->payload.otaNotify.firmware_size;
+  memcpy(expected_sha256, pkt->payload.otaNotify.sha256_hash, 32);
+  
+  #if defined(ESP32)
+    // ESP32: Initialize update partition
+    update_partition = esp_ota_get_next_update_partition(NULL);
+    if (!update_partition) {
+      Serial.println("[OTA] No update partition available");
+      abortOta("No partition");
+      return;
+    }
+    
+    Serial.printf("[OTA] Starting update: %u bytes\n", expected_firmware_size);
+    
+    esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
+    if (err != ESP_OK) {
+      Serial.printf("[OTA] Begin failed: %d\n", err);
+      abortOta("Begin failed");
+      return;
+    }
+    
+    mbedtls_sha256_init(&sha256_ctx);
+    mbedtls_sha256_starts(&sha256_ctx, 0);
+  #else
+    // ESP8266: Initialize Update library
+    Serial.printf("[OTA] Starting update: %u bytes\n", expected_firmware_size);
+    
+    if (!Update.begin(expected_firmware_size)) {
+      Serial.printf("[OTA] Begin failed: %s\n", Update.getErrorString().c_str());
+      abortOta("Begin failed");
+      return;
+    }
+    
+    br_sha256_init(&sha256_ctx);
+  #endif
+  
+  otaState = OTA_RECEIVING;
+  expected_chunk_index = 0;
+  received_bytes = 0;
+  last_ota_activity = millis();
+  
+  Serial.println("[OTA] Ready to receive chunks");
+  startLedBreathing();
+  
+  // Send OTA_READY response with actual firmware size to confirm readiness
+  HueMixLinkPacket ready;
+  ready.type = PKT_OTA_READY;
+  WiFi.macAddress(ready.sourceMAC);
+  memset(ready.targetMAC, 0xFF, 6);
+  ready.payload.otaReady.firmware_size = expected_firmware_size;
+  ready.payload.otaReady.battery_mv = 0;
+  ready.signature = calculateHash((uint8_t*)&ready.payload, sizeof(Payload_OtaReady), HOME_ID);
+  
+  // Try sending to gateways sequentially
+  bool sent = false;
+  int successfulGatewayIndex = -1;
+  
+  for(int i = 0; i < gateways.count; i++) {
+    #if defined(ESP8266)
+      if(!esp_now_is_peer_exist(gateways.macs[i])) {
+        esp_now_add_peer(gateways.macs[i], WiFi.channel(), ESP_NOW_ROLE_COMBO, NULL, 0);
+      }
+      if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == 0) {
+        sent = true;
+        successfulGatewayIndex = i;
+        Serial.printf("[OTA] Sent OTA_READY response via gateway %d\n", i);
+        break;
+      }
+    #else
+      if (!esp_now_is_peer_exist(gateways.macs[i])) {
+        memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
+        peerInfo.channel = 0;
+        peerInfo.encrypt = false;
+        esp_now_add_peer(&peerInfo);
+      }
+      if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
+        sent = true;
+        successfulGatewayIndex = i;
+        Serial.printf("[OTA] Sent OTA_READY response via gateway %d\n", i);
+        break;
+      }
+    #endif
+  }
+  
+  // Move successful gateway to front of list
+  if (successfulGatewayIndex > 0) {
+    uint8_t tempMac[6];
+    memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
+    for(int j = successfulGatewayIndex; j > 0; j--) {
+      memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+    }
+    memcpy(gateways.macs[0], tempMac, 6);
+    saveGateways();
+  }
+  
+  if (!sent) {
+    Serial.println("[OTA] Failed to send OTA_READY to any gateway");
+  }
+}
+
+void handleOtaChunk(HueMixLinkPacket* pkt) {
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  
+  last_ota_activity = millis();
+  ota_wake_time = millis(); // Extend wake time
+  
+  uint16_t chunk_idx = pkt->payload.otaChunk.chunk_index;
+  uint8_t data_len = pkt->payload.otaChunk.data_len;
+  
+  // Check chunk order: accept current or future chunks, ignore duplicates
+  if (chunk_idx < expected_chunk_index) {
+    // This is a duplicate chunk we already received - ignore it silently
+    Serial.printf("[OTA] Ignoring duplicate chunk %d (already at %d)\n", chunk_idx, expected_chunk_index);
+    return;
+  }
+  
+  if (chunk_idx != expected_chunk_index) {
+    Serial.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
+    return;
+  }
+  
+  #if defined(ESP32)
+    esp_err_t err = esp_ota_write(update_handle, pkt->payload.otaChunk.data, data_len);
+    if (err != ESP_OK) {
+      Serial.printf("[OTA] Write failed at chunk %d: %d\n", chunk_idx, err);
+      abortOta("Write failed");
+      return;
+    }
+    mbedtls_sha256_update(&sha256_ctx, pkt->payload.otaChunk.data, data_len);
+  #else
+    size_t written = Update.write(pkt->payload.otaChunk.data, data_len);
+    if (written != data_len) {
+      Serial.printf("[OTA] Write failed at chunk %d\n", chunk_idx);
+      abortOta("Write failed");
+      return;
+    }
+    br_sha256_update(&sha256_ctx, pkt->payload.otaChunk.data, data_len);
+  #endif
+  
+  received_bytes += data_len;
+  expected_chunk_index++;
+  
+  if (chunk_idx % 50 == 0) {
+    Serial.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n", 
+      received_bytes, expected_firmware_size, 
+      (received_bytes * 100.0) / expected_firmware_size);
+    triggerLed(20); // Visual feedback
+  }
+}
+
+void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  
+  // Send checkpoint ACK with last successfully received chunk
+  uint16_t last_chunk = (expected_chunk_index > 0) ? (expected_chunk_index - 1) : 0;
+  Serial.printf("[OTA] Checkpoint request - last chunk received: %d\n", last_chunk);
+  
+  // Build OTA_CHUNK_ACK packet
+  HueMixLinkPacket ack;
+  ack.type = PKT_OTA_CHUNK_ACK;
+  WiFi.macAddress(ack.sourceMAC);
+  memset(ack.targetMAC, 0, 6);  // Server doesn't need target MAC
+  ack.msgID = 0;
+  ack.payload.otaChunkAck.last_chunk_index = last_chunk;
+  ack.signature = calculateHash((uint8_t*)&ack.payload.otaChunkAck, 2, HOME_ID);
+  
+  // Try sending to gateways (not to pkt->sourceMAC which is Python server)
+  bool sent = false;
+  int successfulGatewayIndex = -1;
+  
+  for(int i = 0; i < gateways.count; i++) {
+    #if defined(ESP8266)
+      if(!esp_now_is_peer_exist(gateways.macs[i])) {
+        esp_now_add_peer(gateways.macs[i], WiFi.channel(), ESP_NOW_ROLE_COMBO, NULL, 0);
+      }
+      if (esp_now_send(gateways.macs[i], (uint8_t*)&ack, sizeof(ack)) == 0) {
+        sent = true;
+        successfulGatewayIndex = i;
+        Serial.printf("[OTA] Sent checkpoint ACK via gateway %d: last_chunk=%d\n", i, last_chunk);
+        break;
+      }
+    #else
+      if (!esp_now_is_peer_exist(gateways.macs[i])) {
+        memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
+        peerInfo.channel = 0;
+        peerInfo.encrypt = false;
+        esp_now_add_peer(&peerInfo);
+      }
+      if (esp_now_send(gateways.macs[i], (uint8_t*)&ack, sizeof(ack)) == ESP_OK) {
+        sent = true;
+        successfulGatewayIndex = i;
+        Serial.printf("[OTA] Sent checkpoint ACK via gateway %d: last_chunk=%d\n", i, last_chunk);
+        break;
+      }
+    #endif
+  }
+  
+  // Move successful gateway to front of list for future OTA packets
+  if (successfulGatewayIndex > 0) {
+    uint8_t tempMac[6];
+    memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
+    for(int j = successfulGatewayIndex; j > 0; j--) {
+      memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+    }
+    memcpy(gateways.macs[0], tempMac, 6);
+    saveGateways();
+  }
+  
+  if (!sent) {
+    Serial.println("[OTA] Failed to send checkpoint ACK to any gateway");
+  }
+}
+
+void handleOtaComplete(HueMixLinkPacket* pkt) {
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  
+  Serial.println("[OTA] COMPLETE received, validating...");
+  otaState = OTA_VALIDATING;
+  
+  // Finalize SHA256
+  uint8_t calculated_sha256[32];
+  #if defined(ESP32)
+    mbedtls_sha256_finish(&sha256_ctx, calculated_sha256);
+    mbedtls_sha256_free(&sha256_ctx);
+  #else
+    br_sha256_out(&sha256_ctx, calculated_sha256);
+  #endif
+  
+  // Compare SHA256
+  if (memcmp(calculated_sha256, expected_sha256, 32) != 0) {
+    Serial.println("[OTA] SHA256 MISMATCH!");
+    abortOta("SHA256 mismatch");
+    return;
+  }
+  
+  Serial.println("[OTA] SHA256 verified!");
+  
+  #if defined(ESP32)
+    esp_err_t err = esp_ota_end(update_handle);
+    if (err != ESP_OK) {
+      Serial.printf("[OTA] End failed: %d\n", err);
+      abortOta("End failed");
+      return;
+    }
+    update_handle = 0;
+    
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+      Serial.printf("[OTA] Set boot partition failed: %d\n", err);
+      abortOta("Set boot failed");
+      return;
+    }
+  #else
+    if (!Update.end(true)) {
+      Serial.printf("[OTA] End failed: %s\n", Update.getErrorString().c_str());
+      abortOta("End failed");
+      return;
+    }
+  #endif
+  
+  Serial.println("[OTA] UPDATE SUCCESSFUL! Rebooting...");
+  otaState = OTA_COMPLETE;
+  
+  stopLedBreathing();
+  ledBlink(10, 100); // Success indication
+  ESP.restart();
+}
+
+void handleOtaAbort(HueMixLinkPacket* pkt) {
+  Serial.println("[OTA] ABORT received from server");
+  abortOta("Server abort");
+}
 
 void addGateway(const uint8_t *mac) {
   for(int i=0; i<gateways.count; i++) {
@@ -82,19 +500,27 @@ void addGateway(const uint8_t *mac) {
   }
 }
 
-#if defined(ESP8266)
-void OnDataRecv(uint8_t *mac_addr, uint8_t *data, uint8_t len) {
-#else
-void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) {
-#endif
-  if (len < sizeof(uint8_t)) return;
-  HueMixLinkPacket *rx = (HueMixLinkPacket*)data;
-
-  #if defined(ESP8266)
-    const uint8_t *mac = mac_addr;
-  #else
-    const uint8_t *mac = info->src_addr;
-  #endif
+void processReceivedPacket(HueMixLinkPacket *rx, const uint8_t *mac) {
+  // OTA Handling
+  if (rx->type == PKT_OTA_NOTIFY) {
+    handleOtaNotify(rx);
+    lastActivityTime = millis();
+    ota_wake_time = millis(); // Keep awake for OTA
+    return;
+  } else if (rx->type == PKT_OTA_CHUNK) {
+    handleOtaChunk(rx);
+    lastActivityTime = millis();
+    return;
+  } else if (rx->type == PKT_OTA_CHECKPOINT_REQ) {
+    handleOtaCheckpointReq(rx);
+    return;
+  } else if (rx->type == PKT_OTA_COMPLETE) {
+    handleOtaComplete(rx);
+    return;
+  } else if (rx->type == PKT_OTA_ABORT) {
+    handleOtaAbort(rx);
+    return;
+  }
 
   if (rx->type == PKT_PAIR_CONFIRM) {
     if (HOME_ID == 0) {
@@ -112,6 +538,16 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
   else if (rx->type == PKT_ACK_TO_BTN) {
     ackReceived = true;    
     if (rx->payload.gwList.count > 0) {
+       // Security: Verify signature to ensure gateway list comes from trusted source with correct HOME_ID
+       if (HOME_ID != 0) {
+         uint32_t expected_sig = calculateHash((uint8_t*)&rx->payload.gwList, sizeof(Payload_GatewayList), HOME_ID);
+         if (rx->signature != expected_sig) {
+           Serial.printf("[BTN] SECURITY: Invalid signature on gateway list. Expected 0x%08X, got 0x%08X\n", expected_sig, rx->signature);
+           Serial.println("[BTN] Rejected unauthorized gateway list");
+           return;
+         }
+       }
+       
        Serial.printf("[BTN] Server sent %d gateways:\n", rx->payload.gwList.count);
        for(int i=0; i<rx->payload.gwList.count; i++) {
          Serial.printf("  [%d] %02X:%02X:%02X:%02X:%02X:%02X\n", i,
@@ -160,6 +596,34 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
   }
 }
 
+#if defined(ESP8266)
+void OnDataRecv(uint8_t *mac_addr, uint8_t *data, uint8_t len) {
+#else
+void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) {
+#endif
+  if (len < sizeof(HueMixLinkPacket)) return;
+  
+  #if defined(ESP8266)
+    const uint8_t *mac = mac_addr;
+  #else
+    const uint8_t *mac = info->src_addr;
+  #endif
+
+#ifdef ESP8266
+  // ESP8266: Queue packet for processing in main loop (interrupt-safe)
+  uint8_t nextHead = (packetQueueHead + 1) % PACKET_QUEUE_SIZE;
+  if (nextHead != packetQueueTail) {  // Queue not full
+    memcpy(&packetQueue[packetQueueHead].packet, data, sizeof(HueMixLinkPacket));
+    memcpy(packetQueue[packetQueueHead].mac, mac, 6);
+    packetQueue[packetQueueHead].valid = true;
+    packetQueueHead = nextHead;
+  }
+#else
+  // ESP32: Process directly (interrupt handler is more capable)
+  processReceivedPacket((HueMixLinkPacket*)data, mac);
+#endif
+}
+
 void sendPacket(uint8_t type, uint8_t action) {
   HueMixLinkPacket pkt;
   pkt.type = type;
@@ -167,14 +631,64 @@ void sendPacket(uint8_t type, uint8_t action) {
   
   if (type == PKT_BTN_EVENT) {
     pkt.payload.btn.action = action;
-    pkt.payload.btn.battery_mv = 3300; 
-    pkt.payload.raw[3] = 255;
+    pkt.payload.btn.battery_mv = 0;
+    pkt.payload.btn.button_index = -1; // Normal button always sends -1
+    
+    // Add version information
+    #ifdef FIRMWARE_VERSION
+      const char* ver = FIRMWARE_VERSION;
+      uint8_t major = 0, minor = 0, patch = 0;
+      sscanf(ver, "%hhu.%hhu.%hhu", &major, &minor, &patch);
+      pkt.payload.btn.version_major = major;
+      pkt.payload.btn.version_minor = minor;
+      pkt.payload.btn.version_patch = patch;
+    #else
+      pkt.payload.btn.version_major = 0;
+      pkt.payload.btn.version_minor = 0;
+      pkt.payload.btn.version_patch = 0;
+    #endif
+    
+    // Platform indicator: 0=ESP32, 1=ESP8266
+    #if defined(ESP8266)
+      pkt.payload.btn.platform = 1;
+    #else
+      pkt.payload.btn.platform = 0;
+    #endif
+    
     pkt.signature = calculateHash((uint8_t*)&pkt.payload, sizeof(Payload_Button), HOME_ID);
   } else if (type == PKT_HELLO) {
     pkt.payload.raw[0] = DEV_BUTTON;
-    pkt.signature = calculateHash(pkt.payload.raw, 1, 0); 
-  }
+    pkt.payload.raw[1] = 0; // RSSI placeholder (gateway fills this)
+    
+    // Parse version from build flag (format: "3.7.3")
+    #ifdef FIRMWARE_VERSION
+      const char* ver = FIRMWARE_VERSION;
+      uint8_t major = 0, minor = 0, patch = 0;
+      sscanf(ver, "%hhu.%hhu.%hhu", &major, &minor, &patch);
+      pkt.payload.raw[2] = major;
+      pkt.payload.raw[3] = minor;
+      pkt.payload.raw[4] = patch;
+      // Build byte indicates platform: 0=ESP32, 1=ESP8266
+      #if defined(ESP8266)
+        pkt.payload.raw[5] = 1; // ESP8266
+      #else
+        pkt.payload.raw[5] = 0; // ESP32
+      #endif
+    #else
+      pkt.payload.raw[2] = 0;
+      pkt.payload.raw[3] = 0;
+      pkt.payload.raw[4] = 0;
+      #if defined(ESP8266)
+        pkt.payload.raw[5] = 1; // ESP8266
+      #else
+        pkt.payload.raw[5] = 0; // ESP32
+      #endif
+    #endif
+    
 
+    pkt.signature = calculateHash(pkt.payload.raw, 5, HOME_ID != 0 ? HOME_ID : 0);
+  }
+  
   ackReceived = false;
   bool sent = false;
   int successfulGatewayIndex = -1;
@@ -300,15 +814,43 @@ void setup() {
   lastActivityTime = millis();
 
   #if defined(ESP32)
-  esp_sleep_wakeup_cause_t wakeupReason = esp_sleep_get_wakeup_cause();
-  if(wakeupReason == ESP_SLEEP_WAKEUP_EXT0) {
-      wakeupExt0 = true;
-      Serial.println("Wakeup caused by Button");
-  } else {
-      Serial.println("Cold boot");
-      ledBlink(5, 100);
-      goToSleep();
-  }
+    esp_sleep_wakeup_cause_t wakeupReason = esp_sleep_get_wakeup_cause();
+    if(wakeupReason == ESP_SLEEP_WAKEUP_EXT0) {
+        wakeupExt0 = true;
+        Serial.println("Wakeup caused by Button");
+    } else {
+        // Check if we just rebooted from OTA update
+        esp_reset_reason_t reset_reason = esp_reset_reason();
+        if (reset_reason == ESP_RST_SW) {
+          Serial.println("[OTA] Detected software reset (post-OTA reboot)");
+          if (HOME_ID != 0) {
+            sendPacket(PKT_HELLO, 0); // Send HELLO with new version
+            Serial.println("[OTA] Sent post-OTA HELLO with new version");
+            delay(500); // Give time for transmission
+          }
+        }
+        
+        Serial.println("Cold boot");
+        ledBlink(5, 100);
+        goToSleep();
+    }
+  #else
+    // ESP8266: Check if we just rebooted from OTA update
+    String reset_reason = ESP.getResetReason();
+    Serial.printf("ESP8266 Reset Reason: %s\n", reset_reason.c_str());
+    
+    if (reset_reason == "Software/System restart" || reset_reason.indexOf("Software") >= 0) {
+      Serial.println("[OTA] Detected software reset (post-OTA reboot)");
+      if (HOME_ID != 0) {
+        delay(500); // Give ESP8266 time to stabilize after reset
+        sendPacket(PKT_HELLO, 0); // Send HELLO with new version
+        Serial.println("[OTA] Sent post-OTA HELLO with new version");
+        delay(500); // Give time for transmission
+      }
+    }
+    
+    Serial.println("ESP8266 ready");
+    ledBlink(3, 100);
   #endif
 }
 
@@ -319,6 +861,33 @@ unsigned long holdingIntervalUpdate = 0;
 void loop() {
   button.update();
   auxButton.update();
+  
+  // Apply LED breathing update (interrupt-safe for ESP8266)
+  applyBreathingLed();
+  
+  #ifdef ESP8266
+    // Process queued packets (deferred from interrupt handler)
+    while (packetQueueTail != packetQueueHead) {
+      if (packetQueue[packetQueueTail].valid) {
+        processReceivedPacket(&packetQueue[packetQueueTail].packet, packetQueue[packetQueueTail].mac);
+        packetQueue[packetQueueTail].valid = false;
+      }
+      packetQueueTail = (packetQueueTail + 1) % PACKET_QUEUE_SIZE;
+    }
+  #endif
+
+  // OTA timeout check
+  if (otaState == OTA_RECEIVING && millis() - last_ota_activity > 30000) {
+    Serial.println("[OTA] Timeout - no activity for 30s");
+    abortOta("Timeout");
+  }
+
+  // OTA wake timeout - keep device awake for 30s after entering OTA mode
+  if (otaState == OTA_WAITING_NOTIFY && millis() - ota_wake_time > 30000) {
+    Serial.println("[OTA] No NOTIFY received within 30s, returning to normal");
+    otaState = OTA_IDLE;
+    ota_mode = false;
+  }
 
   if (ledActive) {
     if (millis() > ledTimer) {
@@ -385,16 +954,99 @@ void loop() {
     lastActivityTime = millis();
   }
 
-  // FACTORY RESET using AUX
-  if (auxButton.read() == LOW) {
-    lastActivityTime = millis();
-    unsigned long holdStart = millis();
-    while(auxButton.read() == LOW) {
-      if (millis() - holdStart > 5000) {
-        ledBlink(10, 50); prefs.clear(); HOME_ID = 0; gateways.count = 0; ESP.restart();
+  // FACTORY RESET using AUX (hold 5s) OR OTA MODE (double-tap)
+  static unsigned long aux_hold_start = 0;
+  
+  // Detect falling edge (button pressed)
+  if (auxButton.fell()) {
+    unsigned long now = millis();
+    
+    // Check if this is within double-tap window
+    if (now - last_reset_press < DOUBLE_TAP_WINDOW) {
+      reset_tap_count++;
+    } else {
+      reset_tap_count = 1;
+    }
+    last_reset_press = now;
+    aux_hold_start = now; // Track hold start for factory reset
+  }
+  
+  // Detect rising edge (button released)
+  if (auxButton.rose()) {
+    // Second tap released - enter OTA mode
+    if (reset_tap_count >= 2 && !ota_mode) {
+      // Double-tap detected - enter OTA mode
+      Serial.println("[OTA] Double-tap detected! Entering OTA mode...");
+      otaState = OTA_WAITING_NOTIFY;
+      ota_mode = true;
+      ota_wake_time = millis();
+      lastActivityTime = millis();
+      ledBlink(3, 200); // OTA mode indication
+      
+      // Send OTA_READY packet with firmware_size=0 to announce OTA mode
+      HueMixLinkPacket ready;
+      ready.type = PKT_OTA_READY;
+      WiFi.macAddress(ready.sourceMAC);
+      memset(ready.targetMAC, 0xFF, 6); // Broadcast to any gateway
+      ready.payload.otaReady.firmware_size = 0; // Announce OTA mode
+      ready.payload.otaReady.battery_mv = 0;
+      ready.signature = calculateHash((uint8_t*)&ready.payload, sizeof(Payload_OtaReady), HOME_ID);
+      
+      // Try sending to gateways sequentially
+      bool sent = false;
+      int successfulGatewayIndex = -1;
+      
+      for(int i = 0; i < gateways.count; i++) {
+        #if defined(ESP32)
+          if (!esp_now_is_peer_exist(gateways.macs[i])) {
+            memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
+            peerInfo.channel = 0;
+            peerInfo.encrypt = false;
+            esp_now_add_peer(&peerInfo);
+          }
+          if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
+            sent = true;
+            successfulGatewayIndex = i;
+            Serial.printf("[OTA] Sent OTA_READY announcement via gateway %d\n", i);
+            break;
+          }
+        #else
+          if (!esp_now_is_peer_exist(gateways.macs[i])) {
+            esp_now_add_peer(gateways.macs[i], WiFi.channel(), ESP_NOW_ROLE_COMBO, NULL, 0);
+          }
+          if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == 0) {
+            sent = true;
+            successfulGatewayIndex = i;
+            Serial.printf("[OTA] Sent OTA_READY announcement via gateway %d\n", i);
+            break;
+          }
+        #endif
       }
-      auxButton.update();
-      delay(10);
+      
+      // Move successful gateway to front of list
+      if (successfulGatewayIndex > 0) {
+        uint8_t tempMac[6];
+        memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
+        for(int j = successfulGatewayIndex; j > 0; j--) {
+          memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+        }
+        memcpy(gateways.macs[0], tempMac, 6);
+        saveGateways();
+      }
+      
+      reset_tap_count = 0;
+    }
+  }
+  
+  // Check for factory reset (5s hold on aux button)
+  if (auxButton.read() == LOW && !ota_mode) {
+    if (millis() - aux_hold_start > 5000) {
+      Serial.println("[RESET] Factory reset triggered!");
+      ledBlink(10, 50);
+      prefs.clear();
+      HOME_ID = 0;
+      gateways.count = 0;
+      ESP.restart();
     }
   }
 
@@ -409,7 +1061,8 @@ void loop() {
 
   #if !defined(ESP8266)
   // If been idle long enough, go to sleep (using your new SLEEP_TIMEOUT)
-  if (millis() - lastActivityTime > SLEEP_TIMEOUT) {
+  // But don't sleep if in OTA mode
+  if (!ota_mode && millis() - lastActivityTime > SLEEP_TIMEOUT) {
     if (button.read() == HIGH && auxButton.read() == HIGH) {
       goToSleep();
     }

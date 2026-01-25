@@ -68,6 +68,7 @@ if __name__ == '__main__':
         # Start Flask web server (blocking) — bind to localhost only; proxy will expose externally
         logger.info(f"Starting Flask web server on port {DEFAULT_WEB_PORT} (127.0.0.1)...")
         serve(app, host='127.0.0.1', port=DEFAULT_WEB_PORT, threads=8)
+        # app.run(host='127.0.0.1', port=DEFAULT_WEB_PORT, debug=False, use_reloader=False)
         
     except KeyboardInterrupt:
         logger.info("Shutting down...")

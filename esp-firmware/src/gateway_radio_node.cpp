@@ -67,6 +67,13 @@ SerialState rxState = S_IDLE;
 uint16_t rxIndex = 0;
 uint8_t rxRawBuffer[sizeof(HueMixLinkPacket)];
 
+// --- OTA BUFFERING CONFIG ---
+#define OTA_BUFFER_MAX_CHUNKS 15
+#define CHUNK_PAYLOAD_SIZE 185
+#define OTA_ACCUMULATOR_SIZE (CHUNK_PAYLOAD_SIZE * OTA_BUFFER_MAX_CHUNKS)
+uint8_t otaAccumulator[OTA_ACCUMULATOR_SIZE];
+uint16_t otaAccumulatorIndex = 0;
+
 void updateBreathing() {
   breathingBrightness += breathingDirection * 10;
   if (breathingBrightness >= 255) {
@@ -138,6 +145,7 @@ void abortOta(const char* reason) {
   
   // Notify server about the abort via UART to net node
   HueMixLinkPacket abortPkt;
+  memset(&abortPkt, 0, sizeof(HueMixLinkPacket));
   abortPkt.type = PKT_OTA_ABORT;
   esp_read_mac(abortPkt.sourceMAC, ESP_MAC_WIFI_STA);
   memset(abortPkt.targetMAC, 0, 6);
@@ -147,7 +155,7 @@ void abortOta(const char* reason) {
   abortPkt.payload.raw[0] = 0;  // reason_code
   
   // Calculate signature (1 byte payload)
-  abortPkt.signature = calculateHash(abortPkt.payload.raw, 1, HOME_ID);
+  abortPkt.signature = calculateHash(abortPkt.payload.raw, 185, HOME_ID);
   
   // Send abort notification to net node via UART
   Serial2.write(SERIAL_START);
@@ -168,6 +176,7 @@ void abortOta(const char* reason) {
   
   otaState = OTA_IDLE;
   expected_chunk_index = 0;
+  otaAccumulatorIndex = 0;
   received_bytes = 0;
 }
 
@@ -188,6 +197,16 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
     esp_now_send(pkt->targetMAC, (uint8_t*)pkt, sizeof(HueMixLinkPacket));
     Serial.println("[OTA] NOTIFY forwarded via ESP-NOW");
     return;
+  }
+  
+  // Security: Verify signature for OTA packet targeted to us
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.printf("[RADIO] SECURITY: Invalid OTA signature. Expected 0x%08X, got 0x%08X\n", expected_sig, pkt->signature);
+      Serial.println("[RADIO] Rejected unauthorized OTA packet");
+      return;
+    }
   }
   
   if (otaState != OTA_IDLE) {
@@ -231,12 +250,13 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   
   // Send PKT_OTA_READY via UART to net node
   HueMixLinkPacket ready;
+  memset(&ready, 0, sizeof(HueMixLinkPacket));
   ready.type = PKT_OTA_READY;
   esp_read_mac(ready.sourceMAC, ESP_MAC_WIFI_STA);
   memcpy(ready.targetMAC, pkt->sourceMAC, 6);
   ready.payload.otaReady.firmware_size = expected_firmware_size;
   ready.payload.otaReady.battery_mv = 0; // Not battery powered
-  ready.signature = calculateHash((uint8_t*)&ready.payload, sizeof(Payload_OtaReady), HOME_ID);
+  ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
   
   Serial2.write(SERIAL_START);
   Serial2.write((uint8_t*)&ready, sizeof(HueMixLinkPacket));
@@ -261,9 +281,18 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
     esp_now_send(pkt->targetMAC, (uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
-  
+    
   if (otaState != OTA_RECEIVING) {
     return;
+  }
+
+  // Security: Verify signature for OTA chunk targeted to us
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.printf("[RADIO] SECURITY: Invalid OTA CHUNK signature\n");
+      return;
+    }
   }
   
   last_ota_activity = millis();
@@ -282,15 +311,22 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
     Serial.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
     return;
   }
-  
-  // Write chunk to partition
-  esp_err_t err = esp_ota_write(update_handle, pkt->payload.otaChunk.data, data_len);
-  if (err != ESP_OK) {
-    Serial.printf("[OTA] Write failed at chunk %d: %d\n", chunk_idx, err);
-    abortOta("Write failed");
-    return;
+
+  if (otaAccumulatorIndex + data_len <= sizeof(otaAccumulator)) {
+    memcpy(&otaAccumulator[otaAccumulatorIndex], pkt->payload.otaChunk.data, data_len);
+    otaAccumulatorIndex += data_len;
+  } else {
+    // If we hit RAM limit before checkpoint, we must write
+    esp_err_t err = esp_ota_write(update_handle, otaAccumulator, otaAccumulatorIndex);
+    if (err != ESP_OK) {
+        abortOta("Flash write failed");
+        return;
+    }
+    otaAccumulatorIndex = 0;
+    memcpy(&otaAccumulator[otaAccumulatorIndex], pkt->payload.otaChunk.data, data_len);
+    otaAccumulatorIndex += data_len;
   }
-  
+
   // Update SHA256
   mbedtls_sha256_update(&sha256_ctx, pkt->payload.otaChunk.data, data_len);
   
@@ -306,6 +342,7 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
 
 void sendOtaChunkAck(uint16_t last_chunk_index) {
   HueMixLinkPacket pkt;
+  memset(&pkt, 0, sizeof(HueMixLinkPacket));
   pkt.type = PKT_OTA_CHUNK_ACK;
   esp_read_mac(pkt.sourceMAC, ESP_MAC_WIFI_STA);
   memset(pkt.targetMAC, 0, 6); // Server doesn't need target MAC
@@ -314,12 +351,13 @@ void sendOtaChunkAck(uint16_t last_chunk_index) {
   pkt.payload.otaChunkAck.last_chunk_index = last_chunk_index;
   
   // Calculate signature (2 bytes for last_chunk_index)
-  pkt.signature = calculateHash((uint8_t*)&pkt.payload.otaChunkAck, 2, HOME_ID);
+  pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   
   // Send via UART to net node
   Serial2.write(SERIAL_START);
   Serial2.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
   Serial2.write(SERIAL_END);
+  Serial2.flush();
   
   Serial.printf("[OTA] Sent checkpoint ACK via UART: last_chunk=%d\n", last_chunk_index);
 }
@@ -342,8 +380,27 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
     return;
   }
   
+  // Security: Verify signature
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.println("[RADIO] SECURITY: Invalid OTA CHECKPOINT_REQ signature");
+      return;
+    }
+  }
+  
   if (otaState != OTA_RECEIVING) {
     return;
+  }
+
+  if (otaAccumulatorIndex >= 0) {
+    Serial.printf("[OTA] Flushing %d bytes at checkpoint\n", otaAccumulatorIndex);
+    esp_err_t err = esp_ota_write(update_handle, otaAccumulator, otaAccumulatorIndex);
+    if (err != ESP_OK) {
+      abortOta("Flash write failed at checkpoint");
+      return;
+    }
+    otaAccumulatorIndex = 0; // Clear RAM buffer
   }
   
   // Respond with last successfully received chunk (expected_chunk_index - 1)
@@ -368,13 +425,32 @@ void handleOtaComplete(HueMixLinkPacket* pkt) {
     return;
   }
   
+  // Security: Verify signature
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.println("[RADIO] SECURITY: Invalid OTA COMPLETE signature");
+      return;
+    }
+  }
+  
   Serial.printf("[OTA] COMPLETE packet received (state=%d)\n", otaState);
   
   if (otaState != OTA_RECEIVING) {
     Serial.printf("[OTA] COMPLETE rejected: wrong state (got %d)\n", otaState);
     return;
   }
-  
+
+  if (otaAccumulatorIndex > 0) {
+    Serial.printf("[OTA] Flushing final %d bytes\n", otaAccumulatorIndex);
+    esp_err_t err = esp_ota_write(update_handle, otaAccumulator, otaAccumulatorIndex);
+    if (err != ESP_OK) {
+      abortOta("Final flush failed");
+      return;
+    }
+    otaAccumulatorIndex = 0;
+  }
+
   // Send final checkpoint ACK to confirm all chunks received
   if (expected_chunk_index > 0) {
     sendOtaChunkAck(expected_chunk_index - 1);
@@ -453,6 +529,15 @@ void handleOtaAbort(HueMixLinkPacket* pkt) {
     return;
   }
   
+  // Security: Verify signature
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.println("[RADIO] SECURITY: Invalid OTA ABORT signature");
+      return;
+    }
+  }
+  
   Serial.println("[OTA] ABORT received from server");
   abortOta("Server abort");
 }
@@ -482,6 +567,16 @@ void handleSerialPacket(uint8_t* data) {
   }
 
   if (radioTx.type == PKT_SYS_CMD) {
+    // Security: Verify signature for SYS_CMD
+    if (HOME_ID != 0) {
+      uint32_t expected_sig = calculateHash(radioTx.payload.raw, 185, HOME_ID);
+      if (radioTx.signature != expected_sig) {
+        Serial.printf("[RADIO] SECURITY: Invalid SYS_CMD signature. Expected 0x%08X, got 0x%08X\n", expected_sig, radioTx.signature);
+        Serial.println("[RADIO] Rejected unauthorized SYS_CMD");
+        return;
+      }
+    }
+    
     if (radioTx.payload.sys.cmd == 1) nightMode = true;
     else if (radioTx.payload.sys.cmd == 2) nightMode = false;
     else {
@@ -551,7 +646,7 @@ void parseSerialByte(uint8_t b) {
         rxIndex = 0; 
         last_serial_activity = millis();
       } 
-      else if (b == SERIAL_REQ_HANDSHAKE) { 
+      else if (b == SERIAL_REQ_HANDSHAKE && (millis() - last_serial_activity) > SERIAL_IDLE_THRESHOLD) { 
         handshake_request_received = true;  // Mark that we got a request
         Serial.println("[RADIO] Received handshake request from net node");
         sendSerialHandshake(); 
@@ -607,14 +702,15 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     rpt.payload.report.success = (status == ESP_NOW_SEND_SUCCESS);
     memcpy(rpt.payload.report.targetMAC, lastTargetMAC, 6); // Use stored target MAC instead of callback parameter
 
-    rpt.signature = calculateHash((uint8_t*)&rpt.payload, 8, HOME_ID);
+    rpt.signature = calculateHash(rpt.payload.raw, 185, HOME_ID);
 
     Serial2.write(SERIAL_START); Serial2.write((uint8_t*)&rpt, sizeof(rpt)); Serial2.write(SERIAL_END);
+    Serial2.flush();
     waitingForDelivery = false;
     
     if (!nightMode) {
       digitalWrite(PIN_LED_STATUS, (status == ESP_NOW_SEND_SUCCESS) ? HIGH : LOW);
-      delay(10); digitalWrite(PIN_LED_STATUS, LOW);
+      delay(50); digitalWrite(PIN_LED_STATUS, LOW);
     }
   }
 }
@@ -708,9 +804,11 @@ void loop() {
     Serial2.write(SERIAL_START);
     Serial2.write((uint8_t*)&bufferPkt, sizeof(bufferPkt));
     Serial2.write(SERIAL_END);
+    Serial2.flush();
     
     if (bufferPkt.type == PKT_BTN_EVENT) {
       HueMixLinkPacket ack; 
+      memset(&ack, 0, sizeof(HueMixLinkPacket));
       ack.type = PKT_ACK_TO_BTN;
       esp_read_mac(ack.sourceMAC, ESP_MAC_WIFI_STA);
       memcpy(ack.targetMAC, bufferPkt.sourceMAC, 6);
@@ -718,7 +816,7 @@ void loop() {
       ack.payload.gwList = activeGateways;
       
       // Security: Sign the ACK packet with HOME_ID
-      ack.signature = calculateHash((uint8_t*)&ack.payload.gwList, sizeof(Payload_GatewayList), HOME_ID);
+      ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
       
       esp_now_peer_info_t peer = {}; 
       memcpy(peer.peer_addr, bufferPkt.sourceMAC, 6);

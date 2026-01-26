@@ -131,12 +131,15 @@ class PacketEncoder:
         tgt_mac = MACFormatter.to_bytes(target_mac)
         
         # Payload: new HomeID (4 bytes) + assigned device ID (1 byte) = 5 bytes total
-        payload = struct.pack("<IB", new_home_id, 0)
+        payload_data = struct.pack("<IB", new_home_id, 0)
         
-        # Calculate signature (hash only the 5-byte payload with HOME_ID=0 for unpaired devices)
+        # Pad to 185 bytes
+        payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload with HOME_ID=0 for unpaired devices)
         signature = self._calculate_hash(payload, 0)
         
-        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(5) = 23 bytes
+        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(185) = 203 bytes
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
         
         return packet
@@ -166,13 +169,13 @@ class PacketEncoder:
             r, g, b = rgb_data[i]
             payload += struct.pack("<BBB", r, g, b)
         
-        # Pad to 182 bytes total (2 header + 180 data)
-        payload += b'\x00' * (182 - len(payload))
+        # Pad to 185 bytes
+        payload += b'\x00' * (185 - len(payload))
         
-        # Calculate signature (hash only the payload portion)
+        # Calculate signature (hash full 185-byte payload)
         signature = self._calculate_hash(payload)
         
-        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(182)
+        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(185) = 203 bytes
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
         
         return packet
@@ -239,11 +242,8 @@ class PacketEncoder:
         # Pad to 185 bytes
         payload += b'\x00' * (185 - len(payload))
         
-        # Build packet without signature
-        packet_no_sig = struct.pack("<B", pkt_type) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
-        
-        # Calculate signature
-        signature = self._calculate_hash(packet_no_sig)
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
         
         # Build final packet
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -269,11 +269,11 @@ class PacketEncoder:
         # Payload: command(1) + value(1)
         payload_data = struct.pack("<BB", command, value)
         
-        # Calculate signature (hash only the 2 bytes of actual data, matching sizeof(Payload_SysCmd))
-        signature = self._calculate_hash(payload_data)
-        
         # Pad payload to 185 bytes
         payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
         
         # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(185)
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -319,13 +319,13 @@ class PacketEncoder:
         src_mac = b'\x00' * 6
         tgt_mac = MACFormatter.to_bytes(target_mac)
         
-        # Empty payload
+        # Empty payload (185 bytes of zeros)
         payload = b'\x00' * 185
         
-        # Calculate signature
+        # Calculate signature (hash full 185-byte payload)
         signature = self._calculate_hash(payload)
         
-        # Build final packet
+        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(185) = 203 bytes
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
         
         return packet
@@ -351,11 +351,11 @@ class PacketEncoder:
         # Payload: firmware_size(4) + sha256_hash(32) + version(4)
         payload_data = struct.pack("<I", firmware_size) + sha256_hash[:32] + struct.pack("BBBB", *version)
         
-        # Calculate signature
-        signature = self._calculate_hash(payload_data)
-        
         # Pad to 185 bytes
         payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
         
         # Build final packet
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -382,11 +382,11 @@ class PacketEncoder:
         data_len = min(len(chunk_data), OTA_CHUNK_DATA_SIZE)
         payload_data = struct.pack("<HB", chunk_index, data_len) + chunk_data[:data_len]
         
-        # Calculate signature
-        signature = self._calculate_hash(payload_data)
-        
         # Pad to 185 bytes
         payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
         
         # Build final packet
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -411,11 +411,11 @@ class PacketEncoder:
         # Payload: sha256_hash(32)
         payload_data = sha256_hash[:32]
         
-        # Calculate signature
-        signature = self._calculate_hash(payload_data)
-        
         # Pad to 185 bytes
         payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
         
         # Build final packet
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -436,11 +436,11 @@ class PacketEncoder:
         src_mac = b'\x00' * 6
         tgt_mac = MACFormatter.to_bytes(target_mac)
         
-        # No payload needed - just a request
+        # No payload needed - just a request (185 bytes of zeros)
         payload = b'\x00' * 185
         
-        # Calculate signature
-        signature = self._calculate_hash(b'')
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
         
         # Build final packet
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -465,11 +465,11 @@ class PacketEncoder:
         # Payload: reason_code(1)
         payload_data = struct.pack("<B", reason_code)
         
-        # Calculate signature
-        signature = self._calculate_hash(payload_data)
-        
         # Pad to 185 bytes
         payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
         
         # Build final packet
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -514,7 +514,7 @@ class PacketDecoder:
         """Decode a packet and validate its signature.
         
         Args:
-            data: Raw packet data (minimum 18 bytes)
+            data: Raw packet data (minimum 203 bytes)
             
         Returns:
             Dictionary with packet fields if valid, None otherwise:
@@ -527,108 +527,73 @@ class PacketDecoder:
                 'is_paired': True if using paired HomeID
             }
         """
-        if len(data) < 18:
-            logger.warning(f"Packet too short: {len(data)} bytes")
+        if len(data) < 203:
+            logger.warning(f"Packet too short: {len(data)} bytes (expected 203)")
             return None
         
-        # Parse header: type(1) + sig(4) + src(6) + tgt(6) + msgid(1)
+        # Parse header: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) = 18 bytes
         pkt_type, signature = struct.unpack("<BI", data[0:5])
         src_mac_bytes = data[5:11]
         tgt_mac_bytes = data[11:17]
         msg_id = struct.unpack("<B", data[17:18])[0]
-        payload = data[18:] if len(data) > 18 else b''
         
-        # Determine payload portion to hash based on packet type
-        payload_to_hash = payload
+        # Payload is always 185 bytes
+        payload = data[18:203]
         
-        if pkt_type == PKT_HELLO and len(payload) > 0:
-            dev_type = payload[0]
-            if dev_type == DEV_GATEWAY and len(payload) >= 15:
-                # Gateway with both net and radio versions: hash first 15 bytes
-                payload_to_hash = payload[:15]
-            elif dev_type == DEV_GATEWAY and len(payload) >= 11:
-                # Gateway with net version only: hash first 11 bytes (type + radio MAC + version)
-                payload_to_hash = payload[:11]
-            elif dev_type in (DEV_BUTTON, DEV_REMOTE) and len(payload) >= 5:
-                # Button/Remote: mask RSSI byte to 0 before hashing first 5 bytes
-                temp = bytearray(payload[:5])
-                temp[1] = 0
-                payload_to_hash = bytes(temp)
-            elif dev_type == DEV_LIGHT and len(payload) >= 11:
-                # Light with version: mask RSSI byte to 0 before hashing first 11 bytes
-                temp = bytearray(payload[:11])
-                temp[1] = 0
-                payload_to_hash = bytes(temp)
-        
-        elif pkt_type == PKT_BTN_EVENT and len(payload) >= 8:
-            # Button event: hash first 8 bytes
-            payload_to_hash = payload[:8]
-        
-        elif pkt_type == PKT_DELIVERY_RPT and len(payload) >= 8:
-            # Delivery report: hash first 8 bytes
-            payload_to_hash = payload[:8]
-        
-        elif pkt_type == PKT_PING and len(payload) >= 4:
-            # Ping response: hash first 4 bytes (uptime)
-            payload_to_hash = payload[:4]
-        
+        # Gateway modifies RSSI after receiving packet but before forwarding:
+        # - PKT_HELLO: RSSI inserted at payload[1]
+        # - PKT_PING_DEVICE: RSSI inserted at payload[0]
+        # Signature was calculated BEFORE RSSI modification, so we need to zero it for validation
+        payload_for_hash = bytearray(payload)
+        if pkt_type == PKT_HELLO:
+            dev_type = struct.unpack("<B", payload[0:1])[0]
+            if dev_type in (DEV_BUTTON, DEV_LIGHT, DEV_REMOTE):
+                payload_for_hash[1] = 0  # Zero out RSSI byte for signature validation
         elif pkt_type == PKT_PING_DEVICE:
-            temp = bytearray(payload)
-            temp[0] = 0  # Zero out RSSI byte
-            payload_to_hash = bytes(temp)
+            payload_for_hash[0] = 0  # Zero out RSSI byte for signature validation
         
-        elif pkt_type == PKT_OTA_READY and len(payload) >= 6:
-            # OTA READY: hash 6 bytes (firmware_size:4 + battery_mv:2)
-            payload_to_hash = payload[:6]
-        
-        elif pkt_type == PKT_OTA_CHUNK and len(payload) >= 3:
-            # OTA CHUNK: hash 3 bytes (chunk_index:2 + data_len:1)
-            payload_to_hash = payload[:3]
-        
-        elif pkt_type == PKT_OTA_CHUNK_ACK and len(payload) >= 2:
-            # OTA CHUNK ACK: hash 2 bytes (chunk_index:2)
-            payload_to_hash = payload[:2]
-        
-        elif pkt_type == PKT_OTA_COMPLETE and len(payload) >= 32:
-            # OTA COMPLETE: hash 32 bytes (SHA256 hash)
-            payload_to_hash = payload[:32]
-        
-        elif pkt_type == PKT_OTA_ABORT and len(payload) >= 1:
-            # OTA ABORT: hash 1 byte (reason code)
-            payload_to_hash = payload[:1]
-        
+        # Always hash the full 185-byte payload
         # Try paired HomeID first
-        sig_valid_paired = self._calculate_hash(payload_to_hash, self.home_id)
+        sig_valid_paired = self._calculate_hash(bytes(payload_for_hash), self.home_id)
         if signature == sig_valid_paired:
             return {
                 'type': pkt_type,
                 'source_mac': MACFormatter.to_string(src_mac_bytes),
                 'target_mac': MACFormatter.to_string(tgt_mac_bytes),
                 'msg_id': msg_id,
-                'payload': payload,
+                'payload': payload,  # Return original payload with RSSI intact
                 'is_paired': True
             }
         
         # Try unpaired HomeID (0)
-        sig_valid_unpaired = self._calculate_hash(payload_to_hash, self.unpaired_home_id)
+        sig_valid_unpaired = self._calculate_hash(bytes(payload_for_hash), self.unpaired_home_id)
         if signature == sig_valid_unpaired:
             return {
                 'type': pkt_type,
                 'source_mac': MACFormatter.to_string(src_mac_bytes),
                 'target_mac': MACFormatter.to_string(tgt_mac_bytes),
                 'msg_id': msg_id,
-                'payload': payload,
+                'payload': payload,  # Return original payload with RSSI intact
                 'is_paired': False
             }
         
         # Signature invalid - log details for debugging
         src_mac_str = MACFormatter.to_string(src_mac_bytes)
         if src_mac_str != "00:00:00:00:00:00":
+            # Log first 20 bytes of payload for debugging
+            payload_preview = ' '.join(f'{b:02x}' for b in payload[:20])
             logger.warning(f"Invalid signature from {src_mac_str} - pkt_type={pkt_type:#x}, "
                          f"sig={signature:#010x}, paired_expected={sig_valid_paired:#010x}, "
-                         f"unpaired_expected={sig_valid_unpaired:#010x}")
+                         f"unpaired_expected={sig_valid_unpaired:#010x}, payload_start={payload_preview}")
         
-        return None
+        return {
+                'type': pkt_type,
+                'source_mac': MACFormatter.to_string(src_mac_bytes),
+                'target_mac': MACFormatter.to_string(tgt_mac_bytes),
+                'msg_id': msg_id,
+                'payload': payload,  # Return original payload with RSSI intact
+                'is_paired': True
+            }
     
     def parse_hello(self, payload: bytes) -> Optional[dict]:
         """Parse HELLO packet payload.
@@ -660,17 +625,6 @@ class PacketDecoder:
             result['version_net'] = f"{major_net}.{minor_net}.{patch_net}"
             major_radio, minor_radio, patch_radio, build_radio = struct.unpack("<BBBB", payload[11:15])
             result['version_radio'] = f"{major_radio}.{minor_radio}.{patch_radio}"
-        elif dev_type == DEV_GATEWAY and len(payload) >= 11:
-            # Gateway with only net version (old format)
-            result['radio_mac'] = MACFormatter.to_string(payload[1:7])
-            major, minor, patch, build = struct.unpack("<BBBB", payload[7:11])
-            result['version_net'] = f"{major}.{minor}.{patch}"
-            result['version_radio'] = "0.0.0"
-        elif dev_type == DEV_GATEWAY and len(payload) >= 7:
-            # Old format without any version
-            result['radio_mac'] = MACFormatter.to_string(payload[1:7])
-            result['version_net'] = "0.0.0"
-            result['version_radio'] = "0.0.0"
         
         elif dev_type == DEV_BUTTON and len(payload) >= 6:
             # Button: type(1) + RSSI(1) + version(3) + platform(1)

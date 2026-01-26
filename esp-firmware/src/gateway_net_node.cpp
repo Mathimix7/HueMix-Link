@@ -190,8 +190,7 @@ void abortOta(const char* reason) {
   Serial.printf("[OTA] ABORT: %s\n", reason);
   
   // Notify server about the abort
-  HueMixLinkPacket abortPkt;
-  abortPkt.type = PKT_OTA_ABORT;
+  HueMixLinkPacket abortPkt;  memset(&abortPkt, 0, sizeof(HueMixLinkPacket));  abortPkt.type = PKT_OTA_ABORT;
   WiFi.macAddress(abortPkt.sourceMAC);
   memset(abortPkt.targetMAC, 0, 6);
   abortPkt.msgID = 0;
@@ -200,7 +199,7 @@ void abortOta(const char* reason) {
   abortPkt.payload.raw[0] = 0;  // reason_code
   
   // Calculate signature (1 byte payload)
-  abortPkt.signature = calculateHash(abortPkt.payload.raw, 1, HOME_ID);
+  abortPkt.signature = calculateHash(abortPkt.payload.raw, 185, HOME_ID);
   
   // Send abort notification to server
   udp.beginPacket(server_ip, server_port);
@@ -235,6 +234,16 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
     Serial2.write(SERIAL_END);
     Serial2.flush(); 
     return;
+  }
+  
+  // Security: Verify signature for OTA packet targeted to us
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.printf("[NET] SECURITY: Invalid OTA signature. Expected 0x%08X, got 0x%08X\n", expected_sig, pkt->signature);
+      Serial.println("[NET] Rejected unauthorized OTA packet");
+      return;
+    }
   }
   
   // It's for us - handle OTA for ourselves
@@ -284,7 +293,7 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   memcpy(ready.targetMAC, pkt->sourceMAC, 6);
   ready.payload.otaReady.firmware_size = expected_firmware_size;
   ready.payload.otaReady.battery_mv = 0; // Not battery powered
-  ready.signature = calculateHash((uint8_t*)&ready.payload, sizeof(Payload_OtaReady), HOME_ID);
+  ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
   
   udp.beginPacket(server_ip, server_port);
   udp.write((uint8_t*)&ready, sizeof(HueMixLinkPacket));
@@ -305,10 +314,20 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
     Serial2.flush();  // Wait for transmission to complete
     return;
   }
-  
+
   if (otaState != OTA_RECEIVING) {
     return;
   }
+  
+  // Security: Verify signature for OTA chunk targeted to us
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.printf("[NET] SECURITY: Invalid OTA CHUNK signature\n");
+      return;
+    }
+  }
+  
   
   last_ota_activity = millis();
   
@@ -350,6 +369,7 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
 
 void sendOtaChunkAck(uint16_t last_chunk_index) {
   HueMixLinkPacket pkt;
+  memset(&pkt, 0, sizeof(HueMixLinkPacket));
   pkt.type = PKT_OTA_CHUNK_ACK;
   WiFi.macAddress(pkt.sourceMAC);
   memset(pkt.targetMAC, 0, 6); // Server doesn't need target MAC
@@ -358,7 +378,7 @@ void sendOtaChunkAck(uint16_t last_chunk_index) {
   pkt.payload.otaChunkAck.last_chunk_index = last_chunk_index;
   
   // Calculate signature (2 bytes for last_chunk_index)
-  pkt.signature = calculateHash((uint8_t*)&pkt.payload.otaChunkAck, 2, HOME_ID);
+  pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   
   udp.beginPacket(server_ip, server_port);
   udp.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
@@ -382,6 +402,15 @@ void handleOtaComplete(HueMixLinkPacket* pkt) {
     Serial2.write(SERIAL_END);
     Serial2.flush();  // Wait for transmission to complete
     return;
+  }
+  
+  // Security: Verify signature
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.println("[NET] SECURITY: Invalid OTA COMPLETE signature");
+      return;
+    }
   }
   
   if (otaState != OTA_RECEIVING) {
@@ -463,6 +492,15 @@ void handleOtaAbort(HueMixLinkPacket* pkt) {
     return;
   }
   
+  // Security: Verify signature
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.println("[NET] SECURITY: Invalid OTA ABORT signature");
+      return;
+    }
+  }
+  
   Serial.println("[OTA] ABORT received from server");
   abortOta("Server abort");
 }
@@ -479,6 +517,15 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
     Serial2.write(SERIAL_END);
     Serial2.flush();  // Wait for transmission to complete
     return;
+  }
+  
+  // Security: Verify signature
+  if (HOME_ID != 0) {
+    uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
+    if (pkt->signature != expected_sig) {
+      Serial.println("[NET] SECURITY: Invalid OTA CHECKPOINT_REQ signature");
+      return;
+    }
   }
   
   if (otaState != OTA_RECEIVING) {
@@ -531,6 +578,7 @@ void sendGatewayHello() {
   if (WiFi.status() != WL_CONNECTED) return;
   // Serial.println("Sending Hello...");
   HueMixLinkPacket pkt;
+  memset(&pkt, 0, sizeof(HueMixLinkPacket));
   pkt.type = PKT_HELLO;
   WiFi.macAddress(pkt.sourceMAC);
   pkt.payload.raw[0] = DEV_GATEWAY; 
@@ -558,7 +606,7 @@ void sendGatewayHello() {
   pkt.payload.raw[13] = radioVersion[2];  // Radio node patch
   pkt.payload.raw[14] = 0;                // Radio node build number
   
-  pkt.signature = calculateHash(pkt.payload.raw, 15, HOME_ID);
+  pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   udp.beginPacket(server_ip, server_port);
   udp.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
   udp.endPacket();
@@ -669,7 +717,7 @@ void sendBtnEvent(uint8_t action) {
   // Gateway is always ESP32
   btnPkt.payload.btn.platform = 0;
   
-  btnPkt.signature = calculateHash((uint8_t*)&btnPkt.payload, sizeof(Payload_Button), HOME_ID);
+  btnPkt.signature = calculateHash(btnPkt.payload.raw, 185, HOME_ID);
   if (WiFi.status() == WL_CONNECTED) {
     udp.beginPacket(server_ip, server_port);
     udp.write((uint8_t*)&btnPkt, sizeof(HueMixLinkPacket));
@@ -713,7 +761,7 @@ void loop() {
           handleOtaAbort(&txPkt);
         } else if (txPkt.type == PKT_PAIR_CONFIRM) {
           uint32_t incomingSig = txPkt.signature;
-          uint32_t expectedSig = calculateHash((uint8_t*)&txPkt.payload, sizeof(Payload_Pairing), 0);
+          uint32_t expectedSig = calculateHash(txPkt.payload.raw, 185, 0);
           if (incomingSig == expectedSig) {
             uint32_t newID = txPkt.payload.pair.newHomeID;
             if (newID != HOME_ID && newID != 0) { 
@@ -730,9 +778,10 @@ void loop() {
           Serial2.write(SERIAL_START); 
           Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
           Serial2.write(SERIAL_END);
+          Serial2.flush();
           flashDataLED(1);
         } else if (txPkt.type == PKT_SYS_CMD) {
-          if (txPkt.signature == calculateHash((uint8_t*)&txPkt.payload, sizeof(Payload_SysCmd), HOME_ID)) {
+          if (txPkt.signature == calculateHash(txPkt.payload.raw, 185, HOME_ID)) {
             bool oldMode = nightMode;
             if (txPkt.payload.sys.cmd == 1) nightMode = true;
             if (txPkt.payload.sys.cmd == 2) nightMode = false;
@@ -746,8 +795,18 @@ void loop() {
             Serial2.write(SERIAL_START); 
             Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
             Serial2.write(SERIAL_END);
+            Serial2.flush();
           }
         } else if (txPkt.type == PKT_PING) {
+          // Security: Verify signature for PING
+          if (HOME_ID != 0) {
+            uint32_t expected_sig = calculateHash(txPkt.payload.raw, 185, HOME_ID);
+            if (txPkt.signature != expected_sig) {
+              Serial.printf("[NET] SECURITY: Invalid PING signature. Expected 0x%08X, got 0x%08X\n", expected_sig, txPkt.signature);
+              return;
+            }
+          }
+          
           // Respond with uptime
           HueMixLinkPacket pong;
           memset(&pong, 0, sizeof(HueMixLinkPacket));
@@ -755,7 +814,7 @@ void loop() {
           WiFi.macAddress(pong.sourceMAC);
           uint32_t uptime_seconds = millis() / 1000;
           memcpy(pong.payload.raw, &uptime_seconds, sizeof(uint32_t));
-          pong.signature = calculateHash(pong.payload.raw, sizeof(uint32_t), HOME_ID);
+          pong.signature = calculateHash(pong.payload.raw, 185, HOME_ID);
           
           udp.beginPacket(server_ip, server_port);
           udp.write((uint8_t*)&pong, sizeof(HueMixLinkPacket));
@@ -767,6 +826,7 @@ void loop() {
           Serial2.write(SERIAL_START); 
           Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
           Serial2.write(SERIAL_END);
+          Serial2.flush();
           flashDataLED(1);
         }
       }

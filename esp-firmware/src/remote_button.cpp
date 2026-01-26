@@ -214,12 +214,13 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   
   // Send OTA_READY response with actual firmware size to confirm readiness
   HueMixLinkPacket ready;
+  memset(&ready, 0, sizeof(HueMixLinkPacket));
   ready.type = PKT_OTA_READY;
   WiFi.macAddress(ready.sourceMAC);
   memset(ready.targetMAC, 0xFF, 6);
   ready.payload.otaReady.firmware_size = expected_firmware_size;
   ready.payload.otaReady.battery_mv = battery_mv;
-  ready.signature = calculateHash((uint8_t*)&ready.payload, sizeof(Payload_OtaReady), HOME_ID);
+  ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
   
   // Try sending to gateways sequentially
   bool sent = false;
@@ -359,12 +360,13 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
   
   // Build OTA_CHUNK_ACK packet
   HueMixLinkPacket ack;
+  memset(&ack, 0, sizeof(HueMixLinkPacket));
   ack.type = PKT_OTA_CHUNK_ACK;
   WiFi.macAddress(ack.sourceMAC);
   memset(ack.targetMAC, 0, 6);  // Server doesn't need target MAC
   ack.msgID = 0;
   ack.payload.otaChunkAck.last_chunk_index = last_chunk;
-  ack.signature = calculateHash((uint8_t*)&ack.payload.otaChunkAck, 2, HOME_ID);
+  ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
   
   // Try sending to gateways (not to pkt->sourceMAC which is Python server)
   bool sent = false;
@@ -408,6 +410,20 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
   const uint8_t *mac = info->src_addr;
 
   // OTA Handling
+  // Security: Verify all OTA packets before processing
+  if (rx->type == PKT_OTA_NOTIFY || rx->type == PKT_OTA_CHUNK || 
+      rx->type == PKT_OTA_CHECKPOINT_REQ || rx->type == PKT_OTA_COMPLETE || 
+      rx->type == PKT_OTA_ABORT) {
+    if (HOME_ID != 0) {
+      uint32_t expected_sig = calculateHash(rx->payload.raw, 185, HOME_ID);
+      if (rx->signature != expected_sig) {
+        Serial.printf("[REMOTE] SECURITY: Invalid OTA signature. Expected 0x%08X, got 0x%08X\n", expected_sig, rx->signature);
+        Serial.println("[REMOTE] Rejected unauthorized OTA packet");
+        return;
+      }
+    }
+  }
+  
   if (rx->type == PKT_OTA_NOTIFY) {
     handleOtaNotify(rx);
     lastActivityTime = millis();
@@ -430,7 +446,7 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
 
   if (rx->type == PKT_PAIR_CONFIRM) {
     if (HOME_ID == 0) {
-      uint32_t sig = calculateHash((uint8_t*)&rx->payload, sizeof(Payload_Pairing), 0);
+      uint32_t sig = calculateHash(rx->payload.raw, 185, 0);
       if (rx->signature == sig) {
         HOME_ID = rx->payload.pair.newHomeID;
         addGateway(mac);
@@ -446,7 +462,7 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
     if (rx->payload.gwList.count > 0) {
       // Security: Verify signature to ensure gateway list comes from trusted source with correct HOME_ID
       if (HOME_ID != 0) {
-        uint32_t expected_sig = calculateHash((uint8_t*)&rx->payload.gwList, sizeof(Payload_GatewayList), HOME_ID);
+        uint32_t expected_sig = calculateHash(rx->payload.raw, 185, HOME_ID);
         if (rx->signature != expected_sig) {
           Serial.printf("[REMOTE] SECURITY: Invalid signature on gateway list. Expected 0x%08X, got 0x%08X\n", expected_sig, rx->signature);
           Serial.println("[REMOTE] Rejected unauthorized gateway list");
@@ -512,6 +528,7 @@ void getBatteryVoltage() {
 
 void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {
   HueMixLinkPacket pkt;
+  memset(&pkt, 0, sizeof(HueMixLinkPacket));
   pkt.type = type;
   pkt.msgID = 0;
   memset(pkt.targetMAC, 0, 6);
@@ -543,7 +560,7 @@ void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {
       pkt.payload.btn.platform = 0;
     #endif
     
-    pkt.signature = calculateHash((uint8_t*)&pkt.payload, sizeof(Payload_Button), HOME_ID);
+    pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   } else if (type == PKT_HELLO) {
     pkt.payload.raw[0] = DEV_REMOTE;
     pkt.payload.raw[1] = 0;  // Reserved for RSSI (gateway fills this in)
@@ -555,7 +572,7 @@ void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {
       pkt.payload.raw[2] = major;
       pkt.payload.raw[3] = minor;
       pkt.payload.raw[4] = patch;
-      pkt.payload.raw[5] = 0; // build number
+      pkt.payload.raw[5] = 0;
     #else
       pkt.payload.raw[2] = 0;
       pkt.payload.raw[3] = 0;
@@ -564,7 +581,7 @@ void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {
     #endif
     
     // Use HOME_ID for signature if paired, 0 if unpaired
-    pkt.signature = calculateHash(pkt.payload.raw, 5, HOME_ID);
+    pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   }
 
   ackReceived = false;
@@ -853,12 +870,13 @@ void loop() {
       
       // Send OTA_READY packet with firmware_size=0 to announce OTA mode
       HueMixLinkPacket ready;
+      memset(&ready, 0, sizeof(HueMixLinkPacket));
       ready.type = PKT_OTA_READY;
       WiFi.macAddress(ready.sourceMAC);
       memset(ready.targetMAC, 0xFF, 6);
       ready.payload.otaReady.firmware_size = 0;
       ready.payload.otaReady.battery_mv = battery_mv;
-      ready.signature = calculateHash((uint8_t*)&ready.payload, sizeof(Payload_OtaReady), HOME_ID);
+      ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
       
       // Try sending to gateways sequentially
       bool sent = false;

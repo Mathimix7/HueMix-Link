@@ -324,16 +324,6 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
     return;
   }
   
-  // Security: Verify signature to ensure OTA request comes from trusted source with correct HOME_ID
-  if (HOME_ID != 0) {
-    uint32_t expected_sig = calculateHash((uint8_t*)&pkt->payload.otaNotify, sizeof(Payload_OtaNotify), HOME_ID);
-    if (pkt->signature != expected_sig) {
-      Serial.printf("[OTA] SECURITY: Invalid signature. Expected 0x%08X, got 0x%08X\n", expected_sig, pkt->signature);
-      Serial.println("[OTA] Rejected unauthorized OTA attempt");
-      return;
-    }
-  }
-  
   Serial.println("[OTA] NOTIFY received");
   
   expected_firmware_size = pkt->payload.otaNotify.firmware_size;
@@ -382,12 +372,13 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   
   // Send PKT_OTA_READY immediately
   HueMixLinkPacket ready;
+  memset(&ready, 0, sizeof(HueMixLinkPacket));
   ready.type = PKT_OTA_READY;
   WiFi.macAddress(ready.sourceMAC);
   memcpy(ready.targetMAC, pkt->sourceMAC, 6);
   ready.payload.otaReady.firmware_size = expected_firmware_size;
   ready.payload.otaReady.battery_mv = 0; // Not battery powered
-  ready.signature = calculateHash((uint8_t*)&ready.payload, sizeof(Payload_OtaReady), HOME_ID);
+  ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
   
   // Send to first gateway
   if (gateways.count > 0) {
@@ -467,13 +458,14 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
 
 void sendOtaChunkAck(uint16_t last_chunk_index) {
   HueMixLinkPacket ack;
+  memset(&ack, 0, sizeof(HueMixLinkPacket));
   ack.type = PKT_OTA_CHUNK_ACK;
   WiFi.macAddress(ack.sourceMAC);
   memset(ack.targetMAC, 0, 6); // Server doesn't need target MAC
   ack.msgID = 0;
   
   ack.payload.otaChunkAck.last_chunk_index = last_chunk_index;
-  ack.signature = calculateHash((uint8_t*)&ack.payload.otaChunkAck, 2, HOME_ID);
+  ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
   
   // Send to first gateway
   if (gateways.count > 0) {
@@ -593,6 +585,7 @@ void handleOtaAbort(HueMixLinkPacket* pkt) {
 // --- SEND HELLO ---
 void sendHello() {
   HueMixLinkPacket pkt;
+  memset(&pkt, 0, sizeof(HueMixLinkPacket));
   pkt.type = PKT_HELLO;
   WiFi.macAddress(pkt.sourceMAC);
   
@@ -628,7 +621,7 @@ void sendHello() {
   pkt.payload.raw[9] = (uint8_t)(MODEL_ID & 0xFF);        // Low byte
   pkt.payload.raw[10] = (uint8_t)((MODEL_ID >> 8) & 0xFF); // High byte
   
-  pkt.signature = calculateHash(pkt.payload.raw, 11, HOME_ID);
+  pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
 
   #if defined(ESP32)
     esp_now_peer_info_t peerInfo = {};
@@ -703,6 +696,20 @@ void sendHello() {
 
 void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
   // 0. OTA HANDLING
+  // Security: Verify all OTA packets before processing
+  if (rx->type == PKT_OTA_NOTIFY || rx->type == PKT_OTA_CHUNK || 
+      rx->type == PKT_OTA_CHECKPOINT_REQ || rx->type == PKT_OTA_COMPLETE || 
+      rx->type == PKT_OTA_ABORT) {
+    if (HOME_ID != 0) {
+      uint32_t expected_sig = calculateHash(rx->payload.raw, 185, HOME_ID);
+      if (rx->signature != expected_sig) {
+        Serial.printf("[LIGHT] SECURITY: Invalid OTA signature. Expected 0x%08X, got 0x%08X\n", expected_sig, rx->signature);
+        Serial.println("[LIGHT] Rejected unauthorized OTA packet");
+        return;
+      }
+    }
+  }
+  
   if (rx->type == PKT_OTA_NOTIFY) {
     handleOtaNotify(rx);
     return;
@@ -723,7 +730,7 @@ void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
   // 1. PAIRING
   if (rx->type == PKT_PAIR_CONFIRM) {
     if (HOME_ID == 0) {
-      uint32_t sig = calculateHash((uint8_t*)&rx->payload, sizeof(Payload_Pairing), HOME_ID);
+      uint32_t sig = calculateHash(rx->payload.raw, 185, HOME_ID);
       if (rx->signature == sig) {
         HOME_ID = rx->payload.pair.newHomeID;
         prefs.putUInt("hid", HOME_ID);
@@ -740,7 +747,7 @@ void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
   else if (rx->type == PKT_GW_LIST_UPD) {
     // Security: Verify signature to ensure gateway list comes from trusted source with correct HOME_ID
     if (HOME_ID != 0) {
-      uint32_t expected_sig = calculateHash((uint8_t*)&rx->payload.gwList, sizeof(Payload_GatewayList), HOME_ID);
+      uint32_t expected_sig = calculateHash(rx->payload.raw, 185, HOME_ID);
       if (rx->signature != expected_sig) {
         Serial.printf("[LIGHT] SECURITY: Invalid signature on gateway list update. Expected 0x%08X, got 0x%08X\n", expected_sig, rx->signature);
         Serial.println("[LIGHT] Rejected unauthorized gateway list update");
@@ -804,7 +811,7 @@ void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
   // 2. LIGHT DATA
   else if (rx->type == PKT_LIGHT_RAW) {
     if (HOME_ID != 0) {
-      uint32_t sig = calculateHash((uint8_t*)&rx->payload, sizeof(Payload_Light), HOME_ID);
+      uint32_t sig = calculateHash(rx->payload.raw, 185, HOME_ID);
       
       if (rx->signature == sig) {
          uint8_t count = rx->payload.light.count;
@@ -840,7 +847,7 @@ void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
   // 3. SYSTEM RESET (Remote)
   else if (rx->type == PKT_SYS_CMD) {
     Serial.printf("[LIGHT] Received PKT_SYS_CMD from %02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    if (rx->signature == calculateHash((uint8_t*)&rx->payload, sizeof(Payload_SysCmd), HOME_ID)) {
+    if (rx->signature == calculateHash(rx->payload.raw, 185, HOME_ID)) {
         // Factory Reset
         if (rx->payload.sys.cmd == 0xFF) {
           // Selective reset: only clear pairing data
@@ -871,6 +878,7 @@ void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
          Serial.println("[LIGHT] Signature valid, sending response");
          // Send response back to the gateway that sent the ping
          HueMixLinkPacket pong;
+         memset(&pong, 0, sizeof(HueMixLinkPacket));
          pong.type = PKT_PING_DEVICE;
          WiFi.macAddress(pong.sourceMAC);
          memset(pong.payload.raw, 0, sizeof(pong.payload.raw));
@@ -909,7 +917,7 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
   #if defined(ESP8266)
     const uint8_t *mac = mac_addr;
   #else
-    const uint8_t *mac = info->src_addr;
+    uint8_t *mac = (uint8_t *)info->src_addr;
   #endif
 
 #ifdef ESP8266

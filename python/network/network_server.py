@@ -1894,6 +1894,8 @@ class NetworkServer:
             # Update state
             ota_manager.update_session_state(device_mac, OTAState.TRANSFERRING)
             
+            logger.info(f"📦 Reading firmware file for {device_mac}...")
+            
             # Read firmware file
             with open(session.firmware_path, 'rb') as f:
                 firmware_data = f.read()
@@ -1901,8 +1903,6 @@ class NetworkServer:
             # Calculate chunks
             total_chunks = (len(firmware_data) + OTA_CHUNK_DATA_SIZE - 1) // OTA_CHUNK_DATA_SIZE
             session.total_chunks = total_chunks
-            
-            logger.info(f"📦 Starting OTA transfer to {device_mac}: {len(firmware_data)} bytes in {total_chunks} chunks")
             
             # Lock to first successful gateway for entire transfer
             locked_gateway_ip = None
@@ -1925,13 +1925,12 @@ class NetworkServer:
                         break
             
             # Set chunk delay based on target type
-            # Radio node needs more delay due to UART passthrough buffering (460800 baud = ~46ms per 264-byte packet)
             if is_gateway and not is_radio_node:
-                chunk_delay = 0.008
+                chunk_delay = 0.008  # Net node direct
             else:
-                chunk_delay = 0.016
+                chunk_delay = 0.016  # Other devices via ESP-NOW
             
-            logger.info(f"📦 Starting OTA transfer to {device_mac}: {len(firmware_data)} bytes in {total_chunks} chunks (radio_node={is_radio_node}, delay={chunk_delay}s)")
+            logger.info(f"📦 Starting OTA transfer to {device_mac}: {len(firmware_data)} bytes in {total_chunks} chunks (is_gateway={is_gateway}, is_radio_node={is_radio_node}, delay={chunk_delay}s)")
             
             # Send chunks with checkpoint-based ACK
             chunk_idx = 0
@@ -2013,6 +2012,9 @@ class NetworkServer:
                 ack_received = False
                 
                 while checkpoint_retry < 5 and not ack_received:
+                    if session.state != OTAState.TRANSFERRING:
+                        logger.warning(f"OTA transfer aborted for {device_mac}")
+                        return
                     # Generate new message ID for checkpoint request
                     with self._delivery_lock:
                         checkpoint_msg_id = self._next_msg_id

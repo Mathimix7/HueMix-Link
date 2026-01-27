@@ -611,18 +611,7 @@ async function startUpdate(deviceMac, deviceType, firmwareType) {
     // Download firmware from GitHub first
     try {
         // Map firmware type to device type code for download endpoint
-        let deviceTypeCode;
-        if (firmwareType === 'gateway_net' || firmwareType === 'gateway_radio' || firmwareType === 'gateway') {
-            deviceTypeCode = 1;
-        } else if (firmwareType === 'button') {
-            deviceTypeCode = 2;
-        } else if (firmwareType === 'lightstrip') {
-            deviceTypeCode = 3;
-        } else if (firmwareType === 'remote') {
-            deviceTypeCode = 4;
-        }
-        
-        const downloadResponse = await fetch(`/api/ota/download/${deviceTypeCode}`, {
+        const downloadResponse = await fetch(`/api/ota/download`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

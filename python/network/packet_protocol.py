@@ -580,20 +580,11 @@ class PacketDecoder:
         # Signature invalid - log details for debugging
         src_mac_str = MACFormatter.to_string(src_mac_bytes)
         if src_mac_str != "00:00:00:00:00:00":
-            # Log first 20 bytes of payload for debugging
-            payload_preview = ' '.join(f'{b:02x}' for b in payload[:20])
             logger.warning(f"Invalid signature from {src_mac_str} - pkt_type={pkt_type:#x}, "
                          f"sig={signature:#010x}, paired_expected={sig_valid_paired:#010x}, "
-                         f"unpaired_expected={sig_valid_unpaired:#010x}, payload_start={payload_preview}")
+                         f"unpaired_expected={sig_valid_unpaired:#010x}")
         
-        return {
-                'type': pkt_type,
-                'source_mac': MACFormatter.to_string(src_mac_bytes),
-                'target_mac': MACFormatter.to_string(tgt_mac_bytes),
-                'msg_id': msg_id,
-                'payload': payload,  # Return original payload with RSSI intact
-                'is_paired': True
-            }
+        return None
     
     def parse_hello(self, payload: bytes) -> Optional[dict]:
         """Parse HELLO packet payload.

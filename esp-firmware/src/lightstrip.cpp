@@ -9,20 +9,31 @@
 #include <Ticker.h>
 
 // --- CONFIGURATION ---
-#define NUM_LEDS    35 // Max 60
+#define NUM_LEDS    60 // Max 60
 #define MAX_LEDS    60
 
-// --- SELECT YOUR STRIP TYPE HERE ---
-
-// Option 1: Standard RGB
-#define IS_RGBW  false
-#define COLOR_ORDER GRB
-#define LED_TYPE WS2812B
-
-// Option 2: RGBW Strip
-// #define IS_RGBW  true
-// #define LED_TYPE SK6812
-// #define COLOR_ORDER GRB 
+// --- MODEL ID ---
+// Each firmware variant has a unique model ID for identification
+// Model 1: ESP32, RGB, GRB, WS2812B
+// Model 2: ESP32, RGBW, GRB, SK6812
+// Model 3: ESP8266, RGB, GRB, WS2812B
+// Model 4: ESP8266, RGBW, GRB, SK6812
+#ifndef LIGHTSTRIP_MODEL
+  #error "LIGHTSTRIP_MODEL not defined"
+#endif
+  // Option 1: Standard RGB
+#if LIGHTSTRIP_MODEL == 1 || LIGHTSTRIP_MODEL == 3
+  #define IS_RGBW  false
+  #define COLOR_ORDER GRB
+  #define LED_TYPE WS2812B
+#elif LIGHTSTRIP_MODEL == 2 || LIGHTSTRIP_MODEL == 4
+  // Option 2: RGBW Strip
+  #define IS_RGBW  true
+  #define LED_TYPE SK6812
+  #define COLOR_ORDER GRB 
+#else
+  #error "Unknown LIGHTSTRIP_MODEL"
+#endif
 
 // --- PLATFORM SETUP ---
 #if defined(ESP8266)
@@ -43,26 +54,6 @@
   #define LED_PIN     16  
   #define PIN_RESET   27
   #define ONBOARD_LED 2
-#endif
-
-// --- MODEL ID ---
-// Each firmware variant has a unique model ID for identification
-// Model 1: ESP32, RGB, GRB, WS2812B
-// Model 2: ESP32, RGBW, GRB, SK6812
-// Model 3: ESP8266, RGB, GRB, WS2812B
-// Model 4: ESP8266, RGBW, GRB, SK6812
-#if defined(ESP8266)
-  #if IS_RGBW
-    #define MODEL_ID 4
-  #else
-    #define MODEL_ID 3
-  #endif
-#else
-  #if IS_RGBW
-    #define MODEL_ID 2
-  #else
-    #define MODEL_ID 1
-  #endif
 #endif
 
 // --- GLOBALS ---
@@ -618,8 +609,8 @@ void sendHello() {
   #endif
   
   // Model ID (2 bytes, little-endian): identifies exact firmware variant (LED type, color order, RGBW)
-  pkt.payload.raw[9] = (uint8_t)(MODEL_ID & 0xFF);        // Low byte
-  pkt.payload.raw[10] = (uint8_t)((MODEL_ID >> 8) & 0xFF); // High byte
+  pkt.payload.raw[9] = (uint8_t)(LIGHTSTRIP_MODEL & 0xFF);        // Low byte
+  pkt.payload.raw[10] = (uint8_t)((LIGHTSTRIP_MODEL >> 8) & 0xFF); // High byte
   
   pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
 
@@ -962,7 +953,7 @@ void setup() {
     Serial.printf("[CONFIG] Saved default LED count: %d\n", numLeds);
   }
   
-  Serial.printf("[CONFIG] LED Count: %d, Model ID: %d\n", numLeds, MODEL_ID);
+  Serial.printf("[CONFIG] LED Count: %d, Model ID: %d\n", numLeds, LIGHTSTRIP_MODEL);
   
   // Load pairing data
   HOME_ID = prefs.getUInt("hid", 0);

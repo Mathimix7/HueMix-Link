@@ -13,8 +13,10 @@ import json
 from werkzeug.utils import secure_filename
 from services.ota_manager import ota_manager
 from network.device_manager import device_manager
-from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE
+from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, GITHUB_OWNER, GITHUB_REPO
 from network.network_server import network_server
+from dotenv import load_dotenv
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +30,15 @@ os.makedirs(FIRMWARE_DIR, exist_ok=True)
 LOCAL_FIRMWARE_META = os.path.join(FIRMWARE_DIR, 'local_firmwares.json')
 
 # GitHub repository for firmware updates
-GITHUB_REPO = "HueMix-Link-V3"  # Update with actual repo
-GITHUB_OWNER = "mathimix7"  # Update with actual username
+token = os.getenv("GITHUB_TOKEN", "").strip()
 HEADERS = {
     "Accept": "application/vnd.github+json",
-    "Authorization": f"Bearer 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",
+    "Authorization": f"Bearer {token}",
+    "X-GitHub-Api-Version": "2022-11-28"
+}
+HEADERS_ASSET = {
+    "Accept": "application/octet-stream",
+    "Authorization": f"Bearer {token}",
     "X-GitHub-Api-Version": "2022-11-28"
 }
 
@@ -168,11 +174,10 @@ def check_updates():
             if response.status_code == 200:
                 release_data = response.json()
                 tag_name = release_data.get('tag_name', 'v0.0.0')
-                version = tag_name.lstrip('v')
                 
                 release_info = {
                     'tag': tag_name,
-                    'version': version,
+                    'version': "github",
                     'name': release_data.get('name', ''),
                     'published_at': release_data.get('published_at', ''),
                     'html_url': release_data.get('html_url', '')
@@ -183,17 +188,23 @@ def check_updates():
                 
                 for asset in assets:
                     name = asset.get('name', '')
-                    download_url = asset.get('browser_download_url', '')
+                    download_url = asset.get('url', '')
                     
                     # Match firmware files
-                    match = re.match(r'huemixlink-(gateway|button|lightstrip|remote)-v([\d\.]+)\.bin', name)
+                    match = re.match(r'huemixlink-(esp32|esp8266)-(net|radio|button|lightstrip|remote)(?:-([0-9]+))?-v([\d\.]+)\.bin', name)
                     if match:
-                        device_type_name = match.group(1)
-                        firmware_version = match.group(2)
+                        platform, fw_type, model, version = match.groups()
+                        if fw_type == "lightstrip":
+                            firmware_type = f"{fw_type}_model{model}"
+                        elif fw_type in ["radio", "net"]:
+                            firmware_type = f"gateway_{fw_type}"
+                        else:
+                            firmware_type = f"{fw_type}_{platform}"
                         
                         # Use device_type_name as key (gateway, lightstrip, button, remote)
-                        available_firmwares[device_type_name] = {
-                            'version': firmware_version,
+                        available_firmwares[firmware_type] = {
+                            'version': version,
+                            'firmware_type': firmware_type,
                             'download_url': download_url,
                             'filename': name,
                             'source': 'github'
@@ -318,8 +329,8 @@ def upload_firmware():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@ota_bp.route('/api/ota/download/<int:device_type>', methods=['POST'])
-def download_firmware(device_type):
+@ota_bp.route('/api/ota/download', methods=['POST'])
+def download_firmware():
     """Download firmware from GitHub for specific device type.
     
     Args:
@@ -344,7 +355,7 @@ def download_firmware(device_type):
         
         # Download firmware
         logger.info(f"Downloading firmware from {download_url}...")
-        response = requests.get(download_url, timeout=60, stream=True, headers=HEADERS)
+        response = requests.get(download_url, timeout=60, stream=True, headers=HEADERS_ASSET)
         
         if response.status_code != 200:
             return jsonify({

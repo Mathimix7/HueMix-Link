@@ -150,7 +150,14 @@ void applyBreathingLed() {
     } else {
       ledcWrite(PIN_LED, 255 - breathingBrightness);
     }
+  #else
+    if (LED_ACTIVE_HIGH) {
+      analogWrite(PIN_LED, breathingBrightness);
+    } else {
+      analogWrite(PIN_LED, 255 - breathingBrightness);
+    }
   #endif
+
 }
 
 void startLedBreathing() {
@@ -626,6 +633,13 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
   #endif
 
 #ifdef ESP8266
+  // Exception: PKT_ACK_TO_BTN is processed immediately in interrupt for fast response
+  HueMixLinkPacket *rx = (HueMixLinkPacket*)data;
+  if (rx->type == PKT_ACK_TO_BTN) {
+    processReceivedPacket(rx, mac);
+    return;
+  }
+
   // ESP8266: Queue packet for processing in main loop (interrupt-safe)
   uint8_t nextHead = (packetQueueHead + 1) % PACKET_QUEUE_SIZE;
   if (nextHead != packetQueueTail) {  // Queue not full

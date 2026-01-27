@@ -110,3 +110,7 @@ FILE_OTA_SESSIONS = 'ota_sessions.json'
 
 # ===== Logging =====
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+#==== GitHub Repository Info =====
+GITHUB_REPO = "HueMix-Link-V3"
+GITHUB_OWNER = "mathimix7"

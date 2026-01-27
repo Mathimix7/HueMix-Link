@@ -12,6 +12,7 @@ import hashlib
 from typing import Optional, Dict, Tuple
 from datetime import datetime
 from enum import Enum
+import re
 from services.data_manager import data_manager
 from constants import (
     FILE_OTA_SESSIONS, OTA_READY_TIMEOUT,
@@ -215,6 +216,15 @@ class OTAManager:
                                     break
             except Exception as e:
                 logger.warning(f"Could not read firmware metadata: {e}")
+            
+            if version == (0, 0, 0, 0):
+                version_match = re.search(r'-v(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?\.bin$', os.path.basename(firmware_path))
+                if version_match:
+                    major = int(version_match.group(1))
+                    minor = int(version_match.group(2))
+                    patch = int(version_match.group(3))
+                    build = int(version_match.group(4)) if version_match.group(4) else 0
+                    version = (major, minor, patch, build)
             
             # Create session
             session = OTASession(

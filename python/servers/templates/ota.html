@@ -45,6 +45,9 @@
                 <button id="uploadBtn" class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors inline-flex items-center">
                     <i class="fas fa-upload mr-2"></i>Upload Firmware
                 </button>
+                <button id="serialFlashBtn" class="px-4 py-2 bg-zinc-800 text-white rounded-lg hover:bg-zinc-900 transition-colors inline-flex items-center">
+                    <i class="fab fa-usb mr-2"></i>Serial Flash
+                </button>
                 <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
                     <i class="fas fa-arrow-left mr-2"></i>Back to Home
                 </a>
@@ -162,18 +165,24 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Device Type</label>
                     <select id="uploadDeviceType" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        <option value="gateway_net">Gateway Net Node (WiFi)</option>
-                        <option value="gateway_radio">Gateway Radio Node (ESP-NOW)</option>
+                        <optgroup label="Gateways">
+                            <option value="gateway_net">Gateway Net Node (WiFi)</option>
+                            <option value="gateway_radio">Gateway Radio Node (ESP-NOW)</option>
+                        </optgroup>
                         <optgroup label="Lightstrips">
                             <option value="lightstrip_model1">Lightstrip Model 1 (ESP32, RGB, WS2812B)</option>
                             <option value="lightstrip_model2">Lightstrip Model 2 (ESP32, RGBW, SK6812)</option>
                             <option value="lightstrip_model3">Lightstrip Model 3 (ESP8266, RGB, WS2812B)</option>
                             <option value="lightstrip_model4">Lightstrip Model 4 (ESP8266, RGBW, SK6812)</option>
                         </optgroup>
-                        <option value="button_esp32">Button ESP32</option>
-                        <option value="button_esp8266">Button ESP8266</option>
-                        <option value="remote_esp32">Remote ESP32</option>
-                        <!-- <option value="remote_esp8266">Remote ESP8266</option> -->
+                        <optgroup label="Buttons">
+                            <option value="button_esp32">Button ESP32</option>
+                            <option value="button_esp8266">Button ESP8266</option>
+                        </optgroup>
+                        <optgroup label="Remotes">
+                            <option value="remote_esp32">Remote ESP32</option>
+                            <!-- <option value="remote_esp8266">Remote ESP8266</option> -->
+                        </optgroup>
                     </select>
                 </div>
                 
@@ -197,6 +206,67 @@
                     Upload
                 </button>
             </form>
+        </div>
+    </div>
+</div>
+
+<!-- Serial Flash Modal -->
+<div id="serialModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4">
+        <div class="p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold text-gray-800">Serial Flash Tool</h3>
+                <button id="closeSerialModal" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Select Firmware</label>
+                    <select id="serialFirmwareSelect" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                        <optgroup label="Gateways">
+                            <option value="gateway_net" disabled>Gateway Net Node (WiFi)</option>
+                            <option value="gateway_radio" disabled>Gateway Radio Node (ESP-NOW)</option>
+                        </optgroup>
+                        <optgroup label="Lightstrips">
+                            <option value="lightstrip_model1" disabled>Lightstrip Model 1 (ESP32, RGB, WS2812B)</option>
+                            <option value="lightstrip_model2" disabled>Lightstrip Model 2 (ESP32, RGBW, SK6812)</option>
+                            <option value="lightstrip_model3" disabled>Lightstrip Model 3 (ESP8266, RGB, WS2812B)</option>
+                            <option value="lightstrip_model4" disabled>Lightstrip Model 4 (ESP8266, RGBW, SK6812)</option>
+                        </optgroup>
+                        <optgroup label="Buttons">
+                            <option value="button_esp32" disabled>Button ESP32</option>
+                            <option value="button_esp8266" disabled>Button ESP8266</option>
+                        </optgroup>
+                        <optgroup label="Remotes">
+                            <option value="remote_esp32" disabled>Remote ESP32</option>
+                            <!-- <option value="remote_esp8266" disabled>Remote ESP8266</option> -->
+                        </optgroup>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Baud Rate</label>
+                    <select id="serialBaudRate" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                        <option value="460800">460800 (Stable)</option>
+                        <option value="921600" selected>921600 (Fast)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Terminal Output -->
+            <div id="serialTerminal" class="bg-black text-green-400 p-4 rounded-lg h-64 overflow-y-auto font-mono text-xs mb-4">
+                <p>> Ready to connect...</p>
+            </div>
+
+            <div class="flex gap-3">
+                <button id="connectSerialBtn" class="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+                    Connect & Flash
+                </button>
+                <button id="stopSerialBtn" class="hidden flex-1 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700">
+                    Stop
+                </button>
+            </div>
         </div>
     </div>
 </div>
@@ -935,5 +1005,144 @@ function showSuccess(message) {
 function showInfo(message) {
     showToast('Info', message, 'info');
 }
+</script>
+
+<script type="module">
+import { Transport, ESPLoader } from "https://unpkg.com/esptool-js@0.5.6/bundle.js";
+// Add these to your global variables
+let espLoader;
+let transport;
+const terminal = document.getElementById('serialTerminal');
+
+// Log helper for the terminal UI
+function logToTerminal(message) {
+    const p = document.createElement('p');
+    p.textContent = `> ${message}`;
+    terminal.appendChild(p);
+    terminal.scrollTop = terminal.scrollHeight;
+}
+
+const loaderTerminal = {
+    clean: () => { terminal.innerHTML = ''; },
+    writeLine: (data) => { logToTerminal(data); },
+    write: (data) => { logToTerminal(data); },
+    setup: () => {}
+};
+
+// Event Listeners
+document.getElementById('serialFlashBtn').addEventListener('click', openSerialModal);
+document.getElementById('closeSerialModal').addEventListener('click', () => {
+    document.getElementById('serialModal').classList.add('hidden');
+});
+document.getElementById('connectSerialBtn').addEventListener('click', handleSerialFlash);
+
+function openSerialModal() {
+    const select = document.getElementById('serialFirmwareSelect');
+    
+    // Enable/disable options based on available firmwares
+    Array.from(select.options).forEach(opt => {
+        if (availableFirmwares[opt.value]) {
+            opt.disabled = false;
+            const fw = availableFirmwares[opt.value];
+            opt.textContent = `${opt.textContent} (v${fw.version})`;
+        } else {
+            opt.disabled = true;
+        }
+    });
+
+    // Select first available firmware by default
+    const firstAvailable = Array.from(select.options).find(opt => !opt.disabled);
+    if (firstAvailable) {
+        select.value = firstAvailable.value;
+    }
+
+    document.getElementById('serialModal').classList.remove('hidden');
+}
+
+async function handleSerialFlash() {
+    const firmwareKey = document.getElementById('serialFirmwareSelect').value;
+    const fwInfo = availableFirmwares[firmwareKey];
+    const baudRate = parseInt(document.getElementById('serialBaudRate').value);
+
+    if (!fwInfo) return showError("Select a firmware first");
+
+    try {
+        // 1. Request Browser Serial Port
+        const device = await navigator.serial.requestPort();
+        logToTerminal("Connecting to device...");
+
+        // 2. Initialize esptool-js transport
+        transport = new Transport(device);
+        // await transport.connect(); 
+
+        espLoader = new ESPLoader({
+            transport: transport,
+            baudrate: baudRate,
+            terminal: loaderTerminal
+        });
+
+        // // Connect/Sync
+        const chip = await espLoader.main();
+        logToTerminal(`Connected to ${chip}`);
+
+        // 3. Fetch the binary from the server endpoint
+        logToTerminal("Fetching firmware binary...");
+        
+        const binaryResponse = await fetch('/api/ota/binary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source: fwInfo.source,
+                download_url: fwInfo.download_url,
+                filename: fwInfo.filename,
+                filepath: fwInfo.filepath
+            })
+        });
+        
+        if (!binaryResponse.ok) {
+            const errorData = await binaryResponse.json();
+            throw new Error(errorData.error || `HTTP ${binaryResponse.status}: Failed to fetch firmware`);
+        }
+        
+        const firmwareBuffer = await binaryResponse.arrayBuffer();
+        if (!firmwareBuffer || firmwareBuffer.byteLength === 0) {
+            throw new Error('Firmware file is empty');
+        }
+        const firmwareArray = new Uint8Array(firmwareBuffer);
+        let binaryString = "";
+        const chunkSize = 1024 * 8; // Process in 8KB chunks for speed/memory
+        for (let i = 0; i < firmwareArray.length; i += chunkSize) {
+            binaryString += String.fromCharCode.apply(null, firmwareArray.subarray(i, i + chunkSize));
+        }
+        
+        logToTerminal(`Firmware loaded: ${(firmwareBuffer.byteLength / 1024).toFixed(1)} KB`);
+
+        // 4. Flash
+        logToTerminal("Starting flash...");
+        
+        await espLoader.writeFlash({
+            fileArray: [{ data: binaryString, address: 0x10000 }],
+            flashSize: 'keep',
+            flashMode: 'dio', 
+            flashFreq: '40m',
+            eraseAll: false,
+            compress: true,
+            reportProgress: (idx, written, total) => {
+                console.log(`Progress: ${Math.round(written/total*100)}%`);
+            }
+        });
+
+        logToTerminal("FLASH COMPLETE!");
+        showSuccess("Device flashed successfully via Serial");
+
+    } catch (err) {
+        console.error(err);
+        logToTerminal(`Error: ${err.message}`);
+        showError("Serial Flash Failed");
+    } finally {
+        if (transport) await transport.disconnect();
+    }
+}
+
 </script>
 {% endblock %}

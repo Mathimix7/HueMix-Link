@@ -4,7 +4,7 @@ OTA (Over-The-Air) firmware update API endpoints.
 Provides REST API for checking firmware updates, uploading binaries,
 initiating updates, and monitoring progress.
 """
-from flask import Blueprint, request, jsonify, render_template
+from flask import Blueprint, request, jsonify, render_template, send_file
 import os
 import logging
 import requests
@@ -380,6 +380,80 @@ def download_firmware():
         
     except Exception as e:
         logger.error(f"Failed to download firmware: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@ota_bp.route('/api/ota/binary', methods=['POST'])
+def get_firmware_binary():
+    """Get firmware binary for esptool-js serial flashing.
+    
+    Handles both local and GitHub firmware sources, downloading if necessary.
+    
+    Args:
+        firmware_key: Firmware identifier (e.g., 'gateway_net', 'lightstrip_model1')
+        
+    Request JSON:
+        {
+            "source": "local" | "github",
+            "download_url": "https://..." (required for github source),
+            "filename": "firmware.bin" (required for github source),
+            "filepath": "/path/to/file.bin" (required for local source)
+        }
+        
+    Returns:
+        Binary file data or JSON error
+    """
+    try:
+        data = request.get_json()
+        source = data.get('source')
+        
+        if source == 'local':
+            filepath = data.get('filepath')
+            if not filepath:
+                return jsonify({'success': False, 'error': 'Missing filepath for local firmware'}), 400
+            
+            if not os.path.exists(filepath):
+                return jsonify({'success': False, 'error': f'Firmware file not found: {filepath}'}), 404
+            
+            logger.info(f"Serving local firmware: {filepath}")
+            return send_file(filepath, mimetype='application/octet-stream', as_attachment=False)
+        
+        elif source == 'github':
+            download_url = data.get('download_url')
+            filename = data.get('filename')
+            
+            if not download_url or not filename:
+                return jsonify({'success': False, 'error': 'Missing download_url or filename for github source'}), 400
+            
+            # Check if already downloaded
+            filepath = os.path.join(FIRMWARE_DIR, secure_filename(filename))
+            
+            if not os.path.exists(filepath):
+                logger.info(f"Downloading firmware from GitHub: {download_url}...")
+                response = requests.get(download_url, timeout=60, stream=True, headers=HEADERS_ASSET)
+                
+                if response.status_code != 200:
+                    return jsonify({
+                        'success': False,
+                        'error': f"GitHub download failed: {response.status_code}"
+                    }), 500
+                
+                # Save to firmware directory
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                logger.info(f"Downloaded firmware: {filename} ({os.path.getsize(filepath)} bytes)")
+            else:
+                logger.info(f"Using cached firmware: {filepath}")
+            
+            return send_file(filepath, mimetype='application/octet-stream', as_attachment=False)
+        
+        else:
+            return jsonify({'success': False, 'error': 'Invalid source. Must be "local" or "github"'}), 400
+        
+    except Exception as e:
+        logger.error(f"Failed to get firmware binary: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

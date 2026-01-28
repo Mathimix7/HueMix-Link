@@ -112,6 +112,16 @@ def get_devices_route():
     return jsonify({"success": True, "devices": buttons})
 
 
+@buttons_bp.route('/api/devices/<device_id>', methods=['GET'])
+def get_device_route(device_id):
+    """Get a single device by id."""
+    buttons = get_buttons()
+    for button in buttons:
+        if button['id'] == device_id:
+            return jsonify({"success": True, "device": button})
+    return jsonify({"success": False, "error": "Device not found"}), 404
+
+
 @buttons_bp.route('/api/devices/<device_id>/rename', methods=['POST'])
 def rename_device(device_id):
     """Rename a device."""

@@ -332,16 +332,43 @@ class DeviceManager:
         Returns:
             Battery percentage (0-100)
         """
-        if voltage_mv == 3300: # TODO: HARDCODED VALUE OF BUTTONS WITH NO ADC, NEEDS FIXING
+        if voltage_mv == 0:
             return None
-        
-        if voltage_mv >= 4200:
-            return 100
-        elif voltage_mv <= 3300:
+
+        curve = [
+            (3000, 0),
+            (3300, 5),
+            (3400, 10),
+            (3500, 20),
+            (3600, 35),
+            (3700, 50),
+            (3800, 70),
+            (3900, 80),
+            (4000, 90),
+            (4100, 95),
+            (4200, 100),
+        ]
+
+        # Clamp extremes
+        if voltage_mv <= curve[0][0]:
             return 0
-        else:
-            # Linear approximation between 3.3V and 4.2V
-            return int((voltage_mv - 3300) / 9)  # (4200 - 3300) / 100 = 9
+        if voltage_mv >= curve[-1][0]:
+            return 100
+
+        # Find nearest points and linearly interpolate between them
+        lower_v, lower_p = curve[0]
+        for upper_v, upper_p in curve[1:]:
+            if voltage_mv <= upper_v:
+                # voltage is between lower_v and upper_v
+                if upper_v == lower_v:
+                    return int(upper_p)
+                frac = (voltage_mv - lower_v) / (upper_v - lower_v)
+                percent = lower_p + frac * (upper_p - lower_p)
+                return max(0, min(100, int(round(percent))))
+            lower_v, lower_p = upper_v, upper_p
+
+        # Fallback
+        return 0
     
     def add_button(self, mac_address: str, name: str, device_type: int = DEV_BUTTON) -> Dict:
         """Add new button/remote to registry.

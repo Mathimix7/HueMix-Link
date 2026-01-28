@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from typing import Dict, List, Tuple, Optional
-from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN
+from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN, REMOTE_ACTION_SCENE_CYCLE
 from controllers.hue_controller import Hue
 from controllers.color_controller import color_controller
 from services.hue_state_manager import hue_state_manager
@@ -167,6 +167,16 @@ class AutomationEngine:
                 self._handle_remote_normal_action_holding(remote_mac, button_config, room_id)
             elif action == ACT_RELEASE:
                 self._handle_remote_normal_action_release(remote_mac, button_config)
+
+        elif action_type == REMOTE_ACTION_SCENE_CYCLE:
+            # Click cycles scenes but never turns the room off on timeout
+            if action == ACT_CLICK:
+                self._handle_remote_scene_cycle_click(remote_mac, button_config, room_id)
+            elif action == ACT_HOLDING:
+                # Preserve brightness hold behavior
+                self._handle_remote_normal_action_holding(remote_mac, button_config, room_id)
+            elif action == ACT_RELEASE:
+                self._handle_remote_normal_action_release(remote_mac, button_config)
         
         elif action_type == REMOTE_ACTION_TOGGLE:
             # Only respond to CLICK, ignore HOLDING
@@ -247,6 +257,54 @@ class AutomationEngine:
             logger.info(f"Remote {remote_mac} button {button_index}: Activating scene {scene_id}")
         
         # Activate scene
+        try:
+            self._activate_scene(room_id, scene_id)
+        except Exception as e:
+            logger.error(f"Failed to activate scene {scene_id}: {e}")
+
+    def _handle_remote_scene_cycle_click(self, remote_mac: str, button_config: Dict, room_id: str):
+        """Handle scene-cycle-only remote CLICK action (cycle scenes but never turn off).
+
+        Args:
+            remote_mac: Remote MAC address
+            button_config: Button configuration
+            room_id: Room ID to control
+        """
+        scenes = button_config.get('scenes', [])
+
+        if not scenes:
+            logger.warning(f"Remote {remote_mac} button has no scenes configured")
+            return
+
+        button_index = button_config.get('index', 0)
+        state_key = f"{remote_mac}_{button_index}"
+
+        now = time.time()
+
+        with self._button_lock:
+            if state_key not in self._button_states:
+                self._button_states[state_key] = {
+                    'scene_index': 0,
+                    'last_press': 0,
+                    'brightness_direction': -1
+                }
+
+            state = self._button_states[state_key]
+
+            # If timeout expired, simply reset to first scene (do NOT turn off room)
+            time_since_last = now - state['last_press']
+            if time_since_last > self.scene_timeout:
+                logger.debug(f"Remote {remote_mac}: Timeout expired, reset to scene 0 (no off)")
+                state['scene_index'] = 0
+
+            # Get current scene
+            scene_id = scenes[state['scene_index']]
+
+            # Advance to next scene
+            state['scene_index'] = (state['scene_index'] + 1) % len(scenes)
+            state['last_press'] = now
+            logger.info(f"Remote {remote_mac} button {button_index}: Activating scene {scene_id} (scene-cycle only)")
+
         try:
             self._activate_scene(room_id, scene_id)
         except Exception as e:

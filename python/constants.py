@@ -46,6 +46,7 @@ REMOTE_ACTION_NORMAL = 'normal'                    # Hold = brightness, Click = 
 REMOTE_ACTION_TOGGLE = 'toggle'                    # Hold = None, Click = toggle on/off
 REMOTE_ACTION_BRIGHTNESS_UP = 'brightness_up'      # Hold = Increase brightness, Click = Increase brightness
 REMOTE_ACTION_BRIGHTNESS_DOWN = 'brightness_down'  # Hold = Decrease brightness, Click = Decrease brightness
+REMOTE_ACTION_SCENE_CYCLE = 'scene_cycle'          # Click = cycle scenes only (never turn off)
 
 # ===== System Commands =====
 CMD_NIGHT_MODE_ON = 1   # LED OFF

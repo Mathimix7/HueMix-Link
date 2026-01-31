@@ -288,7 +288,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Event listeners
     document.getElementById('checkUpdatesBtn').addEventListener('click', checkForUpdates);
-    document.getElementById('uploadBtn').addEventListener('click', () => {
+    document.getElementById('uploadBtn')?.addEventListener('click', () => {
         document.getElementById('uploadModal').classList.remove('hidden');
     });
     document.getElementById('closeUploadModal').addEventListener('click', () => {
@@ -816,6 +816,7 @@ function stopProgressPolling() {
 }
 
 async function closeProgressModal() {
+    console.log("asd")
     stopProgressPolling();
     document.getElementById('progressModal').classList.add('hidden');
     document.getElementById('progressInstructions').classList.add('hidden');

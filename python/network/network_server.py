@@ -345,6 +345,9 @@ class NetworkServer:
         logger.info("Receive loop started")
         
         while self.running:
+            if not self.sock:
+                time.sleep(0.1)
+                continue
             try:
                 data, addr = self.sock.recvfrom(1024)
                 
@@ -861,8 +864,9 @@ class NetworkServer:
                     all_gateway_macs = list(self._gateway_table.keys())
                     if all_gateway_macs:
                         light_packet = self.encoder.encode_gateway_list_for_device(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
-                        self.sock.sendto(light_packet, (sender_ip, self.gateway_port))
-                        logger.debug(f"Sent initial gateway list to {light_mac}")
+                        if self.sock:
+                            self.sock.sendto(light_packet, (sender_ip, self.gateway_port))
+                            logger.debug(f"Sent initial gateway list to {light_mac}")
                 
                 if pairing_mode_active:
                     logger.info(f"💡 Paired light via pairing mode: {light_mac}")
@@ -903,8 +907,9 @@ class NetworkServer:
                     all_gateway_macs = list(self._gateway_table.keys())
                     if all_gateway_macs:
                         light_packet = self.encoder.encode_gateway_list_for_device(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
-                        self.sock.sendto(light_packet, (sender_ip, self.gateway_port))
-                        logger.debug(f"Sent initial gateway list to {light_mac}")
+                        if self.sock:
+                            self.sock.sendto(light_packet, (sender_ip, self.gateway_port))
+                            logger.debug(f"Sent initial gateway list to {light_mac}")
             
             # Update gateway that successfully received HELLO
             if gateway_radio_mac:
@@ -919,8 +924,9 @@ class NetworkServer:
                 logger.debug(f"Light {light_mac} online via {gateway_radio_mac} / {sender_ip} (RSSI: {rssi} dBm)")
             else:
                 logger.warning(f"Light {light_mac} HELLO from unknown gateway {sender_ip}")
-    
-            self.automation_engine.send_current_colors_to_light(light_mac)
+            
+            if self.automation_engine:
+                self.automation_engine.send_current_colors_to_light(light_mac)
     
     def _handle_remote_hello(self, remote_mac: str, hello_data: Dict, sender_ip: str, is_paired: bool):
         """Handle HELLO from remote control device.
@@ -1112,8 +1118,9 @@ class NetworkServer:
             gateway_ip: Gateway IP to route through
         """
         packet = self.encoder.encode_pair_confirm(target_mac, self.home_id)
-        self.sock.sendto(packet, (gateway_ip, self.gateway_port))
-        logger.debug(f"Sent PAIR_CONFIRM to {target_mac} via {gateway_ip}")
+        if self.sock:
+            self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+            logger.debug(f"Sent PAIR_CONFIRM to {target_mac} via {gateway_ip}")
     
     def _send_with_fallback(self, target_mac: str, packet: bytes, wait_for_delivery: bool = True, msg_id: Optional[int] = None) -> bool:
         """Send packet to device with automatic gateway failover.
@@ -1145,8 +1152,9 @@ class NetworkServer:
         # If target is a gateway, send directly
         if is_gateway:
             try:
-                self.sock.sendto(packet, (gateway_ip, self.gateway_port))
-                logger.debug(f"Sent packet to gateway {target_mac} at {gateway_ip}")
+                if self.sock:
+                    self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                    logger.debug(f"Sent packet to gateway {target_mac} at {gateway_ip}")
                 return True
             except Exception as e:
                 logger.error(f"Failed to send to gateway {target_mac}: {e}")
@@ -1200,8 +1208,9 @@ class NetworkServer:
                         }
                     
                     # Send packet
-                    self.sock.sendto(packet, (gw_ip, self.gateway_port))
-                    logger.info(f"Sent to {target_mac} via {gw_ip} (gateway: {gw_radio_mac}, msgID: {msg_id}, attempt: {attempt+1})")
+                    if self.sock:
+                        self.sock.sendto(packet, (gw_ip, self.gateway_port))
+                        logger.info(f"Sent to {target_mac} via {gw_ip} (gateway: {gw_radio_mac}, msgID: {msg_id}, attempt: {attempt+1})")
                     
                     # Wait for delivery report with timeout
                     if event.wait(timeout=GATEWAY_DELIVERY_TIMEOUT_SECONDS):
@@ -1231,8 +1240,9 @@ class NetworkServer:
                             del self._pending_deliveries[msg_id]
                 else:
                     # No delivery tracking - just send and return on first success
-                    self.sock.sendto(packet, (gw_ip, self.gateway_port))
-                    logger.debug(f"Sent to {target_mac} via {gw_ip} (gateway: {gw_radio_mac}, no delivery tracking)")
+                    if self.sock:
+                        self.sock.sendto(packet, (gw_ip, self.gateway_port))
+                        logger.debug(f"Sent to {target_mac} via {gw_ip} (gateway: {gw_radio_mac}, no delivery tracking)")
                     return True
                     
             except Exception as e:
@@ -1262,7 +1272,8 @@ class NetworkServer:
             # Send to all gateways
             for radio_mac, info in self._gateway_table.items():
                 gateway_ip = info['ip_address']
-                self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                if self.sock:
+                    self.sock.sendto(packet, (gateway_ip, self.gateway_port))
             
             logger.info(f"Broadcasted gateway list to gateways: {len(all_gateway_macs)} gateways")
             
@@ -1366,8 +1377,9 @@ class NetworkServer:
         try:
             # Encode and send ping packet
             packet = self.encoder.encode_ping(gateway_mac)
-            self.sock.sendto(packet, (gateway_ip, self.gateway_port))
-            logger.info(f"📡 Ping sent to gateway {gateway_mac} ({gateway_ip})")
+            if self.sock:
+                self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                logger.info(f"📡 Ping sent to gateway {gateway_mac} ({gateway_ip})")
             
             # Wait for response
             if event.wait(timeout):
@@ -1530,8 +1542,9 @@ class NetworkServer:
             packet = self.encoder.encode_ping_device(device_mac)
             
             try:
-                self.sock.sendto(packet, (gateway_ip, self.gateway_port))
-                logger.debug(f"  → Sent ping to {device_mac} via {gateway_ip} (radio: {radio_mac})")
+                if self.sock:
+                    self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                    logger.debug(f"  → Sent ping to {device_mac} via {gateway_ip} (radio: {radio_mac})")
                 sent_count += 1
             except Exception as e:
                 logger.error(f"Failed to send ping via {gateway_ip}: {e}")
@@ -1608,7 +1621,8 @@ class NetworkServer:
         packet = self.encoder.encode_ping_device(device_mac)
         
         try:
-            self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+            if self.sock:
+                self.sock.sendto(packet, (gateway_ip, self.gateway_port))
             logger.debug(f"  → Sent ping to {device_mac} via {gateway_ip}")
         except Exception as e:
             logger.error(f"Failed to send ping via {gateway_ip}: {e}")
@@ -1730,8 +1744,9 @@ class NetworkServer:
             # Send packet
             if is_gateway:
                 # Direct send to gateway
-                self.sock.sendto(packet, (gateway_ip, self.gateway_port))
-                logger.info(f"📡 OTA_NOTIFY sent to gateway {device_mac} at {gateway_ip}")
+                if self.sock:
+                    self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                    logger.info(f"📡 OTA_NOTIFY sent to gateway {device_mac} at {gateway_ip}")
             else:
                 # Send via gateway mesh (no delivery tracking - device responds with PKT_OTA_READY instead)
                 success = self._send_with_fallback(device_mac, packet, wait_for_delivery=False)
@@ -1970,8 +1985,9 @@ class NetworkServer:
                     success = False
                     if is_gateway:
                         try:
-                            self.sock.sendto(packet, (locked_gateway_ip, self.gateway_port))
-                            success = True
+                            if self.sock:
+                                self.sock.sendto(packet, (locked_gateway_ip, self.gateway_port))
+                                success = True
                         except Exception as e:
                             logger.error(f"Failed to send chunk {i}: {e}")
                     else:
@@ -1991,8 +2007,9 @@ class NetworkServer:
                         
                         if locked_gateway_ip:
                             try:
-                                self.sock.sendto(packet, (locked_gateway_ip, self.gateway_port))
-                                success = True
+                                if self.sock:
+                                    self.sock.sendto(packet, (locked_gateway_ip, self.gateway_port))
+                                    success = True
                             except Exception as e:
                                 logger.error(f"Failed to send chunk {i}: {e}")
                     
@@ -2028,10 +2045,12 @@ class NetworkServer:
                     # Send checkpoint request to device
                     checkpoint_packet = self.encoder.encode_ota_checkpoint_req(device_mac, checkpoint_msg_id)
                     if is_gateway:
-                        self.sock.sendto(checkpoint_packet, (locked_gateway_ip, self.gateway_port))
+                        if self.sock:
+                            self.sock.sendto(checkpoint_packet, (locked_gateway_ip, self.gateway_port))
                     else:
                         if locked_gateway_ip:
-                            self.sock.sendto(checkpoint_packet, (locked_gateway_ip, self.gateway_port))
+                            if self.sock:
+                                self.sock.sendto(checkpoint_packet, (locked_gateway_ip, self.gateway_port))
                     
                     if checkpoint_retry == 0:
                         logger.debug(f"📍 Sent checkpoint request after chunk {batch_end - 1}, waiting for ACK...")
@@ -2085,9 +2104,11 @@ class NetworkServer:
             complete_packet = self.encoder.encode_ota_complete(device_mac, session.sha256_hash, msg_id)
             
             if is_gateway:
-                self.sock.sendto(complete_packet, (locked_gateway_ip, self.gateway_port))
+                if self.sock:
+                    self.sock.sendto(complete_packet, (locked_gateway_ip, self.gateway_port))
             else:
-                self.sock.sendto(complete_packet, (locked_gateway_ip, self.gateway_port))
+                if self.sock:
+                    self.sock.sendto(complete_packet, (locked_gateway_ip, self.gateway_port))
             
             # Update state
             ota_manager.update_session_state(device_mac, OTAState.VALIDATING)

@@ -205,11 +205,8 @@ class PacketEncoder:
         # Pad to 185 bytes
         payload += b'\x00' * (185 - len(payload))
         
-        # Build packet without signature
-        packet_no_sig = struct.pack("<B", pkt_type) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
-        
         # Calculate signature
-        signature = self._calculate_hash(packet_no_sig)
+        signature = self._calculate_hash(payload)
         
         # Build final packet
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload

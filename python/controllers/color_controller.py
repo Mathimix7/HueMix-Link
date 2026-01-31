@@ -46,7 +46,7 @@ class ColorController:
         return {'r': r, 'g': g, 'b': b}
     
     @staticmethod
-    def ct_to_rgb(ct: int) -> Tuple[float, float]:
+    def ct_to_rgb(ct: int) -> Tuple[int, int, int]:
         """
         Convert color temperature (Kelvin/Mired) to RGB.
         
@@ -209,7 +209,10 @@ class ColorController:
     
     @staticmethod
     def lerp_color(c1: Tuple[int, int, int], c2: Tuple[int, int, int], fraction: float) -> Tuple[int, int, int]:
-        return tuple(int(c1[i] + (c2[i] - c1[i]) * fraction) for i in range(3))
+        r = int(c1[0] + (c2[0] - c1[0]) * fraction)
+        g = int(c1[1] + (c2[1] - c1[1]) * fraction)
+        b = int(c1[2] + (c2[2] - c1[2]) * fraction)
+        return (r, g, b)
 
     @staticmethod
     def get_color_from_palette(palette: List[Tuple[int, int, int]], pos: float) -> Tuple[int, int, int]:

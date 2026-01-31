@@ -52,7 +52,7 @@ class DeviceManager:
                 return server
         return None
     
-    def update_gateway(self, wifi_mac: str, radio_mac: str, ip_address: str, version_net: str = None, version_radio: str = None) -> Dict:
+    def update_gateway(self, wifi_mac: str, radio_mac: str, ip_address: str, version_net: Optional[str] = None, version_radio: Optional[str] = None) -> Optional[Dict]:
         """Update or create gateway entry.
         
         Args:
@@ -146,7 +146,7 @@ class DeviceManager:
         """
         return data_manager.read_json(FILE_LIGHTSTRIPS, default=[])
     
-    def update_light_gateway(self, light_mac: str, gateway_radio_mac: str, rssi: int = None, version: str = None, platform: str = None, model_id: int = None):
+    def update_light_gateway(self, light_mac: str, gateway_radio_mac: str, rssi: Optional[int] = None, version: Optional[str] = None, platform: Optional[str] = None, model_id: Optional[int] = None):
         """Update lightstrip's last successful gateway and tracking info.
         
         Records the gateway that successfully delivered to this light.
@@ -194,23 +194,28 @@ class DeviceManager:
         
         data_manager.update_json(FILE_LIGHTSTRIPS, update_func)
     
-    def get_light_gateway(self, light_mac: str) -> Optional[tuple[str, str]]:
+    def get_light_gateway(self, light_mac: str) -> tuple[Optional[str], Optional[str]]:
         """Get lightstrip's last successful gateway.
         
         Args:
             light_mac: Light MAC address
             
         Returns:
-            Tuple of (gateway_ip, gateway_radio_mac) or (None, None) if not found
+            Tuple of (gateway_ip, gateway_radio_mac) or None if not found
         """
         strip = self.get_light_by_mac(light_mac)
         if not strip:
             return None, None
         
-        return strip.get('gateway_ip'), strip.get('last_gateway_mac')
+        gateway_ip = strip.get('gateway_ip')
+        gateway_mac = strip.get('last_gateway_mac')
+        
+        if gateway_ip and gateway_mac:
+            return gateway_ip, gateway_mac
+        return None, None
     
     def add_lightstrip(self, mac_address: str, name: str, num_leds: int, 
-                      is_rgbw: bool, room_id: Optional[str] = None, model_id: int = None) -> Dict:
+                      is_rgbw: bool, room_id: Optional[str] = None, model_id: Optional[int] = None) -> Optional[Dict]:
         """Add new lightstrip to registry.
         
         Args:
@@ -281,7 +286,7 @@ class DeviceManager:
         """
         return data_manager.read_json(FILE_BUTTONS, default=[])
     
-    def update_button_tracking(self, button_mac: str, gateway_radio_mac: str, rssi: int, battery_mv: int = None, version: str = None, platform: str = None):
+    def update_button_tracking(self, button_mac: str, gateway_radio_mac: str, rssi: int, battery_mv: Optional[int] = None, version: Optional[str] = None, platform: Optional[str] = None):
         """Update button tracking information.
         
         Args:
@@ -319,7 +324,7 @@ class DeviceManager:
         
         data_manager.update_json(FILE_BUTTONS, update_func)
     
-    def _calculate_battery_percent(self, voltage_mv: int) -> int:
+    def _calculate_battery_percent(self, voltage_mv: int) -> Optional[int]:
         """Calculate battery percentage from voltage using Li-Ion curve.
         
         ESP32 requires minimum 3.3V for WiFi operation, so we use:
@@ -370,7 +375,7 @@ class DeviceManager:
         # Fallback
         return 0
     
-    def add_button(self, mac_address: str, name: str, device_type: int = DEV_BUTTON) -> Dict:
+    def add_button(self, mac_address: str, name: str, device_type: int = DEV_BUTTON) -> Optional[Dict]:
         """Add new button/remote to registry.
         
         Args:

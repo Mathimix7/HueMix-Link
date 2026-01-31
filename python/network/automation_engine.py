@@ -13,6 +13,7 @@ from controllers.color_controller import color_controller
 from services.hue_state_manager import hue_state_manager
 from services.data_manager import data_manager
 from .device_manager import device_manager
+from .network_server import NetworkServer
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class AutomationEngine:
         
         logger.info("AutomationEngine initialized")
     
-    def set_network_server(self, network_server):
+    def set_network_server(self, network_server: NetworkServer):
         """Set network server for sending lightstrip commands.
         
         Args:
@@ -83,7 +84,7 @@ class AutomationEngine:
     
     # ===== Button Event Handling =====
     
-    def handle_button_event(self, button_mac: str, action: int, rssi: int, button_index: int = None):
+    def handle_button_event(self, button_mac: str, action: int, rssi: int, button_index: Optional[int] = None):
         """Handle button event.
         
         Args:
@@ -733,7 +734,8 @@ class AutomationEngine:
                     
                     rgb_data = self._get_lightstrip_colors(strip, scene_id, room_id)
                     if rgb_data is not None:
-                        self.network_server.send_to_light(light_mac, rgb_data, brightness_val)
+                        if self.network_server:
+                            self.network_server.send_to_light(light_mac, rgb_data, brightness_val)
                         logger.info(f"Sent colors to lightstrip {strip.get('name', light_mac)} (brightness: {brightness_pct:.0f}%)")
                 except Exception as e:
                     logger.error(f"Error syncing lightstrip {strip.get('id')}: {e}")
@@ -791,7 +793,8 @@ class AutomationEngine:
             
             if rgb_data:
                 # Send to light
-                success = self.network_server.send_to_light(light_mac, rgb_data, brightness_val)
+                if self.network_server:
+                    success = self.network_server.send_to_light(light_mac, rgb_data, brightness_val)
                 if success:
                     logger.info(f"✨ Sent current scene colors to {light_mac} (scene: {scene_id})")
                 else:
@@ -981,7 +984,7 @@ class AutomationEngine:
             # No colors available, use warm white
             return [(255, 216, 94)] * num_leds
         
-        mac_address = strip.get('mac_address')
+        mac_address = strip.get('mac_address', "")
         single_color = strip.get('single_color', True)
         coverage = strip.get('coverage', 1.5)
         distortion = strip.get('distortion', 0.3)

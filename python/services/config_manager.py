@@ -24,6 +24,7 @@ class ConfigManager:
             self.config_file.parent.mkdir(parents=True, exist_ok=True)
             default_config = {
                 'udp_port': DEFAULT_UDP_PORT,
+                'dev_mode': False,
             }
             self.save_config(default_config)
     
@@ -37,6 +38,7 @@ class ConfigManager:
                 # Return defaults if file is corrupted or missing
                 return {
                     'udp_port': DEFAULT_UDP_PORT,
+                    'dev_mode': False,
                 }
     
     def save_config(self, config):
@@ -60,6 +62,17 @@ class ConfigManager:
         # Notify subscribers if port changed
         if old_port != port:
             config_notifier.notify_change('udp_port_changed', {'old_port': old_port, 'new_port': port})
+    
+    def get_dev_mode(self):
+        """Get dev mode setting."""
+        config = self.load_config()
+        return config.get('dev_mode', False)
+    
+    def set_dev_mode(self, enabled):
+        """Set dev mode setting."""
+        config = self.load_config()
+        config['dev_mode'] = enabled
+        self.save_config(config)
 
 # Singleton instance
 config_manager = ConfigManager()

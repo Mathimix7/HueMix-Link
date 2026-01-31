@@ -20,6 +20,38 @@ def settings_page():
     """Render the settings page."""
     return render_template('settings.html')
 
+@admin_bp.route('/api/dev-mode', methods=['GET'])
+def get_dev_mode():
+    """Get dev mode setting."""
+    try:
+        dev_mode = config_manager.get_dev_mode()
+        return jsonify({
+            'success': True,
+            'dev_mode': dev_mode
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@admin_bp.route('/api/dev-mode', methods=['POST'])
+def set_dev_mode():
+    """Set dev mode setting."""
+    try:
+        data = request.get_json(silent=True) or {}
+        enabled = data.get('enabled', False)
+        config_manager.set_dev_mode(enabled)
+        return jsonify({
+            'success': True,
+            'dev_mode': enabled
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @admin_bp.route('/backups', methods=['GET'])
 def list_backups():
     """List all available backups."""

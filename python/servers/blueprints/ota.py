@@ -15,6 +15,7 @@ from services.ota_manager import ota_manager
 from network.device_manager import device_manager
 from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, GITHUB_OWNER, GITHUB_REPO
 from network.network_server import network_server
+from services.config_manager import config_manager
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -152,7 +153,8 @@ def save_local_firmwares(firmwares):
 @ota_bp.route('/ota')
 def ota_page():
     """Render OTA management page."""
-    return render_template('ota.html')
+    dev_mode = config_manager.get_dev_mode()
+    return render_template('ota.html', dev_mode=dev_mode)
 
 
 @ota_bp.route('/api/ota/check', methods=['GET'])

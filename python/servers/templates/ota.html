@@ -42,9 +42,11 @@
                 <button id="checkUpdatesBtn" class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors inline-flex items-center">
                     <i id="check-updates-icon" class="fas fa-sync-alt mr-2 transition-transform duration-500"></i>Check for Updates
                 </button>
+                {% if dev_mode %}
                 <button id="uploadBtn" class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors inline-flex items-center">
                     <i class="fas fa-upload mr-2"></i>Upload Firmware
                 </button>
+                {% endif %}
                 <button id="serialFlashBtn" class="px-4 py-2 bg-zinc-800 text-white rounded-lg hover:bg-zinc-900 transition-colors inline-flex items-center">
                     <i class="fab fa-usb mr-2"></i>Serial Flash
                 </button>

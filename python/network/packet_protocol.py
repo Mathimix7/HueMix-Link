@@ -11,8 +11,9 @@ from constants import (
     PKT_PAIR_CONFIRM, PKT_LIGHT_RAW, PKT_SYS_CMD, PKT_GW_LIST_UPD,
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT,
     PKT_PING_DEVICE, PKT_PING,
+    PKT_OTA_NOTIFY, PKT_OTA_READY, PKT_OTA_CHUNK, PKT_OTA_CHUNK_ACK, PKT_OTA_COMPLETE, PKT_OTA_ABORT, PKT_OTA_CHECKPOINT_REQ,
     DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE,
-    FNV_OFFSET_BASIS, FNV_PRIME, FNV_MASK
+    FNV_OFFSET_BASIS, FNV_PRIME, FNV_MASK, OTA_CHUNK_DATA_SIZE
 )
 from services.home_id_manager import home_id_manager
 
@@ -130,12 +131,15 @@ class PacketEncoder:
         tgt_mac = MACFormatter.to_bytes(target_mac)
         
         # Payload: new HomeID (4 bytes) + assigned device ID (1 byte) = 5 bytes total
-        payload = struct.pack("<IB", new_home_id, 0)
+        payload_data = struct.pack("<IB", new_home_id, 0)
         
-        # Calculate signature (hash only the 5-byte payload with HOME_ID=0 for unpaired devices)
+        # Pad to 185 bytes
+        payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload with HOME_ID=0 for unpaired devices)
         signature = self._calculate_hash(payload, 0)
         
-        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(5) = 23 bytes
+        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(185) = 203 bytes
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
         
         return packet
@@ -165,13 +169,13 @@ class PacketEncoder:
             r, g, b = rgb_data[i]
             payload += struct.pack("<BBB", r, g, b)
         
-        # Pad to 182 bytes total (2 header + 180 data)
-        payload += b'\x00' * (182 - len(payload))
+        # Pad to 185 bytes
+        payload += b'\x00' * (185 - len(payload))
         
-        # Calculate signature (hash only the payload portion)
+        # Calculate signature (hash full 185-byte payload)
         signature = self._calculate_hash(payload)
         
-        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(182)
+        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(185) = 203 bytes
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
         
         return packet
@@ -201,11 +205,8 @@ class PacketEncoder:
         # Pad to 185 bytes
         payload += b'\x00' * (185 - len(payload))
         
-        # Build packet without signature
-        packet_no_sig = struct.pack("<B", pkt_type) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
-        
         # Calculate signature
-        signature = self._calculate_hash(packet_no_sig)
+        signature = self._calculate_hash(payload)
         
         # Build final packet
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -238,11 +239,8 @@ class PacketEncoder:
         # Pad to 185 bytes
         payload += b'\x00' * (185 - len(payload))
         
-        # Build packet without signature
-        packet_no_sig = struct.pack("<B", pkt_type) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
-        
-        # Calculate signature
-        signature = self._calculate_hash(packet_no_sig)
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
         
         # Build final packet
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -268,11 +266,11 @@ class PacketEncoder:
         # Payload: command(1) + value(1)
         payload_data = struct.pack("<BB", command, value)
         
-        # Calculate signature (hash only the 2 bytes of actual data, matching sizeof(Payload_SysCmd))
-        signature = self._calculate_hash(payload_data)
-        
         # Pad payload to 185 bytes
         payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
         
         # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(185)
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
@@ -318,10 +316,156 @@ class PacketEncoder:
         src_mac = b'\x00' * 6
         tgt_mac = MACFormatter.to_bytes(target_mac)
         
-        # Empty payload
+        # Empty payload (185 bytes of zeros)
         payload = b'\x00' * 185
         
-        # Calculate signature
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
+        
+        # Build final packet: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) + payload(185) = 203 bytes
+        packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
+        
+        return packet
+    
+    def encode_ota_notify(self, target_mac: str, firmware_size: int, sha256_hash: bytes, 
+                         version: Tuple[int, int, int, int], msg_id: int = 0) -> bytes:
+        """Encode an OTA notify packet to initiate firmware update.
+        
+        Args:
+            target_mac: MAC address of target device
+            firmware_size: Total firmware size in bytes
+            sha256_hash: 32-byte SHA256 hash of firmware
+            version: Tuple of (major, minor, patch, build) version bytes
+            msg_id: Message ID
+            
+        Returns:
+            Complete 203-byte packet
+        """
+        pkt_type = PKT_OTA_NOTIFY
+        src_mac = b'\x00' * 6
+        tgt_mac = MACFormatter.to_bytes(target_mac)
+        
+        # Payload: firmware_size(4) + sha256_hash(32) + version(4)
+        payload_data = struct.pack("<I", firmware_size) + sha256_hash[:32] + struct.pack("BBBB", *version)
+        
+        # Pad to 185 bytes
+        payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
+        
+        # Build final packet
+        packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
+        
+        return packet
+    
+    def encode_ota_chunk(self, target_mac: str, chunk_index: int, chunk_data: bytes, msg_id: int = 0) -> bytes:
+        """Encode an OTA chunk packet containing firmware data.
+        
+        Args:
+            target_mac: MAC address of target device
+            chunk_index: Chunk sequence number (0-based)
+            chunk_data: Firmware data for this chunk (max 182 bytes)
+            msg_id: Message ID
+            
+        Returns:
+            Complete 203-byte packet
+        """
+        pkt_type = PKT_OTA_CHUNK
+        src_mac = b'\x00' * 6
+        tgt_mac = MACFormatter.to_bytes(target_mac)
+        
+        # Payload: chunk_index(2) + data_len(1) + data(182)
+        data_len = min(len(chunk_data), OTA_CHUNK_DATA_SIZE)
+        payload_data = struct.pack("<HB", chunk_index, data_len) + chunk_data[:data_len]
+        
+        # Pad to 185 bytes
+        payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
+        
+        # Build final packet
+        packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
+        
+        return packet
+    
+    def encode_ota_complete(self, target_mac: str, sha256_hash: bytes, msg_id: int = 0) -> bytes:
+        """Encode an OTA complete packet to signal end of transfer.
+        
+        Args:
+            target_mac: MAC address of target device
+            sha256_hash: 32-byte SHA256 hash for final validation
+            msg_id: Message ID
+            
+        Returns:
+            Complete 203-byte packet
+        """
+        pkt_type = PKT_OTA_COMPLETE
+        src_mac = b'\x00' * 6
+        tgt_mac = MACFormatter.to_bytes(target_mac)
+        
+        # Payload: sha256_hash(32)
+        payload_data = sha256_hash[:32]
+        
+        # Pad to 185 bytes
+        payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
+        
+        # Build final packet
+        packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
+        
+        return packet
+    
+    def encode_ota_checkpoint_req(self, target_mac: str, msg_id: int = 0) -> bytes:
+        """Encode OTA checkpoint request packet (server asks device for progress).
+        
+        Args:
+            target_mac: MAC address of target device
+            msg_id: Message ID
+            
+        Returns:
+            Complete 203-byte packet
+        """
+        pkt_type = PKT_OTA_CHECKPOINT_REQ
+        src_mac = b'\x00' * 6
+        tgt_mac = MACFormatter.to_bytes(target_mac)
+        
+        # No payload needed - just a request (185 bytes of zeros)
+        payload = b'\x00' * 185
+        
+        # Calculate signature (hash full 185-byte payload)
+        signature = self._calculate_hash(payload)
+        
+        # Build final packet
+        packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
+        
+        return packet
+    
+    def encode_ota_abort(self, target_mac: str, reason_code: int = 0, msg_id: int = 0) -> bytes:
+        """Encode an OTA abort packet to cancel update.
+        
+        Args:
+            target_mac: MAC address of target device
+            reason_code: Reason for abort (0=user cancel, 1=timeout, 2=error)
+            msg_id: Message ID
+            
+        Returns:
+            Complete 203-byte packet
+        """
+        pkt_type = PKT_OTA_ABORT
+        src_mac = b'\x00' * 6
+        tgt_mac = MACFormatter.to_bytes(target_mac)
+        
+        # Payload: reason_code(1)
+        payload_data = struct.pack("<B", reason_code)
+        
+        # Pad to 185 bytes
+        payload = payload_data + b'\x00' * (185 - len(payload_data))
+        
+        # Calculate signature (hash full 185-byte payload)
         signature = self._calculate_hash(payload)
         
         # Build final packet
@@ -367,7 +511,7 @@ class PacketDecoder:
         """Decode a packet and validate its signature.
         
         Args:
-            data: Raw packet data (minimum 18 bytes)
+            data: Raw packet data (minimum 203 bytes)
             
         Returns:
             Dictionary with packet fields if valid, None otherwise:
@@ -380,72 +524,53 @@ class PacketDecoder:
                 'is_paired': True if using paired HomeID
             }
         """
-        if len(data) < 18:
-            logger.warning(f"Packet too short: {len(data)} bytes")
+        if len(data) < 203:
+            logger.warning(f"Packet too short: {len(data)} bytes (expected 203)")
             return None
         
-        # Parse header: type(1) + sig(4) + src(6) + tgt(6) + msgid(1)
+        # Parse header: type(1) + sig(4) + src(6) + tgt(6) + msgid(1) = 18 bytes
         pkt_type, signature = struct.unpack("<BI", data[0:5])
         src_mac_bytes = data[5:11]
         tgt_mac_bytes = data[11:17]
         msg_id = struct.unpack("<B", data[17:18])[0]
-        payload = data[18:] if len(data) > 18 else b''
         
-        # Determine payload portion to hash based on packet type
-        payload_to_hash = payload
+        # Payload is always 185 bytes
+        payload = data[18:203]
         
-        if pkt_type == PKT_HELLO and len(payload) > 0:
-            dev_type = payload[0]
-            if dev_type == DEV_GATEWAY and len(payload) >= 7:
-                # Gateway: hash only first 7 bytes (type + radio MAC)
-                payload_to_hash = payload[:7]
-            elif dev_type in (DEV_BUTTON, DEV_REMOTE) and len(payload) >= 1:
-                # Button/Remote: hash only device type byte
-                payload_to_hash = payload[:1]
-            elif dev_type == DEV_LIGHT and len(payload) >= 5:
-                # Light: mask RSSI byte to 0 before hashing
-                temp = bytearray(payload[:5])
-                temp[1] = 0
-                payload_to_hash = bytes(temp)
-        
-        elif pkt_type == PKT_BTN_EVENT and len(payload) >= 3:
-            # Button event: hash first 3 bytes
-            payload_to_hash = payload[:3]
-        
-        elif pkt_type == PKT_DELIVERY_RPT and len(payload) >= 8:
-            # Delivery report: hash first 8 bytes
-            payload_to_hash = payload[:8]
-        
-        elif pkt_type == PKT_PING and len(payload) >= 4:
-            # Ping response: hash first 4 bytes (uptime)
-            payload_to_hash = payload[:4]
-        
+        # Gateway modifies RSSI after receiving packet but before forwarding:
+        # - PKT_HELLO: RSSI inserted at payload[1]
+        # - PKT_PING_DEVICE: RSSI inserted at payload[0]
+        # Signature was calculated BEFORE RSSI modification, so we need to zero it for validation
+        payload_for_hash = bytearray(payload)
+        if pkt_type == PKT_HELLO:
+            dev_type = struct.unpack("<B", payload[0:1])[0]
+            if dev_type in (DEV_BUTTON, DEV_LIGHT, DEV_REMOTE):
+                payload_for_hash[1] = 0  # Zero out RSSI byte for signature validation
         elif pkt_type == PKT_PING_DEVICE:
-            temp = bytearray(payload)
-            temp[0] = 0  # Zero out RSSI byte
-            payload_to_hash = bytes(temp)
+            payload_for_hash[0] = 0  # Zero out RSSI byte for signature validation
         
+        # Always hash the full 185-byte payload
         # Try paired HomeID first
-        sig_valid_paired = self._calculate_hash(payload_to_hash, self.home_id)
+        sig_valid_paired = self._calculate_hash(bytes(payload_for_hash), self.home_id)
         if signature == sig_valid_paired:
             return {
                 'type': pkt_type,
                 'source_mac': MACFormatter.to_string(src_mac_bytes),
                 'target_mac': MACFormatter.to_string(tgt_mac_bytes),
                 'msg_id': msg_id,
-                'payload': payload,
+                'payload': payload,  # Return original payload with RSSI intact
                 'is_paired': True
             }
         
         # Try unpaired HomeID (0)
-        sig_valid_unpaired = self._calculate_hash(payload_to_hash, self.unpaired_home_id)
+        sig_valid_unpaired = self._calculate_hash(bytes(payload_for_hash), self.unpaired_home_id)
         if signature == sig_valid_unpaired:
             return {
                 'type': pkt_type,
                 'source_mac': MACFormatter.to_string(src_mac_bytes),
                 'target_mac': MACFormatter.to_string(tgt_mac_bytes),
                 'msg_id': msg_id,
-                'payload': payload,
+                'payload': payload,  # Return original payload with RSSI intact
                 'is_paired': False
             }
         
@@ -467,7 +592,8 @@ class PacketDecoder:
         Returns:
             Dictionary with device info:
             {
-                'device_type': DEV_GATEWAY/DEV_BUTTON/DEV_LIGHT,
+                'device_type': DEV_GATEWAY/DEV_BUTTON/DEV_LIGHT/DEV_REMOTE,
+                'version': Version string (e.g., "3.7.3"),
                 'radio_mac': MAC string (for gateways),
                 'rssi': Signal strength (for buttons/lights),
                 'is_rgbw': RGBW flag (for lights),
@@ -480,23 +606,49 @@ class PacketDecoder:
         dev_type = struct.unpack("<B", payload[0:1])[0]
         result = {'device_type': dev_type}
         
-        if dev_type == DEV_GATEWAY and len(payload) >= 7:
-            # Gateway: radio MAC at bytes 1-7
+        if dev_type == DEV_GATEWAY and len(payload) >= 15:
+            # Gateway: radio MAC at bytes 1-7, net version at bytes 7-11, radio version at bytes 11-15
             result['radio_mac'] = MACFormatter.to_string(payload[1:7])
+            major_net, minor_net, patch_net, build_net = struct.unpack("<BBBB", payload[7:11])
+            result['version_net'] = f"{major_net}.{minor_net}.{patch_net}"
+            major_radio, minor_radio, patch_radio, build_radio = struct.unpack("<BBBB", payload[11:15])
+            result['version_radio'] = f"{major_radio}.{minor_radio}.{patch_radio}"
         
-        elif dev_type == DEV_BUTTON and len(payload) >= 2:
-            # Button: RSSI at byte 1
+        elif dev_type == DEV_BUTTON and len(payload) >= 6:
+            # Button: type(1) + RSSI(1) + version(3) + platform(1)
+            major, minor, patch, build = struct.unpack("<BBBB", payload[2:6])
+            result['version'] = f"{major}.{minor}.{patch}"
             result['rssi'] = MACFormatter.parse_rssi(payload[1])
+            result['platform'] = 'esp8266' if build == 1 else 'esp32'
 
-        elif dev_type == DEV_REMOTE and len(payload) >= 2:
-            # Remote: RSSI at byte 1
+        elif dev_type == DEV_REMOTE and len(payload) >= 6:
+            # Remote: type(1) + RSSI(1) + version(3) + platform(1)
+            major, minor, patch, build = struct.unpack("<BBBB", payload[2:6])
+            result['version'] = f"{major}.{minor}.{patch}"
             result['rssi'] = MACFormatter.parse_rssi(payload[1])
+            result['platform'] = 'esp8266' if build == 1 else 'esp32'
         
-        elif dev_type == DEV_LIGHT and len(payload) >= 5:
-            # Light: RSSI(1) + RGBW(1) + LED_COUNT(2 big-endian)
+        elif dev_type == DEV_LIGHT and len(payload) >= 9:
+            # Light: type(1) + RSSI(1) + RGBW(1) + LED_COUNT(2) + version(3) + platform(1) + model_id(2)
             result['rssi'] = MACFormatter.parse_rssi(payload[1])
             result['is_rgbw'] = payload[2] == 1
             result['num_leds'] = struct.unpack(">H", payload[3:5])[0]  # Big-endian
+            major, minor, patch = struct.unpack("<BBB", payload[5:8])
+            result['version'] = f"{major}.{minor}.{patch}"
+            
+            # Parse platform if available (byte 8)
+            if len(payload) >= 9:
+                platform_byte = struct.unpack("<B", payload[8:9])[0]
+                result['platform'] = 'esp8266' if platform_byte == 1 else 'esp32'
+            
+            # Parse model_id if available (bytes 9-10, 2 bytes little-endian)
+            # Model 1: ESP32, RGB, GRB, WS2812B
+            # Model 2: ESP32, RGBW, GRB, SK6812
+            # Model 3: ESP8266, RGB, GRB, WS2812B
+            # Model 4: ESP8266, RGBW, GRB, SK6812
+            if len(payload) >= 11:
+                model_id = struct.unpack("<H", payload[9:11])[0]  # uint16_t little-endian
+                result['model_id'] = model_id
         
         return result
     
@@ -511,13 +663,18 @@ class PacketDecoder:
             {
                 'action': ACT_CLICK/ACT_HOLDING/ACT_RELEASE/ACT_SYNC,
                 'battery_mv': Battery voltage in millivolts (uint16),
-                'button_index': (Optional) Index for remote buttons (0-3)
+                'button_index': Index (-1 for normal button, 0-3 for remote),
+                'version_major': Firmware major version,
+                'version_minor': Firmware minor version,
+                'version_patch': Firmware patch version,
+                'platform': 'esp32' or 'esp8266'
             }
         """
         if len(payload) < 3:
             return None
         
-        # Payload structure: action(1 byte) + battery_mv(2 bytes) + button_index(1 byte)
+        # Payload_Button structure (8 bytes):
+        # action(1) + battery_mv(2) + button_index(1) + version_major(1) + version_minor(1) + version_patch(1) + platform(1)
         action = struct.unpack("<B", payload[0:1])[0]
         battery_mv = struct.unpack("<H", payload[1:3])[0]  # uint16 little-endian
         
@@ -525,11 +682,29 @@ class PacketDecoder:
             'action': action,
             'battery_mv': battery_mv
         }
-        # Remote buttons include button_index at byte 3
+        
+        # Parse button_index (signed int8, -1 for normal button, 0-3 for remote)
         if len(payload) >= 4:
-            button_index = struct.unpack("<B", payload[3:4])[0]
-            if 0 <= button_index <= 3:
-                result['button_index'] = button_index
+            button_index = struct.unpack("<b", payload[3:4])[0]  # signed byte
+            result['button_index'] = button_index
+        
+        # Parse version fields - only include if all version bytes are present AND not all zeros
+        if len(payload) >= 7:
+            version_major = struct.unpack("<B", payload[4:5])[0]
+            version_minor = struct.unpack("<B", payload[5:6])[0]
+            version_patch = struct.unpack("<B", payload[6:7])[0]
+            
+            # Only set version if it's not 0.0.0 (indicates valid firmware version)
+            if version_major > 0 or version_minor > 0 or version_patch > 0:
+                result['version_major'] = version_major
+                result['version_minor'] = version_minor
+                result['version_patch'] = version_patch
+                result['version'] = f"{version_major}.{version_minor}.{version_patch}"
+        
+            # Parse platform (0=ESP32, 1=ESP8266)
+            if len(payload) >= 8:
+                platform_byte = struct.unpack("<B", payload[7:8])[0]
+                result['platform'] = 'esp8266' if platform_byte == 1 else 'esp32'
         
         return result
     
@@ -582,3 +757,121 @@ class PacketDecoder:
                 gateway_macs.append(mac)
         
         return gateway_macs
+    
+    def parse_ota_notify(self, payload: bytes) -> Optional[dict]:
+        """Parse OTA notify payload.
+        
+        Args:
+            payload: Raw payload bytes
+            
+        Returns:
+            Dictionary with firmware_size, sha256_hash, version
+        """
+        if len(payload) < 40:
+            return None
+        
+        firmware_size = struct.unpack("<I", payload[0:4])[0]
+        sha256_hash = payload[4:36]
+        version = struct.unpack("BBBB", payload[36:40])
+        
+        return {
+            'firmware_size': firmware_size,
+            'sha256_hash': sha256_hash,
+            'version': version
+        }
+    
+    def parse_ota_ready(self, payload: bytes) -> Optional[dict]:
+        """Parse OTA ready response payload.
+        
+        Args:
+            payload: Raw payload bytes
+            
+        Returns:
+            Dictionary with firmware_size, battery_mv
+        """
+        if len(payload) < 6:
+            return None
+        
+        firmware_size = struct.unpack("<I", payload[0:4])[0]
+        battery_mv = struct.unpack("<H", payload[4:6])[0]
+        
+        return {
+            'firmware_size': firmware_size,
+            'battery_mv': battery_mv
+        }
+    
+    def parse_ota_chunk(self, payload: bytes) -> Optional[dict]:
+        """Parse OTA chunk payload.
+        
+        Args:
+            payload: Raw payload bytes
+            
+        Returns:
+            Dictionary with chunk_index, data_len, data
+        """
+        if len(payload) < 3:
+            return None
+        
+        chunk_index = struct.unpack("<H", payload[0:2])[0]
+        data_len = struct.unpack("<B", payload[2:3])[0]
+        data = payload[3:3+data_len]
+        
+        return {
+            'chunk_index': chunk_index,
+            'data_len': data_len,
+            'data': data
+        }
+    
+    def parse_ota_complete(self, payload: bytes) -> Optional[dict]:
+        """Parse OTA complete payload.
+        
+        Args:
+            payload: Raw payload bytes
+            
+        Returns:
+            Dictionary with sha256_hash
+        """
+        if len(payload) < 32:
+            return None
+        
+        sha256_hash = payload[0:32]
+        
+        return {
+            'sha256_hash': sha256_hash
+        }
+    
+    def parse_ota_chunk_ack(self, payload: bytes) -> Optional[dict]:
+        """Parse OTA chunk ACK payload.
+        
+        Args:
+            payload: Raw payload bytes
+            
+        Returns:
+            Dictionary with chunk_index
+        """
+        if len(payload) < 2:
+            return None
+        
+        chunk_index = struct.unpack("<H", payload[0:2])[0]
+        
+        return {
+            'chunk_index': chunk_index
+        }
+    
+    def parse_ota_abort(self, payload: bytes) -> Optional[dict]:
+        """Parse OTA abort payload.
+        
+        Args:
+            payload: Raw payload bytes
+            
+        Returns:
+            Dictionary with reason_code
+        """
+        if len(payload) < 1:
+            return None
+        
+        reason_code = struct.unpack("<B", payload[0:1])[0]
+        
+        return {
+            'reason_code': reason_code
+        }

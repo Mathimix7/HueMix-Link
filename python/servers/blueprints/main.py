@@ -73,13 +73,10 @@ def update_config_and_restart():
     message = "Settings saved! "
     if udp_port is not None and udp_port != current_udp_port:
         message += "UDP server restarting with new port... "
-    else:
-        message += "No changes detected."
     
     return jsonify({
         "success": True,
         "message": message,
         "config": config_manager.load_config(),
         "udp_restart_required": udp_port is not None and udp_port != current_udp_port,
-        "web_restart_required": False
     })

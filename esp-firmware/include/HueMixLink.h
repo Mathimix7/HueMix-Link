@@ -24,6 +24,14 @@ enum PacketType {
   PKT_SCENE_REQ    = 0x12, 
   PKT_DELIVERY_RPT = 0x13, 
 
+  PKT_OTA_NOTIFY   = 0x20,
+  PKT_OTA_READY    = 0x21,
+  PKT_OTA_CHUNK    = 0x22,
+  PKT_OTA_COMPLETE = 0x23,
+  PKT_OTA_ABORT    = 0x24,
+  PKT_OTA_CHUNK_ACK = 0x25,
+  PKT_OTA_CHECKPOINT_REQ = 0x26,
+
   PKT_ACK_TO_BTN   = 0xAA, 
   PKT_PING         = 0xFF,
   PKT_PING_DEVICE  = 0xFE
@@ -47,6 +55,9 @@ enum PacketType {
 typedef struct {
   uint8_t magic;   // 0x11
   uint8_t mac[6];  // The Radio Node's ESP-NOW MAC
+  uint8_t version_major;
+  uint8_t version_minor;
+  uint8_t version_patch;
 } SerialHandshake;
 
 typedef struct {
@@ -58,6 +69,11 @@ typedef struct {
 typedef struct {
   uint8_t action;
   uint16_t battery_mv;
+  int8_t button_index;  // -1 for normal button, actual index for remote
+  uint8_t version_major;
+  uint8_t version_minor;
+  uint8_t version_patch;
+  uint8_t platform;  // 0=ESP32, 1=ESP8266
 } Payload_Button;
 
 typedef struct {
@@ -81,6 +97,27 @@ typedef struct {
   uint8_t  assignedDeviceID;
 } Payload_Pairing;
 
+typedef struct {
+  uint32_t firmware_size;      // Total firmware size in bytes
+  uint8_t  sha256_hash[32];    // SHA256 hash of firmware
+  uint8_t  version[4];         // Version bytes (major.minor.patch.build)
+} Payload_OtaNotify;
+
+typedef struct {
+  uint16_t chunk_index;        // Chunk sequence number
+  uint8_t  data_len;           // Actual data length in this chunk (≤182)
+  uint8_t  data[182];          // Chunk data
+} Payload_OtaChunk;
+
+typedef struct {
+  uint32_t firmware_size;      // Echo firmware size from notify
+  uint16_t battery_mv;         // Current battery voltage (buttons only)
+} Payload_OtaReady;
+
+typedef struct {
+  uint16_t last_chunk_index;   // Last successfully received chunk index
+} Payload_OtaChunkAck;
+
 // --- MASTER PACKET ---
 typedef struct {
   uint8_t  type;           
@@ -96,6 +133,10 @@ typedef struct {
     Payload_Report      report;
     Payload_SysCmd      sys;
     Payload_Pairing     pair;
+    Payload_OtaNotify   otaNotify;
+    Payload_OtaChunk    otaChunk;
+    Payload_OtaReady    otaReady;
+    Payload_OtaChunkAck otaChunkAck;
     uint8_t             raw[185];
   } payload;
   

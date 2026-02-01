@@ -7,12 +7,13 @@ import logging
 import threading
 import time
 from typing import Dict, List, Tuple, Optional
-from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN
+from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN, REMOTE_ACTION_SCENE_CYCLE
 from controllers.hue_controller import Hue
 from controllers.color_controller import color_controller
 from services.hue_state_manager import hue_state_manager
 from services.data_manager import data_manager
 from .device_manager import device_manager
+from .network_server import NetworkServer
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class AutomationEngine:
         
         logger.info("AutomationEngine initialized")
     
-    def set_network_server(self, network_server):
+    def set_network_server(self, network_server: NetworkServer):
         """Set network server for sending lightstrip commands.
         
         Args:
@@ -83,7 +84,7 @@ class AutomationEngine:
     
     # ===== Button Event Handling =====
     
-    def handle_button_event(self, button_mac: str, action: int, rssi: int, button_index: int = None):
+    def handle_button_event(self, button_mac: str, action: int, rssi: int, button_index: Optional[int] = None):
         """Handle button event.
         
         Args:
@@ -167,6 +168,16 @@ class AutomationEngine:
                 self._handle_remote_normal_action_holding(remote_mac, button_config, room_id)
             elif action == ACT_RELEASE:
                 self._handle_remote_normal_action_release(remote_mac, button_config)
+
+        elif action_type == REMOTE_ACTION_SCENE_CYCLE:
+            # Click cycles scenes but never turns the room off on timeout
+            if action == ACT_CLICK:
+                self._handle_remote_scene_cycle_click(remote_mac, button_config, room_id)
+            elif action == ACT_HOLDING:
+                # Preserve brightness hold behavior
+                self._handle_remote_normal_action_holding(remote_mac, button_config, room_id)
+            elif action == ACT_RELEASE:
+                self._handle_remote_normal_action_release(remote_mac, button_config)
         
         elif action_type == REMOTE_ACTION_TOGGLE:
             # Only respond to CLICK, ignore HOLDING
@@ -247,6 +258,54 @@ class AutomationEngine:
             logger.info(f"Remote {remote_mac} button {button_index}: Activating scene {scene_id}")
         
         # Activate scene
+        try:
+            self._activate_scene(room_id, scene_id)
+        except Exception as e:
+            logger.error(f"Failed to activate scene {scene_id}: {e}")
+
+    def _handle_remote_scene_cycle_click(self, remote_mac: str, button_config: Dict, room_id: str):
+        """Handle scene-cycle-only remote CLICK action (cycle scenes but never turn off).
+
+        Args:
+            remote_mac: Remote MAC address
+            button_config: Button configuration
+            room_id: Room ID to control
+        """
+        scenes = button_config.get('scenes', [])
+
+        if not scenes:
+            logger.warning(f"Remote {remote_mac} button has no scenes configured")
+            return
+
+        button_index = button_config.get('index', 0)
+        state_key = f"{remote_mac}_{button_index}"
+
+        now = time.time()
+
+        with self._button_lock:
+            if state_key not in self._button_states:
+                self._button_states[state_key] = {
+                    'scene_index': 0,
+                    'last_press': 0,
+                    'brightness_direction': -1
+                }
+
+            state = self._button_states[state_key]
+
+            # If timeout expired, simply reset to first scene (do NOT turn off room)
+            time_since_last = now - state['last_press']
+            if time_since_last > self.scene_timeout:
+                logger.debug(f"Remote {remote_mac}: Timeout expired, reset to scene 0 (no off)")
+                state['scene_index'] = 0
+
+            # Get current scene
+            scene_id = scenes[state['scene_index']]
+
+            # Advance to next scene
+            state['scene_index'] = (state['scene_index'] + 1) % len(scenes)
+            state['last_press'] = now
+            logger.info(f"Remote {remote_mac} button {button_index}: Activating scene {scene_id} (scene-cycle only)")
+
         try:
             self._activate_scene(room_id, scene_id)
         except Exception as e:
@@ -675,7 +734,8 @@ class AutomationEngine:
                     
                     rgb_data = self._get_lightstrip_colors(strip, scene_id, room_id)
                     if rgb_data is not None:
-                        self.network_server.send_to_light(light_mac, rgb_data, brightness_val)
+                        if self.network_server:
+                            self.network_server.send_to_light(light_mac, rgb_data, brightness_val)
                         logger.info(f"Sent colors to lightstrip {strip.get('name', light_mac)} (brightness: {brightness_pct:.0f}%)")
                 except Exception as e:
                     logger.error(f"Error syncing lightstrip {strip.get('id')}: {e}")
@@ -733,7 +793,8 @@ class AutomationEngine:
             
             if rgb_data:
                 # Send to light
-                success = self.network_server.send_to_light(light_mac, rgb_data, brightness_val)
+                if self.network_server:
+                    success = self.network_server.send_to_light(light_mac, rgb_data, brightness_val)
                 if success:
                     logger.info(f"✨ Sent current scene colors to {light_mac} (scene: {scene_id})")
                 else:
@@ -923,7 +984,7 @@ class AutomationEngine:
             # No colors available, use warm white
             return [(255, 216, 94)] * num_leds
         
-        mac_address = strip.get('mac_address')
+        mac_address = strip.get('mac_address', "")
         single_color = strip.get('single_color', True)
         coverage = strip.get('coverage', 1.5)
         distortion = strip.get('distortion', 0.3)

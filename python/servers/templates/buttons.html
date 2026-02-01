@@ -176,9 +176,17 @@
                     <h3 class="text-lg leading-6 font-medium text-gray-900">
                         <i class="fas fa-cog mr-2 text-pink-600"></i>Configure Button: <span id="config-device-name" class="text-pink-600"></span>
                     </h3>
-                    <button onclick="closeConfigModal()" class="text-gray-400 hover:text-gray-500">
-                        <i class="fas fa-times"></i>
-                    </button>
+                    <div class="flex items-center space-x-2">
+                        <button onclick="copyDeviceConfig(currentDeviceId)" title="Copy" class="inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-500 hover:text-gray-700 bg-white border border-gray-100">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                        <button onclick="pasteConfigToModal()" title="Paste" class="inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-500 hover:text-gray-700 bg-white border border-gray-100">
+                            <i class="fas fa-paste"></i>
+                        </button>
+                        <button onclick="closeConfigModal()" class="text-gray-400 hover:text-gray-500 p-2">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Loading Configuration Skeleton -->
@@ -328,7 +336,7 @@
             <!-- Modal Body -->
             <div class="bg-white px-4 py-5 sm:px-6">
                 <!-- Button Tabs -->
-                <div class="border-b border-gray-200 mb-6">
+                <div class="border-b border-gray-200 mb-3">
                     <div id="remote-tabs" class="flex space-x-2">
                         <!-- Tabs will be rendered here -->
                     </div>
@@ -361,6 +369,8 @@ let selectedScenes = [];
 let draggedElement = null;
 let deleteDeviceId = null;
 let deleteDeviceName = null;
+// Global clipboard for copying room+scenes
+let clipboardConfig = null;
 
 // --- Button Press Flash Logic ---
 let lastPressStates = {};
@@ -372,14 +382,253 @@ function pollButtonPressStates() {
             if (data.success && data.press_states) {
                 const pressStates = data.press_states;
                 for (const [id, lastPressed] of Object.entries(pressStates)) {
+                    // New press detected for a previously-known device: flash and update only that row
                     if (lastPressed && lastPressStates[id] && lastPressStates[id] !== lastPressed) {
                         flashButtonRow(id);
+
+                        // Fetch the single-device endpoint to get updated battery/metadata and update the row
+                        fetch(`/buttons/api/devices/${id}`)
+                            .then(resp => resp.json())
+                            .then(devData => {
+                                if (devData.success && devData.device) {
+                                    updateDeviceRow(devData.device);
+                                }
+                            })
+                            .catch(() => {
+                                // On error, fall back to full refresh
+                                loadDevices();
+                            });
                     }
+
+                    // If this press is from a device we don't know about yet, do a full refresh
+                    if (!devices.find(d => d.id === id)) {
+                        // flash unknown device to draw attention after refresh
+                        loadDevices();
+                    }
+
+                    // Update cached state
                     lastPressStates[id] = lastPressed;
                 }
             }
         })
         .catch(err => {/* ignore errors for polling */});
+}
+
+
+function updateDeviceRow(device) {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    const rows = Array.from(tbody.children);
+    const row = rows.find(r => r.dataset && r.dataset.deviceId === device.id);
+    if (!row) return;
+
+    // Update name
+    const nameSpan = row.querySelector('td:nth-child(1) span.text-sm');
+    if (nameSpan) nameSpan.textContent = device.name || '';
+
+    // Update battery cell (td:nth-child(3))
+    const batteryCell = row.children[2];
+    batteryCell.innerHTML = '';
+    if (device.battery_percent !== undefined && device.battery_percent !== null) {
+        const batteryWrap = document.createElement('div');
+        batteryWrap.className = 'flex items-center space-x-2 battery-tooltip';
+
+        let lastUpdatedText = 'Never';
+        if (device.battery_last_updated) {
+            const lastUpdate = new Date(device.battery_last_updated);
+            lastUpdatedText = lastUpdate.toLocaleString();
+        }
+
+        const tooltipContent = document.createElement('div');
+        tooltipContent.className = 'tooltip-content';
+        tooltipContent.innerHTML = `<div><strong>Voltage:</strong> ${device.battery_mv || 'N/A'} mV</div><div><strong>Updated:</strong> ${lastUpdatedText}</div>`;
+
+        const batteryIcon = document.createElement('i');
+        let iconClass, textColor;
+        if (device.battery_percent >= 60) {
+            iconClass = 'fa-battery-full';
+            textColor = 'text-green-600';
+        } else if (device.battery_percent >= 20) {
+            iconClass = 'fa-battery-half';
+            textColor = 'text-yellow-600';
+        } else {
+            iconClass = 'fa-battery-quarter';
+            textColor = 'text-red-600';
+        }
+        batteryIcon.className = `fas ${iconClass} ${textColor}`;
+
+        const batteryText = document.createElement('span');
+        batteryText.className = `text-sm font-medium ${textColor}`;
+        batteryText.textContent = `${device.battery_percent}%`;
+
+        batteryWrap.appendChild(batteryIcon);
+        batteryWrap.appendChild(batteryText);
+        batteryWrap.appendChild(tooltipContent);
+        batteryCell.appendChild(batteryWrap);
+    } else {
+        const naSpan = document.createElement('span');
+        naSpan.className = 'text-sm text-gray-400 flex items-center space-x-2';
+        naSpan.innerHTML = '<i class="fas fa-battery-empty text-gray-400"></i><span>N/A</span>';
+        batteryCell.appendChild(naSpan);
+    }
+
+    // Update status cell (td:nth-child(4))
+    const statusCell = row.children[3];
+    statusCell.innerHTML = '';
+    const statusSpan = document.createElement('span');
+    if (device.configured) {
+        statusSpan.className = 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center';
+        statusSpan.innerHTML = '<i class="fas fa-check-circle mr-1"></i> Configured';
+    } else {
+        statusSpan.className = 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 items-center';
+        statusSpan.innerHTML = '<i class="fas fa-circle mr-1"></i> Not Configured';
+    }
+    statusCell.appendChild(statusSpan);
+
+    // Update in-memory devices array
+    const idx = devices.findIndex(d => d.id === device.id);
+    if (idx > -1) devices[idx] = device;
+}
+
+// Copy/paste helpers
+function copyDeviceConfig(deviceId) {
+    const device = devices.find(d => d.id === deviceId);
+    if (!device || !device.config) {
+        showToast('Copy Failed', 'No configuration to copy for this device', 'warning');
+        return;
+    }
+
+    // For remote devices, don't copy whole remote - prefer copying per-button inside remote modal
+        if (device.device_type === 4 || (device.config && device.config.device_type === 'remote')) {
+        showToast('Copy Unavailable', 'Open the remote and copy an individual button', 'warning');
+        return;
+    }
+
+    clipboardConfig = {
+        room_id: device.config.room_id || null,
+        scenes: (device.config.scenes || []).slice()
+    };
+    showToast('Copied', 'Room and scenes copied to clipboard', 'success');
+}
+
+    function openRemoteCopyMenu(deviceId, anchorEventOrElem) {
+        const device = devices.find(d => d.id === deviceId);
+        if (!device || !device.config || !device.config.buttons) return showToast('Copy Failed', 'Remote has no buttons', 'error');
+
+        let anchorX = 0, anchorY = 0, anchorRect = null;
+        if (anchorEventOrElem && anchorEventOrElem.clientX !== undefined) {
+            anchorX = anchorEventOrElem.clientX;
+            anchorY = anchorEventOrElem.clientY;
+        } else if (anchorEventOrElem && anchorEventOrElem.getBoundingClientRect) {
+            anchorRect = anchorEventOrElem.getBoundingClientRect();
+            anchorX = anchorRect.left + 10;
+            anchorY = anchorRect.bottom + 6;
+        }
+
+        const existing = document.getElementById('remote-copy-menu');
+        if (existing) existing.remove();
+
+        const menu = document.createElement('div');
+        menu.id = 'remote-copy-menu';
+        menu.style.position = 'fixed';
+        menu.style.left = (anchorX) + 'px';
+        menu.style.top = (anchorY) + 'px';
+        menu.style.zIndex = 2000;
+        menu.className = 'bg-white border rounded-md shadow-md p-2';
+
+        const title = document.createElement('div');
+        title.className = 'text-sm font-medium px-2 pb-1 text-gray-700';
+        title.textContent = `Copy from ${device.name}`;
+        menu.appendChild(title);
+
+        device.config.buttons.forEach((btn, idx) => {
+            const item = document.createElement('button');
+            item.className = 'block w-full text-left px-2 py-1 text-sm hover:bg-gray-100 rounded';
+            item.textContent = `Button ${idx+1} — ${getActionTypeLabel(btn.action_type || btn.action || 'normal')}`;
+            item.addEventListener('click', (e) => {
+                clipboardConfig = { room_id: btn.room_id || null, scenes: (btn.scenes || []).slice() };
+                showToast('Copied', `Button ${idx+1} copied`, 'success');
+                menu.remove();
+            });
+            menu.appendChild(item);
+        });
+
+        const cancel = document.createElement('button');
+        cancel.className = 'mt-2 block w-full text-left px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => menu.remove());
+        menu.appendChild(cancel);
+
+        document.body.appendChild(menu);
+
+        const hideOnClick = (ev) => {
+            if (!menu.contains(ev.target)) {
+                menu.remove();
+                document.removeEventListener('click', hideOnClick);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', hideOnClick), 10);
+    }
+
+function pasteConfigToModal() {
+    if (!clipboardConfig) {
+        showToast('Nothing to Paste', 'Clipboard is empty', 'warning');
+        return;
+    }
+
+    // Set room select and load scenes, then apply scenes after a short delay
+    const roomSelect = document.getElementById('room-select');
+    if (!roomSelect) return;
+
+    roomSelect.value = clipboardConfig.room_id || '';
+    loadScenesForRoom();
+
+    // Apply scenes after scenes are loaded (best-effort timing)
+    setTimeout(() => {
+        if (!clipboardConfig || !clipboardConfig.room_id) return;
+        const room = rooms.find(r => r.id === clipboardConfig.room_id);
+        if (!room || !room.scenes) return;
+
+        // Map scene ids to scene objects available for the room
+        selectedScenes = [];
+        clipboardConfig.scenes.forEach(sid => {
+            const sceneObj = room.scenes.find(s => s.id === sid);
+            if (sceneObj) selectedScenes.push(sceneObj);
+        });
+
+        renderSelectedScenes();
+        updateSceneCardStates();
+        showToast('Pasted', 'Scenes pasted into configuration', 'success');
+    }, 300);
+}
+
+function copyRemoteButtonConfig(buttonIndex) {
+    const btn = remoteConfig.buttons[buttonIndex];
+    if (!btn) return showToast('Copy Failed', 'Button not found', 'error');
+
+    clipboardConfig = {
+        room_id: btn.room_id || null,
+        scenes: (btn.scenes || []).slice()
+    };
+    showToast('Copied', `Button ${buttonIndex+1} scenes copied`, 'success');
+}
+
+function pasteToRemoteButton(index) {
+    if (!clipboardConfig) return showToast('Nothing to Paste', 'Clipboard is empty', 'warning');
+
+    remoteConfig.buttons[index].room_id = clipboardConfig.room_id || null;
+    // Set scenes from clipboard (will be filtered by loadRemoteRoomScenes)
+    remoteConfig.buttons[index].scenes = (clipboardConfig.scenes || []).slice();
+    renderRemoteButtonConfig(index);
+
+    // Reload room scenes so the available scene cards reflect the selected state
+    if (clipboardConfig.room_id) {
+        setTimeout(() => {
+            loadRemoteRoomScenes(clipboardConfig.room_id, index);
+            const validCount = remoteConfig.buttons[index].scenes ? remoteConfig.buttons[index].scenes.length : 0;
+            showToast('Pasted', `Pasted ${validCount} scene(s) to Button ${index+1}`, 'success');
+        }, 150);
+    }
 }
 
 function flashButtonRow(deviceId) {
@@ -942,6 +1191,41 @@ function filterScenes() {
     }
 }
 
+function filterRemoteScenes() {
+    const searchEl = document.getElementById('remote-search-scene');
+    const searchTerm = (searchEl ? searchEl.value : '').toLowerCase();
+    const sceneCards = document.querySelectorAll('.remote-scene-card');
+
+    sceneCards.forEach(card => {
+        const sceneName = card.dataset.sceneName || '';
+        if (sceneName.includes(searchTerm)) {
+            card.style.display = 'block';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    const container = document.getElementById('remote-available-scenes');
+    const sceneCardsList = Array.from(sceneCards);
+
+    if (sceneCardsList.length === 0) return;
+
+    const anyVisible = sceneCardsList.some(card => card.style.display !== 'none');
+    const existingMsg = container ? container.querySelector('#no-remote-scenes-found-msg') : null;
+
+    if (!anyVisible) {
+        if (container && !existingMsg) {
+            const msg = document.createElement('p');
+            msg.id = 'no-remote-scenes-found-msg';
+            msg.className = 'text-gray-400 text-center py-4 col-span-2';
+            msg.textContent = 'No scenes found';
+            container.appendChild(msg);
+        }
+    } else {
+        if (existingMsg) existingMsg.remove();
+    }
+}
+
 function toggleScene(scene) {
     const index = selectedScenes.findIndex(s => s.id === scene.id);
     if (index > -1) {
@@ -1202,7 +1486,7 @@ let remoteConfig = {
         { index: 0, action_type: 'toggle', room_id: '', scenes: [] },
         { index: 1, action_type: 'brightness_up', room_id: '', scenes: [] },
         { index: 2, action_type: 'brightness_down', room_id: '', scenes: [] },
-        { index: 3, action_type: 'normal', room_id: '', scenes: [] }
+        { index: 3, action_type: 'scene_cycle', room_id: '', scenes: [] }
     ]
 };
 
@@ -1217,7 +1501,7 @@ function openRemoteConfigModal(deviceId) {
             { index: 0, action_type: 'toggle', room_id: '', scenes: [] },
             { index: 1, action_type: 'brightness_up', room_id: '', scenes: [] },
             { index: 2, action_type: 'brightness_down', room_id: '', scenes: [] },
-            { index: 3, action_type: 'normal', room_id: '', scenes: [] }
+            { index: 3, action_type: 'scene_cycle', room_id: '', scenes: [] }
         ]
     };
     
@@ -1298,6 +1582,12 @@ function renderRemoteConfigTabs() {
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
         }`;
         tab.onclick = () => selectRemoteButton(i);
+        tab.draggable = true;
+        tab.dataset.index = i;
+        tab.ondragstart = handleRemoteTabDragStart;
+        tab.ondragover = handleRemoteTabDragOver;
+        tab.ondrop = handleRemoteTabDrop;
+        tab.ondragend = handleRemoteTabDragEnd;
         tab.innerHTML = `
             <i class="fas fa-circle mr-2"></i>
             Button ${i + 1}
@@ -1306,6 +1596,63 @@ function renderRemoteConfigTabs() {
         tabsContainer.appendChild(tab);
     }
 }
+
+// Drag & drop handlers for re-ordering remote buttons
+let remoteTabDragged = null;
+function handleRemoteTabDragStart(e) {
+    remoteTabDragged = this;
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', this.dataset.index); } catch (err) { /* some browsers require try/catch */ }
+    this.classList.add('opacity-50');
+}
+
+function handleRemoteTabDragOver(e) {
+    if (e.preventDefault) e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    return false;
+}
+
+function handleRemoteTabDrop(e) {
+    if (e.stopPropagation) e.stopPropagation();
+    e.preventDefault();
+
+    if (!remoteTabDragged || remoteTabDragged === this) return false;
+
+    const from = parseInt(remoteTabDragged.dataset.index, 10);
+    const to = parseInt(this.dataset.index, 10);
+
+    // Swap the two entries (replace hovered with dragged)
+    try {
+        const tmp = remoteConfig.buttons[from];
+        remoteConfig.buttons[from] = remoteConfig.buttons[to];
+        remoteConfig.buttons[to] = tmp;
+    } catch (err) {
+        console.error('Error swapping remote buttons:', err);
+    }
+
+    // Re-render tabs and select the target index (where replacement landed)
+    renderRemoteConfigTabs();
+    selectRemoteButton(to);
+
+    if (remoteTabDragged) remoteTabDragged.classList.remove('opacity-50');
+    remoteTabDragged = null;
+    return false;
+}
+
+function handleRemoteTabDragEnd(e) {
+    if (remoteTabDragged) {
+        remoteTabDragged.classList.remove('opacity-50');
+        remoteTabDragged = null;
+    }
+}
+
+// Ensure opacity is cleared if drag ends outside a valid drop target
+document.addEventListener('dragend', function () {
+    if (remoteTabDragged) {
+        remoteTabDragged.classList.remove('opacity-50');
+        remoteTabDragged = null;
+    }
+});
 
 function selectRemoteButton(index) {
     const button = remoteConfig.buttons[index];
@@ -1330,11 +1677,20 @@ function renderRemoteButtonConfig(index) {
     
     panelContainer.innerHTML = `
         <div class="space-y-6">
+            
             <!-- Action Type Selection -->
             <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">
-                    <i class="fas fa-bolt mr-2 text-yellow-500"></i>Action Type
-                </label>
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-medium text-gray-700">
+                        <i class="fas fa-bolt mr-2 text-yellow-500 pb-2"></i>Action Type
+                    </label>
+                    ${ (button.action_type === 'normal' || button.action_type === 'scene_cycle') ? `
+                    <div class="flex space-x-2">
+                        <button onclick="copyRemoteButtonConfig(${index})" title="Copy" class="inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-500 hover:text-gray-700 bg-white border border-gray-100"><i class="fas fa-copy"></i></button>
+                        <button onclick="pasteToRemoteButton(${index})" title="Paste" class="inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-500 hover:text-gray-700 bg-white border border-gray-100"><i class="fas fa-paste"></i></button>
+                    </div>
+                    ` : '' }
+                </div>
                 <div class="grid grid-cols-2 gap-3">
                     <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
                         button.action_type === 'normal' 
@@ -1346,8 +1702,23 @@ function renderRemoteButtonConfig(index) {
                             onchange="updateRemoteButtonActionType(${index}, 'normal')"
                             class="form-radio">
                         <span class="ml-2">
+                            <span class="block font-medium">Normal Button</span>
+                            <span class="text-xs text-gray-500">Click: cycle scenes with off<br>Hold: brightness</span>
+                        </span>
+                    </label>
+                    
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'scene_cycle' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="scene_cycle" 
+                            ${button.action_type === 'scene_cycle' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'scene_cycle')"
+                            class="form-radio">
+                        <span class="ml-2">
                             <span class="block font-medium">Scene Cycle</span>
-                            <span class="text-xs text-gray-500">Click: cycle scenes<br>Hold: brightness</span>
+                            <span class="text-xs text-gray-500">Click: cycle scenes only<br>Hold: brightness</span>
                         </span>
                     </label>
                     
@@ -1414,12 +1785,18 @@ function renderRemoteButtonConfig(index) {
                 </select>
             </div>
             
-            <!-- Scenes Selection (for normal action type) -->
-            ${button.action_type === 'normal' ? `
-                <div>
+            <!-- Scenes Selection (for normal or scene_cycle action types) - hidden until a room is selected -->
+            ${(button.action_type === 'normal' || button.action_type === 'scene_cycle') ? `
+                <div id="remote-scenes-block" class="${button.room_id ? '' : 'hidden'}">
                     <label class="block text-sm font-medium text-gray-700 mb-2">
                         <i class="fas fa-palette mr-2 text-purple-500"></i>Select Scenes (drag to reorder)
                     </label>
+                    <div class="relative mb-2 w-full">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                            <i class="fas fa-search text-gray-400"></i>
+                        </span>
+                        <input type="text" id="remote-search-scene" placeholder="Search scenes..." onkeyup="filterRemoteScenes()" class="w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 pl-10 focus:outline-none focus:ring-pink-500 focus:border-pink-500 w-full">
+                    </div>
                     <div id="remote-available-scenes" class="grid grid-cols-2 gap-3 mb-4 max-h-64 overflow-y-auto p-2 border border-gray-200 rounded-lg">
                         <!-- Available scenes will be loaded here -->
                     </div>
@@ -1432,7 +1809,7 @@ function renderRemoteButtonConfig(index) {
     `;
     
     // Load available scenes for this button's room if applicable
-    if (button.action_type === 'normal' && button.room_id) {
+    if ((button.action_type === 'normal' || button.action_type === 'scene_cycle') && button.room_id) {
         // Use setTimeout to ensure DOM is ready
         setTimeout(() => {
             loadRemoteRoomScenes(button.room_id, index);
@@ -1489,6 +1866,7 @@ function loadRemoteRoomScenes(roomId, buttonIndex) {
                 ? 'border-pink-500 bg-pink-50' 
                 : 'border-gray-200 bg-white'
         }`;
+            sceneCard.dataset.sceneName = scene.name.toLowerCase();
         sceneCard.id = `remote-scene-${scene.id}`;
         sceneCard.onclick = () => toggleRemoteScene(buttonIndex, scene.id);
         sceneCard.innerHTML = `
@@ -1500,6 +1878,9 @@ function loadRemoteRoomScenes(roomId, buttonIndex) {
         availableScenesDiv.appendChild(sceneCard);
     });
     
+    // Apply any active search filter
+    try { filterRemoteScenes(); } catch (e) { /* ignore */ }
+
     // Render selected scenes with drag handles
     renderRemoteSelectedScenes(buttonIndex);
 }
@@ -1563,8 +1944,8 @@ function renderRemoteSelectedScenes(buttonIndex) {
 
 function updateRemoteButtonActionType(index, actionType) {
     remoteConfig.buttons[index].action_type = actionType;
-    // Reset scenes when action type changes to non-normal
-    if (actionType !== 'normal') {
+    // Reset scenes when action type changes to a non-scene action
+    if (actionType !== 'normal' && actionType !== 'scene_cycle') {
         remoteConfig.buttons[index].scenes = [];
     }
     renderRemoteButtonConfig(index);
@@ -1583,6 +1964,7 @@ function updateRemoteButtonActionType(index, actionType) {
 function updateRemoteButtonRoom(index) {
     const roomSelect = document.getElementById('remote-room-select');
     const newRoomId = roomSelect.value;
+    console.log(`Updating room for button ${index} to ${newRoomId}`);
     
     // Only reset scenes if the room actually changed
     if (newRoomId !== remoteConfig.buttons[index].room_id) {
@@ -1591,8 +1973,16 @@ function updateRemoteButtonRoom(index) {
     }
     
     // Reload scenes for new room
+    if (!newRoomId) {
+        const scenesBlock = document.getElementById('remote-scenes-block');
+        if (scenesBlock) scenesBlock.classList.add('hidden');
+        return;
+    }
     if (newRoomId) {
         loadRemoteRoomScenes(newRoomId, index);
+        // Reveal scenes block if hidden
+        const scenesBlock = document.getElementById('remote-scenes-block');
+        if (scenesBlock) scenesBlock.classList.remove('hidden');
     }
 }
 
@@ -1644,6 +2034,7 @@ function toggleRemoteScene(buttonIndex, sceneId) {
                         ? 'border-pink-500 bg-pink-50' 
                         : 'border-gray-200 bg-white'
                 }`;
+                sceneCard.dataset.sceneName = scene.name.toLowerCase();
                 sceneCard.id = `remote-scene-${scene.id}`;
                 sceneCard.onclick = () => toggleRemoteScene(buttonIndex, scene.id);
                 sceneCard.innerHTML = `
@@ -1654,6 +2045,7 @@ function toggleRemoteScene(buttonIndex, sceneId) {
                 `;
                 availableScenesDiv.appendChild(sceneCard);
             });
+            try { filterRemoteScenes(); } catch (e) { /* ignore */ }
         }
     }
     
@@ -1679,6 +2071,7 @@ function removeRemoteScene(buttonIndex, sceneIndex) {
                         ? 'border-pink-500 bg-pink-50' 
                         : 'border-gray-200 bg-white'
                 }`;
+                sceneCard.dataset.sceneName = scene.name.toLowerCase();
                 sceneCard.id = `remote-scene-${scene.id}`;
                 sceneCard.onclick = () => toggleRemoteScene(buttonIndex, scene.id);
                 sceneCard.innerHTML = `
@@ -1689,6 +2082,7 @@ function removeRemoteScene(buttonIndex, sceneIndex) {
                 `;
                 availableScenesDiv.appendChild(sceneCard);
             });
+            try { filterRemoteScenes(); } catch (e) { /* ignore */ }
         }
     }
 }
@@ -1777,7 +2171,8 @@ function findSceneById(sceneId) {
 
 function getActionTypeLabel(actionType) {
     const labels = {
-        'normal': 'Scene Cycle',
+        'normal': 'Normal Button',
+        'scene_cycle': 'Scene Cycle',
         'toggle': 'Toggle On/Off',
         'brightness_up': 'Brightness Up',
         'brightness_down': 'Brightness Down'

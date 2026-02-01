@@ -87,7 +87,7 @@ bool ota_mode = false;
 // Double-tap detection
 unsigned long last_reset_press = 0;
 uint8_t reset_tap_count = 0;
-#define DOUBLE_TAP_WINDOW 500
+#define DOUBLE_TAP_WINDOW 1000
 
 esp_now_peer_info_t peerInfo;
 esp_adc_cal_characteristics_t adc_chars;

@@ -106,7 +106,7 @@ class AutomationEngine:
         config = button.get('config', {})
         
         # Handle remote button events (detected by presence of button_index)
-        if button_index is not None:
+        if button_index is not None and button_index >= 0:
             self._handle_remote_button_event(button_mac, button, button_index, action)
             return
         

@@ -100,7 +100,7 @@ volatile bool breathingUpdatePending = false;  // Flag for interrupt-safe LED up
 // Double-tap detection
 unsigned long last_reset_press = 0;
 uint8_t reset_tap_count = 0;
-#define DOUBLE_TAP_WINDOW 500
+#define DOUBLE_TAP_WINDOW 1000
 
 #if defined(ESP32)
   esp_now_peer_info_t peerInfo;

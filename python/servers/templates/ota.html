@@ -1011,7 +1011,7 @@ function showInfo(message) {
 </script>
 
 <script type="module">
-import { Transport, ESPLoader } from "https://unpkg.com/esptool-js@0.5.6/bundle.js";
+import { Transport, ESPLoader } from "/static/bundle.js";
 // Add these to your global variables
 let espLoader;
 let transport;
@@ -1084,7 +1084,7 @@ async function handleSerialFlash() {
             terminal: loaderTerminal
         });
 
-        // // Connect/Sync
+        // Connect/Sync
         const chip = await espLoader.main();
         logToTerminal(`Connected to ${chip}`);
 

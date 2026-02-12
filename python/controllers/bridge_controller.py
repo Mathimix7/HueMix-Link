@@ -50,7 +50,7 @@ class BridgeController:
     def verify_bridge(self, ip, timeout=5):
         """Verify that an IP address is a Hue bridge"""
         try:
-            result = requests.get(url=f"http://{ip}/api/newdeveloper", timeout=timeout).json()
+            result = requests.get(url=f"https://{ip}/api/newdeveloper", timeout=timeout).json()
             if result == [{"error":{"type":1,"address":"/","description":"unauthorized user"}}]:
                 return {
                     'success': True,
@@ -72,7 +72,7 @@ class BridgeController:
                 'devicetype': f'{app_name}#{device_name}'
             }
             
-            response = requests.post(f'http://{ip}/api', json=payload, timeout=timeout)
+            response = requests.post(f'https://{ip}/api', json=payload, timeout=timeout)
             
             if response.status_code == 200:
                 result = response.json()
@@ -125,7 +125,7 @@ class BridgeController:
             # Test connection to bridge
             try:
                 response = requests.get(
-                    f"http://{self.config['ip']}/api/{self.config['username']}/config",
+                    f"https://{self.config['ip']}/api/{self.config['username']}/config",
                     timeout=timeout
                 )
                 if response.status_code == 200:

@@ -1,0 +1,1352 @@
+{% extends "base.html" %}
+
+{% block title %}Motion Sensors - HueMix-Link{% endblock %}
+
+{% block content %}
+<style>
+.spinner {
+    border: 3px solid rgba(20, 184, 166, 0.3);
+    border-top: 3px solid #14b8a6;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+.skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: loading 1.5s ease-in-out infinite;
+    border-radius: 0.375rem;
+}
+@keyframes loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Flash animation for motion detection */
+.flash-motion {
+    animation: flash-motion-bg 0.7s cubic-bezier(0.4,0,0.2,1);
+}
+@keyframes flash-motion-bg {
+    0% { background-color: #e5e7eb; }
+    60% { background-color: #d1d5db; }
+    100% { background-color: transparent; }
+}
+
+/* Battery tooltip */
+.battery-tooltip {
+    position: relative;
+    display: inline-flex;
+}
+.battery-tooltip .tooltip-content {
+    visibility: hidden;
+    position: absolute;
+    z-index: 1000;
+    bottom: 125%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #1f2937;
+    color: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+}
+.battery-tooltip .tooltip-content::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #1f2937;
+}
+.battery-tooltip:hover .tooltip-content {
+    visibility: visible;
+    opacity: 1;
+}
+
+/* Cooldown slider with value tooltip */
+.cooldown-slider-container {
+    position: relative;
+}
+.cooldown-slider-tooltip {
+    position: absolute;
+    top: -35px;
+    background-color: #0d9488;
+    color: white;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    pointer-events: none;
+    white-space: nowrap;
+    transform: translateX(-50%);
+    transition: left 0.1s ease-out;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.cooldown-slider-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #0d9488;
+}
+</style>
+
+<!-- Toast Notification -->
+<div id="toast-notification" class="hidden fixed top-4 right-4 z-50 max-w-md">
+    <div id="toast-container" class="rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0">
+        <div class="flex-shrink-0">
+            <i id="toast-icon" class="fas fa-check-circle text-2xl text-green-600"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <p id="toast-title" class="text-sm font-semibold text-gray-900"></p>
+            <p id="toast-message" class="text-sm text-gray-700 mt-1"></p>
+        </div>
+        <button onclick="hideToast()" class="flex-shrink-0 inline-flex items-center text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-teal-600 to-teal-400 bg-clip-text text-transparent mb-1">
+                    Motion Sensor Configuration
+                </h1>
+                <p class="text-gray-600">Configure motion sensor devices with rooms and automation settings</p>
+            </div>
+            <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                <i class="fas fa-arrow-left mr-2"></i>Back to Home
+            </a>
+        </div>
+    </div>
+
+    <!-- Devices List -->
+    <div class="bg-white rounded-2xl shadow-lg p-6 mb-6">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xl font-semibold text-gray-800">
+                <i class="fas fa-running mr-2 text-teal-600"></i>Available Motion Sensors
+            </h2>
+            <button onclick="refreshDevices()" class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors">
+                <i id="refresh-icon" class="fas fa-sync-alt mr-2 transition-transform duration-500"></i>Refresh
+            </button>
+        </div>
+
+        <!-- Devices Table -->
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sensor Name</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">MAC Address</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Battery</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Light Level</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Enabled</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="devices-table-body" class="bg-white divide-y divide-gray-200">
+                    <!-- Devices will be loaded here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Rename Modal -->
+<div id="rename-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeRenameModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                    <i class="fas fa-edit mr-2 text-teal-600"></i>Rename Sensor
+                </h3>
+                <div class="mt-2">
+                    <label for="device-name" class="block text-sm font-medium text-gray-700">Sensor Name</label>
+                    <input type="text" id="device-name" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-teal-500 focus:border-teal-500">
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="saveDeviceName()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-teal-600 text-base font-medium text-white hover:bg-teal-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Save
+                </button>
+                <button type="button" onclick="closeRenameModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Configuration Modal -->
+<div id="config-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeConfigModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full max-h-[90vh] overflow-y-auto">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">
+                        <i class="fas fa-cog mr-2 text-teal-600"></i>Configure: <span id="config-device-name" class="text-teal-600"></span>
+                    </h3>
+                    <button onclick="closeConfigModal()" class="text-gray-400 hover:text-gray-500 p-2">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div id="config-content" class="space-y-6">
+                    <!-- Room Assignment -->
+                    <div class="border-b pb-6">
+                        <label class="block text-sm font-semibold text-gray-700 mb-3">
+                            <i class="fas fa-door-open mr-1 text-teal-600"></i>Room Assignment
+                        </label>
+                        <select id="room-select" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-teal-500 focus:border-teal-500">
+                            <option value="">-- Select a room --</option>
+                        </select>
+                    </div>
+
+                    <!-- Time Slots -->
+                    <div id="time-slots-section" class="border-b pb-6 hidden">
+                        <div class="flex justify-between items-center mb-3">
+                            <label class="block text-sm font-semibold text-gray-700">
+                                <i class="fas fa-clock mr-1 text-teal-600"></i>Time Slots
+                            </label>
+                            <button onclick="addTimeSlot()" class="px-3 py-1 bg-teal-600 text-white text-sm rounded-md hover:bg-teal-700 inline-flex items-center">
+                                <i class="fas fa-plus mr-1"></i>Add Slot
+                            </button>
+                        </div>
+                        <div id="time-slots-list" class="space-y-2">
+                            <p class="text-sm text-gray-500 italic">No time slots configured. Add a time slot to automate lighting based on time of day.</p>
+                        </div>
+                    </div>
+
+                    <!-- General Settings -->
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-3">
+                            <i class="fas fa-sliders-h mr-1 text-teal-600"></i>General Settings
+                        </label>
+                        
+                        <!-- Cooldown Period -->
+                        <div class="mb-6 bg-gradient-to-br from-teal-50 to-blue-50 rounded-lg p-4 border border-teal-200">
+                            <label class="text-sm font-semibold text-gray-800 mb-3 flex items-center">
+                                <i class="fas fa-clock mr-2 text-teal-600"></i>
+                                Cooldown Period Between Activations
+                            </label>
+                            <div class="flex items-center justify-between mb-3">
+                                <button type="button" onclick="adjustCooldown(-5)" class="w-10 h-10 flex items-center justify-center rounded-full bg-white border-2 border-teal-300 text-teal-600 hover:bg-teal-50 hover:border-teal-500 transition-all shadow-sm">
+                                    <i class="fas fa-minus"></i>
+                                </button>
+                                <div class="flex-1 mx-4">
+                                    <div class="relative cooldown-slider-container">
+                                        <div id="cooldown-slider-tooltip" class="cooldown-slider-tooltip" style="left: 50%;"><span id="cooldown-tooltip-value">60</span>s</div>
+                                        <input type="range" id="cooldown-input" min="5" max="60" value="30" step="5" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-600" oninput="updateCooldownDisplay()">
+                                        <div class="flex justify-between mt-1">
+                                            <span class="text-xs text-gray-400">5s</span>
+                                            <span class="text-xs text-gray-400">60s</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button type="button" onclick="adjustCooldown(5)" class="w-10 h-10 flex items-center justify-center rounded-full bg-white border-2 border-teal-300 text-teal-600 hover:bg-teal-50 hover:border-teal-500 transition-all shadow-sm">
+                                    <i class="fas fa-plus"></i>
+                                </button>
+                            </div>
+                            <p class="mt-3 text-xs text-gray-600 text-center">
+                                <i class="fas fa-battery-three-quarters mr-1 text-green-600"></i>
+                                Higher values preserve battery life
+                            </p>
+                        </div>
+
+                        <!-- Light Sensitivity -->
+                        <div class="bg-gradient-to-br from-yellow-50 to-purple-50 rounded-lg p-4 border border-yellow-200">
+                            <label class="text-sm font-semibold text-gray-800 mb-3 flex items-center">
+                                <i class="fas fa-lightbulb mr-2 text-yellow-600"></i>
+                                Light Sensitivity Threshold
+                            </label>
+                            <div class="flex items-center justify-center space-x-3">
+                                <div class="flex flex-col items-center">
+                                    <i class="fas fa-moon text-2xl text-indigo-500 mb-1"></i>
+                                    <span class="text-xs text-gray-600 font-medium">Dark</span>
+                                </div>
+                                <div class="flex space-x-1" id="light-sensitivity-picker">
+                                    <!-- Light level boxes will be generated here -->
+                                </div>
+                                <div class="flex flex-col items-center">
+                                    <i class="fas fa-sun text-2xl text-yellow-500 mb-1"></i>
+                                    <span class="text-xs text-gray-600 font-medium">Bright</span>
+                                </div>
+                            </div>
+                            <p class="mt-3 text-xs text-gray-600 text-center">
+                                <i class="fas fa-info-circle mr-1 text-blue-500"></i>
+                                Motion sensor only activates when light is below this level
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="saveConfiguration()" class="w-full inline-flex items-center justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-teal-600 text-base font-medium text-white hover:bg-teal-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    <i class="fas fa-save mr-2"></i>Save Configuration
+                </button>
+                <button type="button" onclick="closeConfigModal()" class="mt-3 w-full inline-flex items-center justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Time Slot Detail Modal -->
+<div id="timeslot-modal" class="hidden fixed z-[60] inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeTimeSlotModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">
+                        <i class="fas fa-clock mr-2 text-teal-600"></i><span id="timeslot-modal-title">Edit Time Slot</span>
+                    </h3>
+                    <button onclick="closeTimeSlotModal()" class="text-gray-400 hover:text-gray-500 p-2">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <!-- Start Time -->
+                    <div class="bg-teal-50 border border-teal-200 rounded-lg p-3">
+                        <label class="block text-sm font-medium text-teal-800 mb-1">
+                            <i class="fas fa-clock mr-1"></i>Start Time
+                        </label>
+                        <input type="time" id="slot-start-time" class="w-full border border-teal-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-teal-500 focus:border-teal-500">
+                        <p class="text-xs text-teal-700 mt-1">This slot ends when the next slot starts, or all day if it's the last slot</p>
+                    </div>
+
+                    <!-- Motion Detected Action -->
+                    <div class="bg-green-50 border border-green-200 rounded-lg p-3">
+                        <label class="block text-sm font-medium text-green-800 mb-1">
+                            <i class="fas fa-running mr-1"></i>When Motion Detected
+                        </label>
+                        <select id="slot-motion-action" class="w-full border border-green-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 mb-2">
+                            <option value="nothing">Do Nothing</option>
+                            <option value="scene" selected>Activate Scene</option>
+                        </select>
+                        
+                        <!-- Scene Selection (shown when action is scene) -->
+                        <div id="slot-scene-container" class="">
+                            <select id="slot-scene-select" class="w-full border border-green-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500">
+                                <option value="">-- Select a scene --</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- After Duration Section -->
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                        <label class="block text-sm font-medium text-blue-800 mb-2">
+                            <i class="fas fa-hourglass-half mr-1"></i>After Motion Stops
+                        </label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-blue-700 mb-1">Wait Duration</label>
+                                <div class="flex items-center space-x-2">
+                                    <input type="number" id="slot-after-duration" min="1" max="60" value="5" class="w-full border border-blue-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                    <span class="text-sm text-blue-700 whitespace-nowrap">min</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-blue-700 mb-1">Then Action</label>
+                                <select id="slot-after-action" class="w-full border border-blue-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="nothing">Do Nothing</option>
+                                    <option value="off" selected>Turn Off</option>
+                                    <option value="scene">Activate Scene</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="slot-after-scene-container" class="hidden mt-2">
+                            <select id="slot-after-scene-select" class="w-full border border-blue-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                <option value="">-- Select a scene --</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Do Not Disturb -->
+                    <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                        <label class="flex items-start cursor-pointer">
+                            <input type="checkbox" id="slot-dnd" class="mt-1 rounded border-purple-300 text-purple-600 shadow-sm focus:border-purple-300 focus:ring focus:ring-offset-0 focus:ring-purple-200 focus:ring-opacity-50">
+                            <span class="ml-2">
+                                <span class="block text-sm font-medium text-purple-800">
+                                    <i class="fas fa-moon mr-1"></i>Do Not Disturb
+                                </span>
+                                <span class="block text-xs text-purple-700 mt-1">Don't change lights if they are already on</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="saveTimeSlot()" class="w-full inline-flex justify-center items-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-teal-600 text-base font-medium text-white hover:bg-teal-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    <i class="fas fa-save mr-2"></i>Save
+                </button>
+                <button type="button" onclick="closeTimeSlotModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeDeleteModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="sm:flex sm:items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <i class="fas fa-exclamation-triangle text-red-600"></i>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">
+                            Delete Motion Sensor
+                        </h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500">
+                                Are you sure you want to delete "<span id="delete-device-name" class="font-semibold text-gray-900"></span>"? This action cannot be undone.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="confirmDelete()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Delete
+                </button>
+                <button type="button" onclick="closeDeleteModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Time Slot Confirmation Modal -->
+<div id="delete-timeslot-modal" class="hidden fixed z-[60] inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeDeleteTimeSlotModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="sm:flex sm:items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <i class="fas fa-exclamation-triangle text-red-600"></i>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">
+                            Delete Time Slot
+                        </h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500">
+                                Are you sure you want to delete this time slot? This action cannot be undone.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="confirmDeleteTimeSlot()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Delete
+                </button>
+                <button type="button" onclick="closeDeleteTimeSlotModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let devices = [];
+let rooms = [];
+let currentDeviceId = null;
+let deleteDeviceId = null;
+let deleteDeviceName = null;
+let deleteTimeSlotIndex = -1;
+let lastMotionStates = {};
+
+// Poll for motion sensor state changes
+function pollMotionStates() {
+    fetch('/motion-sensors/api/motion_states')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.motion_states) {
+                const motionStates = data.motion_states;
+                for (const [id, lastMotion] of Object.entries(motionStates)) {
+                    if (lastMotion && lastMotionStates[id] && lastMotionStates[id] !== lastMotion) {
+                        flashSensorRow(id);
+                        // Fetch updated sensor data
+                        fetch(`/motion-sensors/api/devices/${id}`)
+                            .then(resp => resp.json())
+                            .then(devData => {
+                                if (devData.success && devData.device) {
+                                    updateDeviceRow(devData.device);
+                                }
+                            })
+                            .catch(() => loadDevices());
+                    }
+                    if (!devices.find(d => d.id === id)) {
+                        loadDevices();
+                    }
+                    lastMotionStates[id] = lastMotion;
+                }
+            }
+        })
+        .catch(err => {});
+}
+
+function flashSensorRow(deviceId) {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    const row = Array.from(tbody.children).find(r => r.dataset && r.dataset.deviceId === deviceId);
+    if (row) {
+        row.classList.add('flash-motion');
+        setTimeout(() => row.classList.remove('flash-motion'), 700);
+    }
+}
+
+function updateDeviceRow(device) {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    const row = Array.from(tbody.children).find(r => r.dataset && r.dataset.deviceId === device.id);
+    if (!row) return;
+
+    // Update name
+    const nameDiv = row.querySelector('td:nth-child(1) .text-sm.font-medium');
+    if (nameDiv) nameDiv.textContent = device.name || 'Unnamed Sensor';
+
+    // Update battery cell
+    const batteryCell = row.children[2];
+    batteryCell.innerHTML = '';
+    if (device.battery_percent !== undefined && device.battery_percent !== null) {
+        const batteryWrap = document.createElement('div');
+        batteryWrap.className = 'flex items-center space-x-2 battery-tooltip';
+
+        const lastUpdated = device.battery_last_updated ? new Date(device.battery_last_updated).toLocaleString() : 'Never';
+        const tooltipContent = document.createElement('div');
+        tooltipContent.className = 'tooltip-content';
+        tooltipContent.innerHTML = `<div><strong>Voltage:</strong> ${device.battery_mv || 'N/A'} mV</div><div><strong>Updated:</strong> ${lastUpdated}</div>`;
+
+        const batteryIcon = document.createElement('i');
+        let iconClass, textColor;
+        if (device.battery_percent >= 60) {
+            iconClass = 'fa-battery-full';
+            textColor = 'text-green-600';
+        } else if (device.battery_percent >= 20) {
+            iconClass = 'fa-battery-half';
+            textColor = 'text-yellow-600';
+        } else {
+            iconClass = 'fa-battery-quarter';
+            textColor = 'text-red-600';
+        }
+        batteryIcon.className = `fas ${iconClass} ${textColor}`;
+
+        const batteryText = document.createElement('span');
+        batteryText.className = `text-sm font-medium ${textColor}`;
+        batteryText.textContent = `${device.battery_percent}%`;
+
+        batteryWrap.appendChild(batteryIcon);
+        batteryWrap.appendChild(batteryText);
+        batteryWrap.appendChild(tooltipContent);
+        batteryCell.appendChild(batteryWrap);
+    } else {
+        batteryCell.innerHTML = '<span class="text-sm text-gray-400 flex items-center space-x-2"><i class="fas fa-battery-empty text-gray-400"></i><span>N/A</span></span>';
+    }
+
+    // Update light level cell
+    const lightCell = row.children[3];
+    if (device.light_level !== undefined && device.light_level !== null) {
+        lightCell.innerHTML = `<span class="text-sm text-gray-600"><i class="fas fa-sun text-yellow-500 mr-1"></i>${device.light_level}/10</span>`;
+    } else {
+        lightCell.innerHTML = '<span class="text-sm text-gray-400">N/A</span>';
+    }
+
+    // Update status cell
+    const statusCell = row.children[4];
+    const config = device.config || {};
+    const isConfigured = config.room_id ? true : false;
+    statusCell.innerHTML = isConfigured ? 
+        '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center"><i class="fas fa-check-circle mr-1"></i> Configured</span>' :
+        '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 items-center"><i class="fas fa-circle mr-1"></i> Not Configured</span>';
+
+    const idx = devices.findIndex(d => d.id === device.id);
+    if (idx > -1) devices[idx] = device;
+}
+
+// Toast notification
+function showToast(title, message, type = 'success') {
+    const toast = document.getElementById('toast-notification');
+    const container = document.getElementById('toast-container');
+    const icon = document.getElementById('toast-icon');
+    const titleEl = document.getElementById('toast-title');
+    const messageEl = document.getElementById('toast-message');
+
+    const types = {
+        success: { bg: 'bg-green-50', border: 'border-green-500', icon: 'fa-check-circle', iconColor: 'text-green-600' },
+        error: { bg: 'bg-red-50', border: 'border-red-500', icon: 'fa-exclamation-circle', iconColor: 'text-red-600' },
+        warning: { bg: 'bg-yellow-50', border: 'border-yellow-500', icon: 'fa-exclamation-triangle', iconColor: 'text-yellow-600' },
+        info: { bg: 'bg-blue-50', border: 'border-blue-500', icon: 'fa-info-circle', iconColor: 'text-blue-600' }
+    };
+
+    const config = types[type] || types.success;
+    container.className = `rounded-lg shadow-2xl border-l-4 ${config.border} p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out ${config.bg}`;
+    icon.className = `fas ${config.icon} text-2xl ${config.iconColor}`;
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+
+    toast.classList.remove('hidden');
+    setTimeout(() => {
+        container.classList.remove('translate-x-full', 'opacity-0');
+    }, 10);
+
+    setTimeout(() => hideToast(), 5000);
+}
+
+function hideToast() {
+    const toast = document.getElementById('toast-notification');
+    const container = document.getElementById('toast-container');
+    container.classList.add('translate-x-full', 'opacity-0');
+    setTimeout(() => toast.classList.add('hidden'), 300);
+}
+
+// Load devices
+function refreshDevices() {
+    const icon = document.getElementById('refresh-icon');
+    icon.style.transform = 'rotate(360deg)';
+    setTimeout(() => {
+        icon.style.transform = '';
+    }, 500);
+    loadDevices();
+}
+
+function loadDevices() {
+    return fetch('/motion-sensors/api/devices')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                devices = data.devices;
+                renderDevicesTable();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading devices:', error);
+            showToast('Error', 'Failed to load motion sensors', 'error');
+        });
+}
+
+function renderDevicesTable() {
+    const tbody = document.getElementById('devices-table-body');
+    tbody.innerHTML = '';
+
+    if (devices.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="px-6 py-12 text-center text-gray-500">
+                    <p class="text-lg">No motion sensors found</p>
+                    <p class="text-sm mt-1">Motion sensors will appear here automatically once detected.</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    devices.forEach(device => {
+        const row = document.createElement('tr');
+        row.dataset.deviceId = device.id;
+        row.className = 'hover:bg-gray-50';
+
+        const config = device.config || {};
+        const enabled = config.enabled !== false;
+
+        // Name
+        const nameCell = document.createElement('td');
+        nameCell.className = 'px-6 py-4 whitespace-nowrap';
+        nameCell.innerHTML = `
+            <div class="flex items-center">
+                <div class="flex items-center">
+                    <i class="fas fa-running mr-2 text-teal-600 flex-shrink-0"></i>
+                </div>
+                <div class="text-sm font-medium text-gray-900">${device.name || 'Unnamed Sensor'}</div>
+            </div>
+        `;
+
+        // MAC Address
+        const macCell = document.createElement('td');
+        macCell.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-mono';
+        macCell.textContent = device.mac_address || 'N/A';
+
+        // Battery
+        const batteryCell = document.createElement('td');
+        batteryCell.className = 'px-6 py-4 whitespace-nowrap';
+        if (device.battery_percent !== undefined && device.battery_percent !== null) {
+            const lastUpdated = device.battery_last_updated ? new Date(device.battery_last_updated).toLocaleString() : 'Never';
+            let iconClass, textColor;
+            if (device.battery_percent >= 60) {
+                iconClass = 'fa-battery-full';
+                textColor = 'text-green-600';
+            } else if (device.battery_percent >= 20) {
+                iconClass = 'fa-battery-half';
+                textColor = 'text-yellow-600';
+            } else {
+                iconClass = 'fa-battery-quarter';
+                textColor = 'text-red-600';
+            }
+            batteryCell.innerHTML = `
+                <div class="flex items-center space-x-2 battery-tooltip">
+                    <i class="fas ${iconClass} ${textColor}"></i>
+                    <span class="text-sm font-medium ${textColor}">${device.battery_percent}%</span>
+                    <div class="tooltip-content">
+                        <div><strong>Voltage:</strong> ${device.battery_mv || 'N/A'} mV</div>
+                        <div><strong>Updated:</strong> ${lastUpdated}</div>
+                    </div>
+                </div>
+            `;
+        } else {
+            batteryCell.innerHTML = '<span class="text-sm text-gray-400 flex items-center space-x-2"><i class="fas fa-battery-empty text-gray-400"></i><span>N/A</span></span>';
+        }
+
+        // Light Level
+        const lightCell = document.createElement('td');
+        lightCell.className = 'px-6 py-4 whitespace-nowrap';
+        if (device.light_level !== undefined && device.light_level !== null) {
+            lightCell.innerHTML = `<span class="text-sm text-gray-600"><i class="fas fa-sun text-yellow-500 mr-1"></i>${device.light_level}/10</span>`;
+        } else {
+            lightCell.innerHTML = '<span class="text-sm text-gray-400">N/A</span>';
+        }
+
+        // Status
+        const statusCell = document.createElement('td');
+        statusCell.className = 'px-6 py-4 whitespace-nowrap';
+        const isConfigured = config.room_id ? true : false;
+        if (isConfigured) {
+            statusCell.innerHTML = '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center"><i class="fas fa-check-circle mr-1"></i> Configured</span>';
+        } else {
+            statusCell.innerHTML = '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 items-center"><i class="fas fa-circle mr-1"></i> Not Configured</span>';
+        }
+
+        // Enabled Toggle Switch
+        const enabledCell = document.createElement('td');
+        enabledCell.className = 'px-6 py-4 whitespace-nowrap';
+        const toggleId = `toggle-${device.id}`;
+        const toggleSwitch = document.createElement('label');
+        toggleSwitch.className = 'relative inline-flex items-center cursor-pointer';
+        toggleSwitch.innerHTML = `
+            <input type="checkbox" id="${toggleId}" ${enabled ? 'checked' : ''} class="sr-only peer" onchange="toggleSensorEnabled('${device.id}', this.checked)">
+            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-teal-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-600"></div>
+        `;
+        enabledCell.appendChild(toggleSwitch);
+
+        // Actions
+        const actionsCell = document.createElement('td');
+        actionsCell.className = 'px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2';
+        
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'text-teal-600 hover:text-teal-900 inline-flex items-center';
+        renameBtn.innerHTML = '<i class="fas fa-edit mr-1"></i> Rename';
+        renameBtn.addEventListener('click', () => openRenameModal(device.id, device.name || ''));
+        
+        const configBtn = document.createElement('button');
+        configBtn.className = 'text-green-600 hover:text-green-900 inline-flex items-center';
+        configBtn.innerHTML = '<i class="fas fa-cog mr-1"></i> Configure';
+        configBtn.addEventListener('click', () => openConfigModal(device.id));
+        
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'text-red-600 hover:text-red-900 inline-flex items-center';
+        deleteBtn.innerHTML = '<i class="fas fa-trash mr-1"></i> Delete';
+        deleteBtn.addEventListener('click', () => openDeleteModal(device.id, device.name || 'Unnamed Sensor'));
+        
+        actionsCell.appendChild(renameBtn);
+        actionsCell.appendChild(configBtn);
+        actionsCell.appendChild(deleteBtn);
+
+        row.appendChild(nameCell);
+        row.appendChild(macCell);
+        row.appendChild(batteryCell);
+        row.appendChild(lightCell);
+        row.appendChild(statusCell);
+        row.appendChild(enabledCell);
+        row.appendChild(actionsCell);
+        tbody.appendChild(row);
+    });
+}
+
+// Rename modal
+function openRenameModal(deviceId, currentName) {
+    currentDeviceId = deviceId;
+    document.getElementById('device-name').value = currentName;
+    document.getElementById('rename-modal').classList.remove('hidden');
+}
+
+function closeRenameModal() {
+    document.getElementById('rename-modal').classList.add('hidden');
+    currentDeviceId = null;
+}
+
+function saveDeviceName() {
+    const newName = document.getElementById('device-name').value.trim();
+    if (!newName) {
+        showToast('Error', 'Please enter a name', 'error');
+        return;
+    }
+
+    fetch(`/motion-sensors/api/devices/${currentDeviceId}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Success', 'Sensor renamed successfully', 'success');
+            loadDevices();
+            closeRenameModal();
+        } else {
+            showToast('Error', data.error || 'Failed to rename sensor', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error renaming:', error);
+        showToast('Error', 'Network error', 'error');
+    });
+}
+
+// Configuration modal
+let currentTimeSlots = [];
+let editingTimeSlotIndex = -1;
+let allScenes = [];
+
+function openConfigModal(deviceId) {
+    currentDeviceId = deviceId;
+    const device = devices.find(d => d.id === deviceId);
+    if (!device) return;
+
+    document.getElementById('config-device-name').textContent = device.name || 'Unnamed Sensor';
+    const config = device.config || {};
+
+    // Load rooms
+    fetch('/api/rooms')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.rooms) {
+                rooms = data.rooms;
+                const roomSelect = document.getElementById('room-select');
+                roomSelect.innerHTML = '<option value="">-- Select a room --</option>';
+                rooms.forEach(room => {
+                    const option = document.createElement('option');
+                    option.value = room.id;
+                    option.textContent = room.name;
+                    if (config.room_id === room.id) {
+                        option.selected = true;
+                        loadScenesForRoom(room.id);
+                    }
+                    roomSelect.appendChild(option);
+                });
+                
+                // Add change listener for room selection
+                let previousRoomId = config.room_id;
+                roomSelect.onchange = function() {
+                    const timeSlotsSection = document.getElementById('time-slots-section');
+                    if (this.value) {
+                        // Reset time slots if room changed
+                        if (this.value !== previousRoomId) {
+                            currentTimeSlots = [];
+                            renderTimeSlots();
+                            previousRoomId = this.value;
+                        }
+                        timeSlotsSection.classList.remove('hidden');
+                        loadScenesForRoom(this.value);
+                    } else {
+                        timeSlotsSection.classList.add('hidden');
+                        currentTimeSlots = [];
+                        renderTimeSlots();
+                        previousRoomId = null;
+                    }
+                };
+                
+                // Show time slots section if room is already selected
+                if (config.room_id) {
+                    document.getElementById('time-slots-section').classList.remove('hidden');
+                }
+            }
+        });
+
+    // Load time slots
+    currentTimeSlots = config.time_slots || [];
+    renderTimeSlots();
+
+    // Load settings
+    document.getElementById('cooldown-input').value = config.cooldown_seconds || 30;
+    updateCooldownDisplay();
+    
+    // Initialize light sensitivity picker
+    initializeLightSensitivityPicker();
+    const lightLevel = config.light_sensitivity !== undefined ? config.light_sensitivity : 5;
+    setLightSensitivity(lightLevel);
+    
+    document.getElementById('config-modal').classList.remove('hidden');
+}
+
+function updateCooldownDisplay() {
+    const input = document.getElementById('cooldown-input');
+    const value = parseInt(input.value) || 30;
+    const tooltip = document.getElementById('cooldown-slider-tooltip');
+    const tooltipValue = document.getElementById('cooldown-tooltip-value');
+    
+    // Update tooltip value
+    tooltipValue.textContent = value;
+    
+    // Calculate tooltip position based on slider value
+    const min = parseInt(input.min) || 5;
+    const max = parseInt(input.max) || 60;
+    const percentage = ((value - min) / (max - min));
+    
+    // Adjust for range slider thumb positioning (accounts for thumb width at edges)
+    // Range sliders have thumb centered, so we need to scale from ~5% to ~95% instead of 0% to 100%
+    const adjustedPercentage = 1 + (percentage * 98);
+    tooltip.style.left = `${adjustedPercentage}%`;
+}
+
+function adjustCooldown(delta) {
+    const input = document.getElementById('cooldown-input');
+    let value = parseInt(input.value) || 30;
+    value = Math.max(5, Math.min(60, value + delta));
+    input.value = value;
+    updateCooldownDisplay();
+}
+
+function initializeLightSensitivityPicker() {
+    const container = document.getElementById('light-sensitivity-picker');
+    container.innerHTML = '';
+    
+    for (let i = 0; i <= 10; i++) {
+        const box = document.createElement('button');
+        box.type = 'button';
+        box.className = 'w-8 h-12 border-2 border-gray-300 rounded-md hover:border-yellow-400 hover:bg-yellow-50 transition-all cursor-pointer flex items-center justify-center';
+        box.dataset.level = i;
+        box.onclick = () => setLightSensitivity(i);
+        
+        const label = document.createElement('span');
+        label.className = 'text-xs font-medium text-gray-500';
+        label.textContent = i;
+        box.appendChild(label);
+        
+        container.appendChild(box);
+    }
+}
+
+function setLightSensitivity(level) {
+    const boxes = document.querySelectorAll('#light-sensitivity-picker button');
+    boxes.forEach(box => {
+        const boxLevel = parseInt(box.dataset.level);
+        if (boxLevel === level) {
+            box.className = 'w-8 h-12 border-2 border-yellow-500 bg-yellow-100 rounded-md shadow-md transition-all cursor-pointer flex items-center justify-center';
+            box.querySelector('span').className = 'text-xs font-bold text-yellow-700';
+        } else {
+            box.className = 'w-8 h-12 border-2 border-gray-300 rounded-md hover:border-yellow-400 hover:bg-yellow-50 transition-all cursor-pointer flex items-center justify-center';
+            box.querySelector('span').className = 'text-xs font-medium text-gray-500';
+        }
+    });
+}
+
+function getLightSensitivity() {
+    const selected = document.querySelector('#light-sensitivity-picker button.border-yellow-500');
+    return selected ? parseInt(selected.dataset.level) : 5;
+}
+
+function loadScenesForRoom(roomId) {
+    if (!roomId) {
+        allScenes = [];
+        return;
+    }
+    fetch(`/api/rooms/${roomId}/scenes`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.scenes) {
+                allScenes = data.scenes;
+            }
+        })
+        .catch(err => {
+            console.error('Error loading scenes:', err);
+            allScenes = [];
+        });
+}
+
+function renderTimeSlots() {
+    const container = document.getElementById('time-slots-list');
+    if (currentTimeSlots.length === 0) {
+        container.innerHTML = '<p class="text-sm text-gray-500 italic">No time slots configured. Add a time slot to automate lighting based on time of day.</p>';
+        return;
+    }
+    
+    // Sort time slots by start time
+    currentTimeSlots.sort((a, b) => (a.start_time || '00:00').localeCompare(b.start_time || '00:00'));
+    
+    container.innerHTML = '';
+    currentTimeSlots.forEach((slot, index) => {
+        const slotDiv = document.createElement('div');
+        slotDiv.className = 'border border-gray-200 rounded-lg p-3 hover:bg-gray-50 cursor-pointer transition-colors';
+        slotDiv.onclick = () => editTimeSlot(index);
+        
+        // Calculate end time as 1 minute before next slot's start time (with wrapping)
+        let endTime;
+        if (currentTimeSlots.length === 1) {
+            // If only one slot, it runs all day
+            endTime = 'All Day';
+        } else {
+            const nextIndex = (index + 1) % currentTimeSlots.length;
+            const nextStartTime = currentTimeSlots[nextIndex].start_time;
+            endTime = subtractOneMinute(nextStartTime);
+        }
+        
+        const motionAction = slot.motion_action === 'scene' ? (slot.scene_name || 'Scene') : 'Do Nothing';
+        const afterAction = slot.after_action === 'off' ? 'Turn Off' : (slot.after_action === 'scene' ? (slot.after_scene_name || 'Scene') : 'Do Nothing');
+        const dndBadge = slot.do_not_disturb ? '<span class="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded"><i class="fas fa-moon mr-1"></i>DND</span>' : '';
+        const durationMinutes = slot.after_duration || 5;
+        
+        slotDiv.innerHTML = `
+            <div class="flex justify-between items-center">
+                <div class="flex-1">
+                    <div class="flex items-center space-x-2">
+                        <i class="fas fa-clock text-teal-600"></i>
+                        <span class="font-medium text-gray-900">${slot.start_time} - ${endTime}</span>
+                        ${dndBadge}
+                    </div>
+                    <div class="text-sm text-gray-600 mt-1">
+                        <i class="fas fa-running text-xs mr-1"></i>Motion → ${motionAction}
+                    </div>
+                    <div class="text-sm text-gray-600">
+                        <i class="fas fa-hourglass-half text-xs mr-1"></i>After ${durationMinutes}min → ${afterAction}
+                    </div>
+                </div>
+                <button onclick="deleteTimeSlot(${index}); event.stopPropagation();" class="text-red-600 hover:text-red-800 p-1 inline-flex items-center">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+        `;
+        container.appendChild(slotDiv);
+    });
+}
+
+function subtractOneMinute(timeStr) {
+    // Parse time string HH:MM
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    
+    // Convert to total minutes
+    let totalMinutes = hours * 60 + minutes;
+    
+    // Subtract 1 minute
+    totalMinutes -= 1;
+    
+    // Handle wrapping (if it goes negative, wrap to end of day)
+    if (totalMinutes < 0) {
+        totalMinutes = 24 * 60 - 1; // 23:59
+    }
+    
+    // Convert back to hours and minutes
+    const newHours = Math.floor(totalMinutes / 60);
+    const newMinutes = totalMinutes % 60;
+    
+    // Format as HH:MM
+    return `${String(newHours).padStart(2, '0')}:${String(newMinutes).padStart(2, '0')}`;
+}
+
+function addTimeSlot() {
+    editingTimeSlotIndex = -1;
+    document.getElementById('timeslot-modal-title').textContent = 'Add Time Slot';
+    
+    // Reset form
+    document.getElementById('slot-start-time').value = '00:00';
+    document.getElementById('slot-motion-action').value = 'scene';
+    document.getElementById('slot-scene-select').value = '';
+    document.getElementById('slot-after-duration').value = '5';
+    document.getElementById('slot-after-action').value = 'off';
+    document.getElementById('slot-after-scene-select').value = '';
+    document.getElementById('slot-dnd').checked = false;
+    
+    loadTimeSlotScenes();
+    updateTimeSlotActionVisibility();
+    
+    document.getElementById('timeslot-modal').classList.remove('hidden');
+}
+
+function editTimeSlot(index) {
+    editingTimeSlotIndex = index;
+    const slot = currentTimeSlots[index];
+    document.getElementById('timeslot-modal-title').textContent = 'Edit Time Slot';
+    
+    // Load scenes first, then set values after scenes are loaded
+    loadTimeSlotScenes().then(() => {
+        // Set form values after scenes are loaded
+        document.getElementById('slot-start-time').value = slot.start_time || '00:00';
+        document.getElementById('slot-motion-action').value = slot.motion_action || 'scene';
+        document.getElementById('slot-scene-select').value = slot.scene_id || '';
+        document.getElementById('slot-after-duration').value = slot.after_duration || 5;
+        document.getElementById('slot-after-action').value = slot.after_action || 'off';
+        document.getElementById('slot-after-scene-select').value = slot.after_scene_id || '';
+        document.getElementById('slot-dnd').checked = slot.do_not_disturb || false;
+        
+        // Update visibility after all values are set
+        updateTimeSlotActionVisibility();
+    });
+    
+    document.getElementById('timeslot-modal').classList.remove('hidden');
+}
+
+function deleteTimeSlot(index) {
+    deleteTimeSlotIndex = index;
+    document.getElementById('delete-timeslot-modal').classList.remove('hidden');
+}
+
+function confirmDeleteTimeSlot() {
+    if (deleteTimeSlotIndex >= 0) {
+        currentTimeSlots.splice(deleteTimeSlotIndex, 1);
+        renderTimeSlots();
+        deleteTimeSlotIndex = -1;
+    }
+    closeDeleteTimeSlotModal();
+}
+
+function closeDeleteTimeSlotModal() {
+    document.getElementById('delete-timeslot-modal').classList.add('hidden');
+    deleteTimeSlotIndex = -1;
+}
+
+function loadTimeSlotScenes() {
+    return new Promise((resolve) => {
+        const sceneSelect = document.getElementById('slot-scene-select');
+        const afterSceneSelect = document.getElementById('slot-after-scene-select');
+        
+        sceneSelect.innerHTML = '<option value="">-- Select a scene --</option>';
+        afterSceneSelect.innerHTML = '<option value="">-- Select a scene --</option>';
+        
+        allScenes.forEach(scene => {
+            const option1 = document.createElement('option');
+            option1.value = scene.id;
+            option1.textContent = scene.name;
+            sceneSelect.appendChild(option1);
+            
+            const option2 = document.createElement('option');
+            option2.value = scene.id;
+            option2.textContent = scene.name;
+            afterSceneSelect.appendChild(option2);
+        });
+        
+        resolve();
+    });
+}
+
+function updateTimeSlotActionVisibility() {
+    const motionAction = document.getElementById('slot-motion-action').value;
+    const afterAction = document.getElementById('slot-after-action').value;
+    
+    document.getElementById('slot-scene-container').style.display = motionAction === 'scene' ? 'block' : 'none';
+    document.getElementById('slot-after-scene-container').style.display = afterAction === 'scene' ? 'block' : 'none';
+}
+
+// Add event listeners for action dropdowns
+document.addEventListener('DOMContentLoaded', () => {
+    const motionActionSelect = document.getElementById('slot-motion-action');
+    const afterActionSelect = document.getElementById('slot-after-action');
+    if (motionActionSelect) motionActionSelect.onchange = updateTimeSlotActionVisibility;
+    if (afterActionSelect) afterActionSelect.onchange = updateTimeSlotActionVisibility;
+});
+
+function saveTimeSlot() {
+    const motionAction = document.getElementById('slot-motion-action').value;
+    const afterAction = document.getElementById('slot-after-action').value;
+    
+    const timeSlot = {
+        start_time: document.getElementById('slot-start-time').value,
+        motion_action: motionAction,
+        after_duration: parseInt(document.getElementById('slot-after-duration').value) || 5,
+        after_action: afterAction,
+        do_not_disturb: document.getElementById('slot-dnd').checked
+    };
+    
+    // Only include scene_id and scene_name if motion_action is 'scene'
+    if (motionAction === 'scene') {
+        timeSlot.scene_id = document.getElementById('slot-scene-select').value;
+        const selectedOption = document.getElementById('slot-scene-select').selectedOptions[0];
+        if (selectedOption && selectedOption.value) {
+            timeSlot.scene_name = selectedOption.textContent;
+        } else {
+            timeSlot.scene_id = '';
+            timeSlot.scene_name = '';
+        }
+    } else {
+        timeSlot.scene_id = '';
+        timeSlot.scene_name = '';
+    }
+    
+    // Only include after_scene_id and after_scene_name if after_action is 'scene'
+    if (afterAction === 'scene') {
+        timeSlot.after_scene_id = document.getElementById('slot-after-scene-select').value;
+        const selectedAfterOption = document.getElementById('slot-after-scene-select').selectedOptions[0];
+        if (selectedAfterOption && selectedAfterOption.value) {
+            timeSlot.after_scene_name = selectedAfterOption.textContent;
+        } else {
+            timeSlot.after_scene_id = '';
+            timeSlot.after_scene_name = '';
+        }
+    } else {
+        timeSlot.after_scene_id = '';
+        timeSlot.after_scene_name = '';
+    }
+    
+    if (!timeSlot.start_time) {
+        showToast('Error', 'Please set a start time', 'error');
+        return;
+    }
+    
+    if (editingTimeSlotIndex >= 0) {
+        currentTimeSlots[editingTimeSlotIndex] = timeSlot;
+    } else {
+        currentTimeSlots.push(timeSlot);
+    }
+    
+    renderTimeSlots();
+    closeTimeSlotModal();
+}
+
+function closeTimeSlotModal() {
+    document.getElementById('timeslot-modal').classList.add('hidden');
+    editingTimeSlotIndex = -1;
+}
+
+function closeConfigModal() {
+    document.getElementById('config-modal').classList.add('hidden');
+    currentDeviceId = null;
+    currentTimeSlots = [];
+    allScenes = [];
+}
+
+function saveConfiguration() {
+    const roomId = document.getElementById('room-select').value;
+    const cooldown = parseInt(document.getElementById('cooldown-input').value) || 60;
+    const lightSensitivity = getLightSensitivity();
+
+    fetch('/motion-sensors/api/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            device_id: currentDeviceId,
+            room_id: roomId || null,
+            cooldown_seconds: cooldown,
+            light_sensitivity: lightSensitivity,
+            time_slots: currentTimeSlots
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Success', 'Configuration saved successfully', 'success');
+            loadDevices();
+            closeConfigModal();
+        } else {
+            showToast('Error', data.error || 'Failed to save configuration', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error saving config:', error);
+        showToast('Error', 'Network error', 'error');
+    });
+}
+
+function toggleSensorEnabled(deviceId, enabled) {
+    fetch(`/motion-sensors/api/${deviceId}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: enabled })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Success', `Sensor ${enabled ? 'enabled' : 'disabled'}`, 'success');
+            // Update local device state
+            const device = devices.find(d => d.id === deviceId);
+            if (device) {
+                if (!device.config) device.config = {};
+                device.config.enabled = enabled;
+            }
+        } else {
+            showToast('Error', data.error || 'Failed to toggle sensor', 'error');
+            // Revert toggle
+            document.getElementById(`toggle-${deviceId}`).checked = !enabled;
+        }
+    })
+    .catch(error => {
+        console.error('Error toggling sensor:', error);
+        showToast('Error', 'Network error', 'error');
+        // Revert toggle
+        document.getElementById(`toggle-${deviceId}`).checked = !enabled;
+    });
+}
+
+// Delete modal
+function openDeleteModal(deviceId, deviceName) {
+    deleteDeviceId = deviceId;
+    deleteDeviceName = deviceName;
+    document.getElementById('delete-device-name').textContent = deviceName;
+    document.getElementById('delete-modal').classList.remove('hidden');
+}
+
+function closeDeleteModal() {
+    document.getElementById('delete-modal').classList.add('hidden');
+    deleteDeviceId = null;
+    deleteDeviceName = null;
+}
+
+function confirmDelete() {
+    fetch(`/motion-sensors/api/devices/${deleteDeviceId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Success', 'Motion sensor deleted successfully', 'success');
+            loadDevices();
+            closeDeleteModal();
+        } else {
+            showToast('Error', data.error || 'Failed to delete sensor', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error deleting:', error);
+        showToast('Error', 'Network error', 'error');
+    });
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', function() {
+    loadDevices();
+    setInterval(pollMotionStates, 2000); // Poll every 2 seconds
+});
+</script>
+
+{% endblock %}

@@ -629,7 +629,8 @@ def get_pairing_devices():
             1: 'Gateway',
             2: 'Button',
             3: 'Light',
-            4: 'Remote'
+            4: 'Remote',
+            5: 'Motion Sensor'
         }
         
         for device in paired_devices:

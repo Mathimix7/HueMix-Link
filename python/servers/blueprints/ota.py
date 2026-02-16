@@ -13,7 +13,7 @@ import json
 from werkzeug.utils import secure_filename
 from services.ota_manager import ota_manager
 from network.device_manager import device_manager
-from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, GITHUB_OWNER, GITHUB_REPO
+from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, GITHUB_OWNER, GITHUB_REPO
 from network.network_server import network_server
 from services.config_manager import config_manager
 from dotenv import load_dotenv
@@ -48,7 +48,8 @@ DEVICE_TYPE_NAMES = {
     DEV_GATEWAY: 'gateway',
     DEV_BUTTON: 'button',
     DEV_LIGHT: 'lightstrip',
-    DEV_REMOTE: 'remote'
+    DEV_REMOTE: 'remote',
+    DEV_MOTION: 'motion_sensor'
 }
 
 # Extended mapping for gateway subtypes (net vs radio) and button/remote/lightstrip platforms (ESP32 vs ESP8266)

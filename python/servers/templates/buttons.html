@@ -27,7 +27,9 @@
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
 }
-
+.rotate-360 {
+    transform: rotate(360deg);
+}
 /* Flash animation for button press */
 .flash-press {
     animation: flash-press-bg 0.7s cubic-bezier(0.4,0,0.2,1);
@@ -948,11 +950,10 @@ function refreshDevices() {
     const refreshIcon = document.getElementById('refresh-icon');
     
     // Add spinning animation
-    let current = parseInt(refreshIcon.dataset.rot || '0', 10);
-    current += 360;
-    refreshIcon.dataset.rot = current;
-    refreshIcon.style.transform = `rotate(${current}deg)`;
-    
+    refreshIcon.classList.add('rotate-360');
+    setTimeout(() => {
+        refreshIcon.classList.remove('rotate-360');
+    }, 500);
     // Load devices
     loadDevices();
 }

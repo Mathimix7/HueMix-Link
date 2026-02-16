@@ -5,11 +5,7 @@
 {% block content %}
 <style>
 .rotate-360 {
-    animation: rotate360 0.5s linear;
-}
-@keyframes rotate360 {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    transform: rotate(360deg);
 }
 </style>
 <!-- Toast Notification -->
@@ -616,6 +612,9 @@ function compareVersions(v1, v2) {
 async function checkForUpdates() {
     const icon = document.getElementById('check-updates-icon');
     icon.classList.add('rotate-360');
+    setTimeout(() => {
+        icon.classList.remove('rotate-360');
+    }, 500);
     
     try {
         const response = await fetch('/api/ota/check');
@@ -637,10 +636,6 @@ async function checkForUpdates() {
     } catch (error) {
         console.error('Failed to check updates:', error);
         showError('Failed to check for updates');
-    } finally {
-        setTimeout(() => {
-            icon.classList.remove('rotate-360');
-        }, 500);
     }
 }
 

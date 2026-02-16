@@ -17,7 +17,7 @@ from services.data_manager import data_manager
 from constants import (
     FILE_OTA_SESSIONS, OTA_READY_TIMEOUT,
     OTA_POST_UPDATE_TIMEOUT, OTA_MAX_FIRMWARE_SIZE,
-    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE
+    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION
 )
 
 logger = logging.getLogger(__name__)

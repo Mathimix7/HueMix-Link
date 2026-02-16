@@ -7,7 +7,7 @@ import logging
 from typing import Optional, List, Dict
 from datetime import datetime
 from services.data_manager import data_manager
-from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS, DEV_BUTTON
+from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS, DEV_BUTTON
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -419,7 +419,122 @@ class DeviceManager:
         
         data_manager.update_json(FILE_BUTTONS, update_func)
         return self.get_button_by_mac(mac_address)
-
-
+    
+    # ===== Motion Sensor Management =====
+    
+    def get_motion_sensor_by_mac(self, mac_address: str) -> Optional[Dict]:
+        """Get motion sensor by MAC address.
+        
+        Args:
+            mac_address: Motion sensor MAC address (with colons)
+            
+        Returns:
+            Motion sensor dict or None if not found
+        """
+        sensors = data_manager.read_json(FILE_MOTION_SENSORS, default=[])
+        for sensor in sensors:
+            if sensor.get('mac_address', '').upper() == mac_address.upper():
+                return sensor
+        return None
+    
+    def get_all_motion_sensors(self) -> List[Dict]:
+        """Get all registered motion sensors.
+        
+        Returns:
+            List of motion sensor dicts
+        """
+        return data_manager.read_json(FILE_MOTION_SENSORS, default=[])
+    
+    def update_motion_sensor_tracking(self, sensor_mac: str, gateway_radio_mac: str, rssi: int, 
+                                     battery_mv: Optional[int] = None, light_level: Optional[int] = None,
+                                     version: Optional[str] = None, platform: Optional[str] = None):
+        """Update motion sensor tracking information.
+        
+        Args:
+            sensor_mac: Motion sensor MAC address
+            gateway_radio_mac: Gateway that received the signal
+            rssi: Signal strength
+            battery_mv: Battery voltage in millivolts (optional)
+            light_level: LDR light level reading (optional)
+            version: Firmware version (optional)
+            platform: Platform type 'esp32' or 'esp8266' (optional)
+        """
+        def update_func(sensors):
+            for sensor in sensors:
+                if sensor.get('mac_address', '').upper() == sensor_mac.upper():
+                    sensor['last_seen_gateway'] = gateway_radio_mac.upper()
+                    sensor['rssi'] = rssi
+                    sensor['last_seen'] = datetime.now().isoformat()
+                    
+                    # Update battery if provided
+                    if battery_mv is not None:
+                        sensor['battery_mv'] = battery_mv
+                        sensor['battery_percent'] = self._calculate_battery_percent(battery_mv)
+                        sensor['battery_last_updated'] = datetime.now().isoformat()
+                    
+                    # Update light level if provided
+                    if light_level is not None:
+                        sensor['light_level'] = light_level
+                        sensor['light_last_updated'] = datetime.now().isoformat()
+                    
+                    # Update version if provided
+                    if version:
+                        sensor['version'] = version
+                    
+                    # Update platform if provided
+                    if platform:
+                        sensor['platform'] = platform
+                    
+                    break
+            
+            return sensors
+        
+        data_manager.update_json(FILE_MOTION_SENSORS, update_func)
+    
+    def add_motion_sensor(self, mac_address: str, name: str) -> Optional[Dict]:
+        """Add new motion sensor to registry.
+        
+        Args:
+            mac_address: Motion sensor MAC address
+            name: Display name
+            
+        Returns:
+            Created motion sensor dict
+        """
+        def update_func(sensors):
+            # Check if already exists
+            for sensor in sensors:
+                if sensor.get('mac_address', '').upper() == mac_address.upper():
+                    return sensors  # Already exists
+            
+            # Create new entry
+            new_sensor = {
+                'id': uuid.uuid4().hex,
+                'name': name,
+                'mac_address': mac_address.upper(),
+                'configured': False,
+                'config': {
+                    'room_id': None,
+                    'cooldown_seconds': 60,
+                    'enabled': True
+                },
+                'last_seen_gateway': None,
+                'rssi': None,
+                'last_seen': None,
+                'last_motion': None,
+                'version': '0.0.0',
+                'platform': None,
+                'battery_mv': None,
+                'battery_percent': None,
+                'battery_last_updated': None,
+                'light_level': None,
+                'light_last_updated': None
+            }
+            sensors.append(new_sensor)
+            
+            return sensors
+        
+        data_manager.update_json(FILE_MOTION_SENSORS, update_func)
+        return self.get_motion_sensor_by_mac(mac_address)
 # Global singleton instance
 device_manager = DeviceManager()

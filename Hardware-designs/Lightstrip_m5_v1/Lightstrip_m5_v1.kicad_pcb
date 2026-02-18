@@ -2741,15 +2741,15 @@
 			(uuid "067f8838-4412-4f22-bfc8-017edff2020c")
 		)
 		(embedded_fonts no)
-		(model "${KICAD9_3DMODEL_DIR}/TerminalBlock.3dshapes/TerminalBlock_MaiXu_MX126-5.0-04P_1x04_P5.00mm.step"
+		(model "${KICAD9_3DMODEL_DIR}/TerminalBlock_Phoenix.3dshapes/TerminalBlock_Phoenix_MKDS-1,5-4_1x04_P5.00mm_Horizontal.step"
 			(offset
-				(xyz 0 0 0)
+				(xyz 15 0 0)
 			)
 			(scale
 				(xyz 1 1 1)
 			)
 			(rotate
-				(xyz 0 0 0)
+				(xyz -0 -0 -180)
 			)
 		)
 	)
@@ -3231,15 +3231,15 @@
 			(uuid "572e46d6-5a71-4e9f-873c-8f84e24ab730")
 		)
 		(embedded_fonts no)
-		(model "/Users/gmixich/OneDrive/github/HueMix-Link-V3/Hardware-designs/Lightstrip_m5_v1/components/74405042100/WE-LQSH_4020.step"
+		(model "${KIPRJMOD}/components/74405042100/WE-LQSH_4020.step"
 			(offset
-				(xyz 0 0 0)
+				(xyz 0 0 1)
 			)
 			(scale
 				(xyz 1 1 1)
 			)
 			(rotate
-				(xyz 0 0 0)
+				(xyz -0 -0 90)
 			)
 		)
 	)
@@ -4161,7 +4161,7 @@
 			(uuid "22d06de8-5a46-4365-b9b6-8c6cb823ffdd")
 		)
 		(embedded_fonts no)
-		(model "/Users/gmixich/OneDrive/github/HueMix-Link-V3/Hardware-designs/Lightstrip_m5_v1/components/PTS526_SM15_SMTR2_LFS/PTS526SK15SMTR2_LFS.stp"
+		(model "${KIPRJMOD}/components/PTS526_SM15_SMTR2_LFS/PTS526SK15SMTR2_LFS.stp"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -4570,7 +4570,7 @@
 			(uuid "bc0d2df6-7951-4c18-ad2c-35600d084169")
 		)
 		(embedded_fonts no)
-		(model "${KICAD9_3DMODEL_DIR}/TerminalBlock.3dshapes/TerminalBlock_MaiXu_MX126-5.0-02P_1x02_P5.00mm.step"
+		(model "${KICAD9_3DMODEL_DIR}/TerminalBlock_Phoenix.3dshapes/TerminalBlock_Phoenix_MKDS-1,5-2_1x02_P5.00mm_Horizontal.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -5100,7 +5100,7 @@
 			(uuid "862477a0-d6b4-49fd-91e8-0dccde69dec4")
 		)
 		(embedded_fonts no)
-		(model "/Users/gmixich/OneDrive/github/HueMix-Link-V3/Hardware-designs/Lightstrip_m5_v1/components/AO3400A/AO3400A.step"
+		(model "${KIPRJMOD}/components/AO3400A/AO3400A.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -6406,7 +6406,7 @@
 			(uuid "2cdfaae6-80e6-43b1-a513-9fda61db8859")
 		)
 		(embedded_fonts no)
-		(model "/Users/gmixich/OneDrive/github/HueMix-Link-V3/Hardware-designs/Lightstrip_m5_v1/components/TPS560430X3FDBVT/TPS560430X3FDBVT.step"
+		(model "${KIPRJMOD}/components/TPS560430X3FDBVT/TPS560430X3FDBVT.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -7120,6 +7120,17 @@
 			(uuid "3d6be6ee-fd0a-4e07-bea1-c19dd46406a7")
 		)
 		(embedded_fonts no)
+		(model "${KIPRJMOD}/components/PTS526_SM15_SMTR2_LFS/PTS526SK15SMTR2_LFS.stp"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 	)
 	(gr_poly
 		(pts

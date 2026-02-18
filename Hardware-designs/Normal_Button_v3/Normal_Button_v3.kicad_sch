@@ -4,6 +4,11 @@
 	(generator_version "9.0")
 	(uuid "f49bf5b5-755e-4fdf-b7e4-d77d153a13a5")
 	(paper "A4")
+	(title_block
+		(title "HueMix-Link Normal Button")
+		(date "2026-02-18")
+		(rev "3.0")
+	)
 	(lib_symbols
 		(symbol "Battery_Management:TP4057"
 			(exclude_from_sim no)

@@ -250,12 +250,7 @@
     "equivalence_files": []
   },
   "erc": {
-    "erc_exclusions": [
-      [
-        "lib_symbol_issues|2667000|787400|6925caa5-558f-4ab6-a2d3-7723ba7cac92|00000000-0000-0000-0000-000000000000|||",
-        ""
-      ]
-    ],
+    "erc_exclusions": [],
     "meta": {
       "version": 0
     },
@@ -520,7 +515,7 @@
       "plot": "",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "",
+      "step": "Gateway_v1.1.step",
       "svg": "",
       "vrml": "ESP_Now_Hue.wrl"
     },

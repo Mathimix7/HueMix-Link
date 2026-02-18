@@ -4,6 +4,11 @@
 	(generator_version "9.0")
 	(uuid "f49bf5b5-755e-4fdf-b7e4-d77d153a13a5")
 	(paper "A3")
+	(title_block
+		(title "HueMix-Link Gateway")
+		(date "2026-02-18")
+		(rev "1.1")
+	)
 	(lib_symbols
 		(symbol "Connector:USB_C_Receptacle_PowerOnly_6P"
 			(pin_names
@@ -3416,18 +3421,6 @@
 		(uuid "91b97ebc-9e75-4813-bd06-96755cc906d1")
 	)
 	(junction
-		(at 102.87 190.5)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "99b74909-451e-4bc1-be70-0c9b98cb20b0")
-	)
-	(junction
-		(at 99.06 80.01)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "aa3c847c-4793-466f-901c-84d6deb07dfb")
-	)
-	(junction
 		(at 220.98 105.41)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3535,6 +3528,16 @@
 	)
 	(wire
 		(pts
+			(xy 105.41 168.91) (xy 105.41 187.96)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1342e413-74ba-4d20-9562-be220eadfe83")
+	)
+	(wire
+		(pts
 			(xy 228.6 26.67) (xy 232.41 26.67)
 		)
 		(stroke
@@ -3552,16 +3555,6 @@
 			(type default)
 		)
 		(uuid "185db334-c133-4123-b486-10bd69e38b31")
-	)
-	(wire
-		(pts
-			(xy 99.06 80.01) (xy 119.38 80.01)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "1c6ab61a-8be5-4249-802a-541b1fd9f38e")
 	)
 	(wire
 		(pts
@@ -4145,7 +4138,7 @@
 	)
 	(wire
 		(pts
-			(xy 102.87 181.61) (xy 102.87 190.5)
+			(xy 102.87 173.99) (xy 102.87 190.5)
 		)
 		(stroke
 			(width 0)
@@ -4165,16 +4158,6 @@
 	)
 	(wire
 		(pts
-			(xy 99.06 69.85) (xy 99.06 72.39)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "8cbf91ad-def2-48f1-b5f5-bb401028ed02")
-	)
-	(wire
-		(pts
 			(xy 234.95 71.12) (xy 234.95 97.79)
 		)
 		(stroke
@@ -4185,7 +4168,7 @@
 	)
 	(wire
 		(pts
-			(xy 99.06 80.01) (xy 86.36 80.01)
+			(xy 86.36 80.01) (xy 119.38 80.01)
 		)
 		(stroke
 			(width 0)
@@ -4252,16 +4235,6 @@
 			(type default)
 		)
 		(uuid "9b7a9d34-148d-4164-80d0-50e961e9b9a5")
-	)
-	(wire
-		(pts
-			(xy 105.41 168.91) (xy 105.41 180.34)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "9b968984-aff7-4483-8b33-ecb84e91d527")
 	)
 	(wire
 		(pts
@@ -4948,75 +4921,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:R")
-		(at 105.41 184.15 180)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "07d210b0-7025-42f9-a87c-79eb2cd44aa9")
-		(property "Reference" "R14"
-			(at 107.95 182.8799 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "330"
-			(at 107.95 185.4199 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_1206_3216Metric_Pad1.30x1.75mm_HandSolder"
-			(at 107.188 184.15 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 105.41 184.15 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 105.41 184.15 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "4eb0f167-9a33-4b4c-9b45-6d0881a88d9b")
-		)
-		(pin "2"
-			(uuid "421c3b11-15ec-4b96-a452-ebc77f3478f5")
-		)
-		(instances
-			(project ""
-				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
-					(reference "R14")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "power:GND")
 		(at 125.73 193.04 0)
 		(unit 1)
@@ -5530,71 +5434,6 @@
 			(project ""
 				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
 					(reference "#PWR0131")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 102.87 198.12 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "17c685df-6158-42e5-aa23-f31cca75d14f")
-		(property "Reference" "#PWR0116"
-			(at 102.87 204.47 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "GND"
-			(at 102.87 203.2 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 102.87 198.12 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 102.87 198.12 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 102.87 198.12 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "eeb15e78-d7f4-490a-bbb5-0ef887987343")
-		)
-		(instances
-			(project ""
-				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
-					(reference "#PWR0116")
 					(unit 1)
 				)
 			)
@@ -8337,140 +8176,6 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 102.87 194.31 180)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "b31594ea-ff34-4f53-9faf-3ca71aa9f2c8")
-		(property "Reference" "R15"
-			(at 105.41 193.0399 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "1.8k"
-			(at 105.41 195.5799 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_1206_3216Metric_Pad1.30x1.75mm_HandSolder"
-			(at 104.648 194.31 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 102.87 194.31 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 102.87 194.31 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "f3926ba4-fef3-474e-ad38-4c0b3e0f9f39")
-		)
-		(pin "2"
-			(uuid "2fe347f0-bcf1-4c86-9656-c527efd2e146")
-		)
-		(instances
-			(project ""
-				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
-					(reference "R15")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:+3.3V")
-		(at 99.06 69.85 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "b96b8ed1-4f23-48a9-afce-31365e9a1093")
-		(property "Reference" "#PWR0120"
-			(at 99.06 73.66 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "+3.3V"
-			(at 99.06 64.77 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 99.06 69.85 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 99.06 69.85 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 99.06 69.85 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "7c76c49a-e0ca-4453-b30e-1fa127d31891")
-		)
-		(instances
-			(project ""
-				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
-					(reference "#PWR0120")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R")
 		(at 92.71 146.05 90)
 		(unit 1)
 		(exclude_from_sim no)
@@ -8730,74 +8435,6 @@
 			(project ""
 				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
 					(reference "#PWR0129")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R")
-		(at 99.06 76.2 180)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "c7c27195-8ffe-49a3-9107-a829e590b996")
-		(property "Reference" "R3"
-			(at 93.98 74.93 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "10k"
-			(at 93.98 77.47 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_1206_3216Metric_Pad1.30x1.75mm_HandSolder"
-			(at 100.838 76.2 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 99.06 76.2 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 99.06 76.2 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "4b71d4a5-446d-48b2-99b0-4a99f56c147b")
-		)
-		(pin "2"
-			(uuid "18f9530e-9a63-4bff-834d-1634a6249b44")
-		)
-		(instances
-			(project ""
-				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
-					(reference "R3")
 					(unit 1)
 				)
 			)
@@ -9600,75 +9237,6 @@
 			(project ""
 				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
 					(reference "JP1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R")
-		(at 102.87 177.8 180)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "f60a888c-4cfe-4536-8d9f-a6be989554fa")
-		(property "Reference" "R16"
-			(at 105.41 176.5299 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "1k"
-			(at 105.41 179.0699 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_1206_3216Metric_Pad1.30x1.75mm_HandSolder"
-			(at 104.648 177.8 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 102.87 177.8 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 102.87 177.8 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "308eb396-d4c2-4e07-bc87-677fa9257ea3")
-		)
-		(pin "2"
-			(uuid "35ce894a-6bda-4017-91ae-138191a6bed0")
-		)
-		(instances
-			(project ""
-				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
-					(reference "R16")
 					(unit 1)
 				)
 			)

@@ -79,7 +79,7 @@ Hardware-designs/**/fp-info-cache
 Hardware-designs/**/*.kicad_prl
 Hardware-designs/**/.kicad_prl
 Hardware-designs/**/production/**/backups/
-Hardware-designs/**/production/**/panel/
+Hardware-designs/**/panel/
 
 # KiCad local/editor swap files
 Hardware-designs/**/*.lck

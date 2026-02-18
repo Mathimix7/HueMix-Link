@@ -1,0 +1,6 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "MCP1700T_3302E_TT 3")(type "KiCad")(uri "${KIPRJMOD}/components/MCP1700T_3302E_TT 3")(options "")(descr ""))
+  (lib (name "USBC socket")(type "KiCad")(uri "${KIPRJMOD}/components/USBC socket")(options "")(descr ""))
+  (lib (name "LED_TRICOLOR")(type "KiCad")(uri "${KIPRJMOD}/components/LED_TRICOLOR")(options "")(descr ""))
+)

@@ -209,14 +209,13 @@ class ColorController:
     
     @staticmethod
     def lerp_color(c1: Tuple[int, int, int], c2: Tuple[int, int, int], fraction: float) -> Tuple[int, int, int]:
-        """Simple RGB linear interpolation."""
         r = int(c1[0] + (c2[0] - c1[0]) * fraction)
         g = int(c1[1] + (c2[1] - c1[1]) * fraction)
         b = int(c1[2] + (c2[2] - c1[2]) * fraction)
         return (r, g, b)
-    
+
     @staticmethod
-    def get_color_from_palette(palette: List[Tuple[int, int, int]], pos: float, distortion: float) -> Tuple[int, int, int]:
+    def get_color_from_palette(palette: List[Tuple[int, int, int]], pos: float) -> Tuple[int, int, int]:
         """Maps a 0.0-1.0 value to the palette, treating it as a circular loop."""
         pos = pos % 1.0
         n = len(palette)
@@ -224,16 +223,6 @@ class ColorController:
         index1 = int(float_index) % n
         index2 = (index1 + 1) % n
         fraction = float_index - int(float_index)
-
-        if distortion < 1.0:
-            # We use a power function to create a "steep" transition.
-            # As distortion approaches 0, the 'p' exponent grows, making the middle transition faster.
-            p = 1.0 / max(distortion, 0.01) 
-            if fraction < 0.5:
-                fraction = 0.5 * math.pow(2 * fraction, p)
-            else:
-                fraction = 1.0 - 0.5 * math.pow(2 * (1.0 - fraction), p)
-
         
         return ColorController.lerp_color(palette[index1], palette[index2], fraction)
     
@@ -270,10 +259,10 @@ class ColorController:
             t = i / num_leds
 
             pos = offset + (t * coverage)
-            wiggle = math.sin(t * math.pi * 2 + (numeric_seed * 1.5))
+            wiggle = math.sin(t * math.pi * 2 + (numeric_seed * 1.5)) * distortion
             pos += wiggle
             
-            color = ColorController.get_color_from_palette(sorted_palette, pos, distortion)
+            color = ColorController.get_color_from_palette(sorted_palette, pos)
             strip.append(color)
             
         return strip

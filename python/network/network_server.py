@@ -980,26 +980,38 @@ class NetworkServer:
             
             if should_pair:
                 self._send_pair_confirm(remote_mac, sender_ip)
-                device_manager.add_button(remote_mac, f"Remote {remote_mac[-8:]}", device_type=DEV_REMOTE)
+                button_count = hello_data.get('button_count', 4)
+                device_name = f"Remote {remote_mac[-8:]}"
                 
-                # Update with version, platform, and RSSI from this HELLO packet
+                device_manager.add_button(remote_mac, device_name, device_type=DEV_REMOTE, button_count=button_count)
+                
+                # Update with version, platform, button_count, and RSSI from this HELLO packet
                 if gateway_radio_mac:
-                    device_manager.update_button_tracking(remote_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
+                    device_manager.update_button_tracking(remote_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'), button_count=button_count)
                 
                 if pairing_mode_active:
-                    logger.info(f"🎮 Paired remote via pairing mode: {remote_mac}")
-                    pairing_manager.record_device_paired(remote_mac, DEV_REMOTE, f"Remote {remote_mac[-8:]}", 'long_range')
+                    logger.info(f"🎮 Paired remote via pairing mode: {remote_mac} ({button_count} button{'s' if button_count != 1 else ''})")
+                    pairing_manager.record_device_paired(remote_mac, DEV_REMOTE, device_name, 'long_range')
                 else:
-                    logger.info(f"🎮 Auto-paired remote (RSSI: {rssi} dBm): {remote_mac}")
-                    pairing_manager.record_device_paired(remote_mac, DEV_REMOTE, f"Remote {remote_mac[-8:]}", 'short_range')
+                    logger.info(f"🎮 Auto-paired remote (RSSI: {rssi} dBm): {remote_mac} ({button_count} button{'s' if button_count != 1 else ''})")
+                    pairing_manager.record_device_paired(remote_mac, DEV_REMOTE, device_name, 'short_range')
             else:
                 logger.warning(f"Remote {remote_mac} RSSI too weak for auto-pairing: {rssi} dBm (use pairing mode to pair anyway)")
         else:
             # Paired remote - update tracking
-            if gateway_radio_mac:
-                device_manager.update_button_tracking(remote_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
+            button_count = hello_data.get('button_count', 4)
             
-            logger.debug(f"Remote {remote_mac} online (RSSI: {rssi} dBm)")
+            # Check if button count changed
+            current_device = device_manager.get_button_by_mac(remote_mac)
+            if current_device:
+                current_button_count = current_device.get('button_count')
+                if current_button_count != button_count:
+                    logger.info(f"🎮 Remote {remote_mac} button count changed from {current_button_count} to {button_count}")
+            
+            if gateway_radio_mac:
+                device_manager.update_button_tracking(remote_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'), button_count=button_count)
+            
+            logger.debug(f"Remote {remote_mac} online (RSSI: {rssi} dBm, buttons: {button_count})")
     
     def _handle_button_event(self, button_mac: str, payload: bytes, sender_ip: str):
         """Handle button event.
@@ -1019,6 +1031,7 @@ class NetworkServer:
         button_index = event_data.get('button_index')
         version = event_data.get('version')
         platform = event_data.get('platform')
+        button_count = event_data.get('button_count')
         
         action_str = {1: "CLICK", 2: "HOLD", 3: "RELEASE", 9: "SYNC"}.get(action, f"UNKNOWN({action})")
         
@@ -1057,7 +1070,8 @@ class NetworkServer:
                 0, 
                 battery_mv=battery_mv,
                 version=version,
-                platform=platform
+                platform=platform,
+                button_count=button_count
             )
         
         # Call event handler

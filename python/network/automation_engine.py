@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from typing import Dict, List, Tuple, Optional
-from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN, REMOTE_ACTION_SCENE_CYCLE
+from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, ACT_SYNC, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN, REMOTE_ACTION_SCENE_CYCLE
 from controllers.hue_controller import Hue
 from controllers.color_controller import color_controller
 from services.hue_state_manager import hue_state_manager
@@ -152,7 +152,7 @@ class AutomationEngine:
         action_type = button_config.get('action_type', None)
         room_id = button_config.get('room_id')
         
-        action_str = {ACT_CLICK: "CLICK", ACT_HOLDING: "HOLDING"}.get(action, f"UNKNOWN({action})")
+        action_str = {ACT_CLICK: "CLICK", ACT_HOLDING: "HOLDING", ACT_RELEASE: "RELEASE", ACT_SYNC: "SYNC"}.get(action, f"UNKNOWN({action})")
         logger.info(f"Remote {remote_mac} button {button_index}: {action_str} -> {action_type} action in room {room_id}")
         
         if not room_id:

@@ -74,6 +74,7 @@ typedef struct {
   uint8_t version_minor;
   uint8_t version_patch;
   uint8_t platform;  // 0=ESP32, 1=ESP8266
+  uint8_t button_count;  // Number of buttons configured (1-4)
 } Payload_Button;
 
 typedef struct {

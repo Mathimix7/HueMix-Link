@@ -88,7 +88,7 @@ class PacketEncoder:
             home_id = home_id_manager.get_or_create_home_id()
         self.home_id = home_id
     
-    def _calculate_hash(self, payload_bytes: bytes, home_id: int = None) -> int:
+    def _calculate_hash(self, payload_bytes: bytes, home_id: Optional[int] = None) -> int:
         """Calculate FNV-1a hash for message authentication.
         
         Args:
@@ -622,11 +622,19 @@ class PacketDecoder:
             result['platform'] = 'esp8266' if build == 1 else 'esp32'
 
         elif dev_type == DEV_REMOTE and len(payload) >= 6:
-            # Remote: type(1) + RSSI(1) + version(3) + platform(1)
+            # Remote: type(1) + RSSI(1) + version(3) + platform(1) + button_count(1, optional)
             major, minor, patch, build = struct.unpack("<BBBB", payload[2:6])
             result['version'] = f"{major}.{minor}.{patch}"
             result['rssi'] = MACFormatter.parse_rssi(payload[1])
             result['platform'] = 'esp8266' if build == 1 else 'esp32'
+            
+            # Parse button_count if available (byte 6)
+            # 0 or missing = default to 4 buttons, 1-4 = actual button count
+            if len(payload) >= 7:
+                button_count = struct.unpack("<B", payload[6:7])[0]
+                result['button_count'] = button_count if button_count >= 1 else 4
+            else:
+                result['button_count'] = 4  # Default for legacy remotes
         
         elif dev_type == DEV_LIGHT and len(payload) >= 9:
             # Light: type(1) + RSSI(1) + RGBW(1) + LED_COUNT(2) + version(3) + platform(1) + model_id(2)
@@ -673,8 +681,8 @@ class PacketDecoder:
         if len(payload) < 3:
             return None
         
-        # Payload_Button structure (8 bytes):
-        # action(1) + battery_mv(2) + button_index(1) + version_major(1) + version_minor(1) + version_patch(1) + platform(1)
+        # Payload_Button structure (9 bytes):
+        # action(1) + battery_mv(2) + button_index(1) + version_major(1) + version_minor(1) + version_patch(1) + platform(1) + button_count(1)
         action = struct.unpack("<B", payload[0:1])[0]
         battery_mv = struct.unpack("<H", payload[1:3])[0]  # uint16 little-endian
         
@@ -705,6 +713,12 @@ class PacketDecoder:
             if len(payload) >= 8:
                 platform_byte = struct.unpack("<B", payload[7:8])[0]
                 result['platform'] = 'esp8266' if platform_byte == 1 else 'esp32'
+            
+            # Parse button_count (1-4)
+            if len(payload) >= 9:
+                button_count = struct.unpack("<B", payload[8:9])[0]
+                if button_count >= 1 and button_count <= 4:
+                    result['button_count'] = button_count
         
         return result
     

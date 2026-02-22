@@ -717,6 +717,9 @@ void sendBtnEvent(uint8_t action) {
   // Gateway is always ESP32
   btnPkt.payload.btn.platform = 0;
   
+  // Button count: 0 for gateway button (not applicable)
+  btnPkt.payload.btn.button_count = 0;
+  
   btnPkt.signature = calculateHash(btnPkt.payload.raw, 185, HOME_ID);
   if (WiFi.status() == WL_CONNECTED) {
     udp.beginPacket(server_ip, server_port);

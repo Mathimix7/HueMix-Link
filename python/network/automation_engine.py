@@ -714,9 +714,9 @@ class AutomationEngine:
         light_sensitivity = config.get('light_sensitivity', 5)
         if light_level is not None and light_level > light_sensitivity:
             if has_active_timer:
-                logger.info(f"Motion sensor {sensor_mac} light level too high ({light_level} > {light_sensitivity}), but restarting existing timer")
+                logger.debug(f"Motion sensor {sensor_mac} light level too high ({light_level} > {light_sensitivity}), but restarting existing timer")
             else:
-                logger.info(f"Motion sensor {sensor_mac} light level too high ({light_level} > {light_sensitivity})")
+                logger.debug(f"Motion sensor {sensor_mac} light level too high ({light_level} > {light_sensitivity})")
                 return
         
         # Find current time slot
@@ -733,9 +733,9 @@ class AutomationEngine:
             room_state = hue_state_manager.get_room_state(room_id)
             if room_state and room_state.get('is_on', False):
                 if has_active_timer:
-                    logger.info(f"Motion sensor {sensor_mac} DND mode: lights already on, but restarting existing timer")
+                    logger.debug(f"Motion sensor {sensor_mac} DND mode: lights already on, but restarting existing timer")
                 else:
-                    logger.info(f"Motion sensor {sensor_mac} DND mode: lights already on, ignoring")
+                    logger.debug(f"Motion sensor {sensor_mac} DND mode: lights already on, ignoring")
                     return
         
         # Execute motion action
@@ -777,7 +777,7 @@ class AutomationEngine:
                     if old_timer:
                         old_timer.cancel()
                         if not action_executed:
-                            logger.info(f"Restarting existing timer for {sensor_mac} due to continued motion")
+                            logger.debug(f"Restarting existing timer for {sensor_mac} due to continued motion")
                 
                 # Store room_id for timer cancellation
                 self._motion_states[sensor_mac]['room_id'] = room_id
@@ -802,9 +802,9 @@ class AutomationEngine:
                         timer.start()
                         self._motion_states[sensor_mac]['after_timer'] = timer
                         if action_executed:
-                            logger.info(f"Scheduled dim warning for {sensor_mac} in {warning_delay}s (off in {after_duration}s)")
+                            logger.debug(f"Scheduled dim warning for {sensor_mac} in {warning_delay}s (off in {after_duration}s)")
                         else:
-                            logger.info(f"Restarted dim warning timer for {sensor_mac} ({warning_delay}s)")
+                            logger.debug(f"Restarted dim warning timer for {sensor_mac} ({warning_delay}s)")
                     else:
                         # Schedule normal after action
                         timer = threading.Timer(
@@ -816,9 +816,9 @@ class AutomationEngine:
                         timer.start()
                         self._motion_states[sensor_mac]['after_timer'] = timer
                         if action_executed:
-                            logger.info(f"Scheduled after action for {sensor_mac} in {after_duration}s")
+                            logger.debug(f"Scheduled after action for {sensor_mac} in {after_duration}s")
                         else:
-                            logger.info(f"Restarted after action timer for {sensor_mac} ({after_duration}s)")
+                            logger.debug(f"Restarted after action timer for {sensor_mac} ({after_duration}s)")
 
     
     def _get_current_time_slot(self, time_slots: List[Dict]) -> Optional[Dict]:
@@ -897,7 +897,7 @@ class AutomationEngine:
                     timer.daemon = True
                     timer.start()
                     self._motion_states[sensor_mac]['after_timer'] = timer
-                    logger.info(f"Scheduled final off action for {sensor_mac} in 15s")
+                    logger.debug(f"Scheduled final off action for {sensor_mac} in 15s")
                     
         except Exception as e:
             logger.error(f"Failed to execute dim warning for {sensor_mac}: {e}")
@@ -1055,7 +1055,7 @@ class AutomationEngine:
                         # Store timestamp to handle race condition with subsequent SSE events
                         state['last_expected_clear_time'] = current_time
                         is_expected = True
-                        logger.info(f"Scene change to {scene_id} in {room_id} was expected from motion sensor {sensor_mac}")
+                        logger.debug(f"Scene change to {scene_id} in {room_id} was expected from motion sensor {sensor_mac}")
                         break
                     # Check if an expected scene was recently cleared (within 2 seconds)
                     # This handles the case where SSE event arrives after button event

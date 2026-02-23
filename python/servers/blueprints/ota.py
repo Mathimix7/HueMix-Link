@@ -65,6 +65,7 @@ EXTENDED_DEVICE_TYPES = {
     'button_esp8266': (DEV_BUTTON, 'button_esp8266'),
     'remote_esp32': (DEV_REMOTE, 'remote_esp32'),
     # 'remote_esp8266': (DEV_REMOTE, 'remote_esp8266'),
+    'motion_sensor_esp32': (DEV_MOTION, 'motion_sensor_esp32'),
     'lightstrip_model1': (DEV_LIGHT, 'lightstrip_model1'),  # ESP32, RGB, WS2812B
     'lightstrip_model2': (DEV_LIGHT, 'lightstrip_model2'),  # ESP32, RGBW, SK6812
     'lightstrip_model3': (DEV_LIGHT, 'lightstrip_model3'),  # ESP8266, RGB, WS2812B
@@ -193,8 +194,8 @@ def check_updates():
                     name = asset.get('name', '')
                     download_url = asset.get('url', '')
                     
-                    # Match firmware files
-                    match = re.match(r'huemixlink-(esp32|esp8266)-(net|radio|button|lightstrip|remote)(?:-([0-9]+))?-v([\d\.]+)\.bin', name)
+                    # Match firmware files (including motion_sensor)
+                    match = re.match(r'huemixlink-(esp32|esp8266)-(net|radio|button|lightstrip|remote|motion_sensor)(?:-([0-9]+))?-v([\d\.]+)\.bin', name)
                     if match:
                         platform, fw_type, model, version = match.groups()
                         if fw_type == "lightstrip":
@@ -514,6 +515,13 @@ def start_ota(device_mac):
                 device = button
                 device_type = button.get('device_type', DEV_BUTTON)
         
+        # Check motion sensors
+        if not device:
+            sensor = device_manager.get_motion_sensor_by_mac(device_mac)
+            if sensor:
+                device = sensor
+                device_type = DEV_MOTION
+        
         if not device:
             return jsonify({'success': False, 'error': 'Device not found'}), 404
         
@@ -718,6 +726,19 @@ def get_devices_with_versions():
                 'device_type': btn_type,
                 'version': btn.get('version', '0.0.0'),
                 'platform': platform,
+                'online': True
+            })
+        
+        # Get all motion sensors
+        motion_sensors = device_manager.get_all_motion_sensors()
+        for sensor in motion_sensors:
+            devices.append({
+                'mac_address': sensor.get('mac_address'),
+                'name': sensor.get('name', f"Motion Sensor {sensor.get('mac_address', '')[-8:]}"),
+                'type': 'motion_sensor',
+                'device_type': DEV_MOTION,
+                'version': sensor.get('version', '0.0.0'),
+                'platform': sensor.get('platform', 'esp32'),
                 'online': True
             })
         

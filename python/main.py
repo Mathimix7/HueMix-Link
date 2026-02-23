@@ -7,7 +7,7 @@ from services.home_id_manager import home_id_manager
 from services.automation_service import automation_service
 from network.network_server import network_server
 from network.pairing_manager import pairing_manager
-from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY, DEFAULT_WEB_PORT
+from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY, DEFAULT_WEB_PORT, FILE_MOTION_SENSORS
 from waitress import serve
 from servers.blueprints.buttons import validate_scenes_at_startup
 
@@ -22,7 +22,8 @@ if __name__ == '__main__':
             FILE_LIGHTSTRIPS: [],
             FILE_GATEWAYS: [],
             FILE_BRIDGE: {},
-            FILE_PAIRING_HISTORY: []
+            FILE_PAIRING_HISTORY: [],
+            FILE_MOTION_SENSORS: [],
         }
 
         for fname, default_content in defaults.items():

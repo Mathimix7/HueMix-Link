@@ -26,7 +26,7 @@ from constants import (
     OTA_CHUNK_ACK_TIMEOUT, OTA_CHUNK_MAX_RETRIES, OTA_CHECKPOINT_INTERVAL,
     OTA_POST_UPDATE_TIMEOUT,
     RSSI_AUTO_PAIR_THRESHOLD, MAX_GATEWAYS_PER_PACKET,
-    FILE_GATEWAYS, FILE_LIGHTSTRIPS
+    FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS, CMD_SET_MOTION_COOLDOWN, CMD_SET_MOTION_SLEEP
 )
 from network.pairing_manager import pairing_manager
 from .packet_protocol import PacketEncoder, PacketDecoder, MACFormatter
@@ -1184,8 +1184,6 @@ class NetworkServer:
         sensors = device_manager.get_all_motion_sensors()
         for s in sensors:
             if s.get('mac_address', '').upper() == sensor_mac.upper():
-                from services.data_manager import data_manager
-                from constants import FILE_MOTION_SENSORS
                 
                 def update_func(sensors_list):
                     for sensor in sensors_list:
@@ -1195,11 +1193,94 @@ class NetworkServer:
                     return sensors_list
                 
                 data_manager.update_json(FILE_MOTION_SENSORS, update_func)
+                
+                # Check if there's a pending cooldown update
+                if s.get('pending_cooldown_update'):
+                    cooldown_seconds = s.get('config', {}).get('cooldown_seconds', 60)
+                    logger.info(f"🔧 Sending cooldown update to {sensor_mac}: {cooldown_seconds}s")
+                    
+                    # Send cooldown command to sensor with delivery tracking and feedback
+                    try:
+                        # Generate message ID
+                        with self._delivery_lock:
+                            msg_id = self._next_msg_id
+                            self._next_msg_id = (self._next_msg_id + 1) % 256
+                        
+                        # Encode packet with uint32 cooldown value
+                        packet = self.encoder.encode_sys_cmd(
+                            sensor_mac, 
+                            CMD_SET_MOTION_COOLDOWN, 
+                            value=0,
+                            msg_id=msg_id,
+                            value_uint32=cooldown_seconds
+                        )
+                        
+                        # Send with automatic gateway routing, delivery tracking, and failover
+                        success = self._send_with_fallback(sensor_mac, packet, wait_for_delivery=True, msg_id=msg_id)
+                        
+                        if success:
+                            logger.info(f"✅ Cooldown command delivered to {sensor_mac}: {cooldown_seconds}s")
+                            
+                            # Clear the pending flag on successful delivery
+                            def clear_flag(sensors_list):
+                                for sensor in sensors_list:
+                                    if sensor.get('mac_address', '').upper() == sensor_mac.upper():
+                                        sensor['pending_cooldown_update'] = False
+                                        break
+                                return sensors_list
+                            
+                            data_manager.update_json(FILE_MOTION_SENSORS, clear_flag)
+                        else:
+                            logger.warning(f"⚠️  Cooldown command failed to deliver to {sensor_mac}, will retry on next motion event")
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to send cooldown update to {sensor_mac}: {e}")
+                
                 break
         
         # Call event handler
         if self._motion_event_handler:
             self._motion_event_handler(sensor_mac, action, light_level, battery_mv)
+    
+    def _send_motion_sleep_command(self, sensor_mac: str, sleep_seconds: int):
+        """Send one-time sleep command to motion sensor.
+        
+        Args:
+            sensor_mac: Motion sensor MAC address
+            sleep_seconds: Sleep duration in seconds (1-60)
+        """
+        try:
+            # Validate duration
+            if sleep_seconds < 1 or sleep_seconds > 60:
+                logger.warning(f"Invalid sleep duration {sleep_seconds}s for {sensor_mac}, clamping to 1-60 range")
+                sleep_seconds = max(1, min(60, sleep_seconds))
+            
+            logger.info(f"💤 Sending one-time sleep command to {sensor_mac}: {sleep_seconds}s")
+            
+            # Generate message ID
+            with self._delivery_lock:
+                msg_id = self._next_msg_id
+                self._next_msg_id = (self._next_msg_id + 1) % 256
+            
+            # Encode packet with uint32 sleep duration
+            packet = self.encoder.encode_sys_cmd(
+                sensor_mac, 
+                CMD_SET_MOTION_SLEEP, 
+                value=0,
+                msg_id=msg_id,
+                value_uint32=sleep_seconds
+            )
+            
+            # Send with automatic gateway routing (no need to wait for delivery since device sleeps immediately)
+            success = self._send_with_fallback(sensor_mac, packet, wait_for_delivery=False, msg_id=msg_id)
+            
+            if success:
+                logger.info(f"✅ Sleep command sent to {sensor_mac}: {sleep_seconds}s")
+            else:
+                logger.warning(f"⚠️  Sleep command may not have reached {sensor_mac}")
+                
+        except Exception as e:
+            logger.error(f"Failed to send sleep command to {sensor_mac}: {e}")
     
     def _handle_delivery_report(self, payload: bytes, sender_ip: str):
         """Handle delivery report from gateway.

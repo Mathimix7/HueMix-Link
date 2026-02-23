@@ -118,12 +118,28 @@ def configure_motion_sensor():
         'enabled': data.get('enabled', True)
     }
     
+    # Validate cooldown range
+    cooldown = config.get('cooldown_seconds', 60)
+    if cooldown < 5 or cooldown > 60:
+        return jsonify({"success": False, "error": "Cooldown must be between 5 and 60 seconds"}), 400
+    
     # Save configuration
     save_motion_sensor_config(device_id, config)
+    
+    # Get the sensor to find MAC address and set pending flag
+    sensors = get_motion_sensors()
+    sensor_mac = None
+    for sensor in sensors:
+        if sensor['id'] == device_id:
+            sensor['pending_cooldown_update'] = True
+            sensor_mac = sensor.get('mac_address')
+            save_motion_sensors(sensors)
+            break
     
     # Notify UDP server about the configuration update
     config_notifier.notify_change('motion_sensor_config', {
         'device_id': device_id,
+        'mac_address': sensor_mac,
         'config': config
     })
     
@@ -145,17 +161,26 @@ def update_cooldown(device_id):
     data = request.get_json()
     cooldown_seconds = data.get('cooldown_seconds', 60)
     
+    # Validate cooldown range (5-60 seconds as per firmware)
+    if cooldown_seconds < 5 or cooldown_seconds > 60:
+        return jsonify({"success": False, "error": "Cooldown must be between 5 and 60 seconds"}), 400
+    
     sensors = get_motion_sensors()
     for sensor in sensors:
         if sensor['id'] == device_id:
             if not sensor.get('config'):
                 sensor['config'] = {}
             sensor['config']['cooldown_seconds'] = cooldown_seconds
+            
+            # Set flag to indicate pending cooldown update
+            sensor['pending_cooldown_update'] = True
+            
             save_motion_sensors(sensors)
             
             # Notify UDP server
             config_notifier.notify_change('motion_sensor_cooldown', {
                 'device_id': device_id,
+                'mac_address': sensor.get('mac_address'),
                 'cooldown_seconds': cooldown_seconds
             })
             

@@ -54,6 +54,8 @@ REMOTE_ACTION_SCENE_CYCLE = 'scene_cycle'          # Click = cycle scenes only (
 # ===== System Commands =====
 CMD_NIGHT_MODE_ON = 1   # LED OFF
 CMD_NIGHT_MODE_OFF = 2  # LED ON
+CMD_SET_MOTION_COOLDOWN = 0x40  # Set motion sensor cooldown period (persistent)
+CMD_SET_MOTION_SLEEP = 0x41  # Set motion sensor one-time sleep duration (not saved)
 CMD_SET_LED_COUNT = 0x50
 
 # ===== Network Limits =====

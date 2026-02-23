@@ -181,6 +181,9 @@
                             <option value="remote_esp32">Remote ESP32</option>
                             <!-- <option value="remote_esp8266">Remote ESP8266</option> -->
                         </optgroup>
+                        <optgroup label="Motion Sensors">
+                            <option value="motion_sensor_esp32">Motion Sensor ESP32</option>
+                        </optgroup>
                     </select>
                 </div>
                 
@@ -240,6 +243,9 @@
                         <optgroup label="Remotes">
                             <option value="remote_esp32" disabled>Remote ESP32</option>
                             <!-- <option value="remote_esp8266" disabled>Remote ESP8266</option> -->
+                        </optgroup>
+                        <optgroup label="Motion Sensors">
+                            <option value="motion_sensor_esp32" disabled>Motion Sensor ESP32</option>
                         </optgroup>
                     </select>
                 </div>
@@ -385,9 +391,9 @@ function renderDevicesTable() {
     
     // Check updates for other devices
     otherDevices.forEach(device => {
-        // For buttons and remotes, match firmware based on platform
+        // For buttons, remotes, and motion sensors, match firmware based on platform
         let firmwareKey = device.type;
-        if ((device.type === 'button' || device.type === 'remote') && device.platform) {
+        if ((device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor') && device.platform) {
             firmwareKey = `${device.type}_${device.platform}`;
         }
         // For lightstrips, match firmware based on model_id
@@ -508,7 +514,7 @@ function renderDevicesTable() {
     html += sortedOthers.map(device => {
         const firmwareKey = device.firmwareKey || device.type;
         const availableVersion = availableFirmwares[firmwareKey]?.version || '--';
-        const platformLabel = (device.type === 'button' || device.type === 'remote') && device.platform ? ` (${device.platform.toUpperCase()})` : '';
+        const platformLabel = (device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor') && device.platform ? ` (${device.platform.toUpperCase()})` : '';
         
         // Model label for lightstrips
         const modelNames = {
@@ -537,7 +543,7 @@ function renderDevicesTable() {
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">
                     <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-${getTypeColor(device.type)}-100 text-${getTypeColor(device.type)}-800">
-                        ${device.type.charAt(0).toUpperCase() + device.type.slice(1)}${platformLabel}
+                        ${formatDeviceType(device.type)}${platformLabel}
                     </span>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${device.version}</td>
@@ -580,7 +586,8 @@ function getTypeColor(type) {
         'gateway_radio': 'purple',
         'lightstrip': 'yellow',
         'button': 'pink',
-        'remote': 'pink'
+        'remote': 'pink',
+        'motion_sensor': 'teal'
     };
     return colors[type] || 'gray';
 }
@@ -592,9 +599,23 @@ function getTypeIcon(type) {
         'gateway_radio': '<i class="fas fa-server"></i>',
         'lightstrip': '<i class="fas fa-lightbulb"></i>',
         'button': '<i class="fas fa-microchip"></i>',
-        'remote': '<i class="fas fa-microchip"></i>'
+        'remote': '<i class="fas fa-microchip"></i>',
+        'motion_sensor': '<i class="fas fa-running"></i>'
     };
     return icons[type] || '<i class="fas fa-question"></i>';
+}
+
+function formatDeviceType(type) {
+    const typeNames = {
+        'gateway': 'Gateway',
+        'gateway_net': 'Gateway Net',
+        'gateway_radio': 'Gateway Radio',
+        'lightstrip': 'Lightstrip',
+        'button': 'Button',
+        'remote': 'Remote',
+        'motion_sensor': 'Motion Sensor'
+    };
+    return typeNames[type] || type.charAt(0).toUpperCase() + type.slice(1);
 }
 
 function compareVersions(v1, v2) {
@@ -728,8 +749,8 @@ function showProgressModal(deviceMac, deviceType) {
     document.getElementById('progressDevice').textContent = `Device: ${device?.name || deviceMac}`;
     document.getElementById('progressModal').classList.remove('hidden');
     
-    // Show instructions for buttons
-    if (deviceType === 'button' || deviceType === 'remote') {
+    // Show instructions for buttons/remotes/motion sensors
+    if (deviceType === 'button' || deviceType === 'remote' || deviceType === 'motion_sensor') {
         document.getElementById('progressInstructions').classList.remove('hidden');
         document.getElementById('instructionsText').textContent = 
             'Double-tap the reset button to begin update';
@@ -854,7 +875,7 @@ async function retryUpdate() {
     
     // Determine firmware type based on device type and platform
     let firmwareKey = device.type;
-    if ((device.type === 'button' || device.type === 'remote') && device.platform) {
+    if ((device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor') && device.platform) {
         firmwareKey = `${device.type}_${device.platform}`;
     }
     
@@ -867,8 +888,8 @@ async function retryUpdate() {
     document.getElementById('progressPercent').textContent = '0%';
     document.getElementById('progressStatus').textContent = 'Initializing...';
     
-    // Show instructions again for buttons/remotes
-    if (device.type === 'button' || device.type === 'remote') {
+    // Show instructions again for buttons/remotes/motion sensors
+    if (device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor') {
         document.getElementById('progressInstructions').classList.remove('hidden');
         document.getElementById('instructionsText').textContent = 
             'Double-tap the reset button to begin update';

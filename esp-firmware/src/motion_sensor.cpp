@@ -30,7 +30,8 @@
 
 // Cooldown period - default 60 seconds, configurable via PKT_SYS_CMD
 #define DEFAULT_COOLDOWN_SECONDS 60
-#define CMD_SET_MOTION_COOLDOWN 0x40  // SysCmd to configure cooldown period
+#define CMD_SET_MOTION_COOLDOWN 0x40  // SysCmd to configure cooldown period (persistent)
+#define CMD_SET_MOTION_SLEEP 0x41     // SysCmd to sleep for specified duration (one-time)
 
 // Wakeup mask for EXT1 (PIR + RESET)
 #define EXT1_WAKEUP_MASK ((1ULL << PIN_PIR) | (1ULL << PIN_RESET))
@@ -57,6 +58,7 @@ bool homeSetupDone = false;
 uint16_t battery_mv = 0;
 uint8_t light_level = 0;
 uint32_t cooldown_seconds = DEFAULT_COOLDOWN_SECONDS;  // Configurable cooldown period
+uint32_t one_time_sleep_seconds = 0;  // One-time sleep override (0 = use normal cooldown)
 
 // Wakeup tracking
 bool wakeupFromPIR = false;
@@ -402,6 +404,20 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
         Serial.printf("[MOTION] Invalid cooldown value: %u (must be 5-60)s\n", new_cooldown);
       }
     }
+    else if (pkt.payload.sys.cmd == CMD_SET_MOTION_SLEEP) {
+      // Receive one-time sleep duration as uint32_t from raw payload bytes
+      uint32_t sleep_seconds;
+      memcpy(&sleep_seconds, &pkt.payload.raw[2], sizeof(uint32_t));
+      
+      // Validate range (1-60 seconds)
+      if (sleep_seconds >= 1 && sleep_seconds <= 60) {
+        Serial.printf("[MOTION] One-time sleep for %u seconds\n", sleep_seconds);
+        one_time_sleep_seconds = sleep_seconds;
+        lastActivityTime = 0;  // Trigger immediate sleep
+      } else {
+        Serial.printf("[MOTION] Invalid sleep duration: %u (must be 1-60)s\n", sleep_seconds);
+      }
+    }
   }
   else if (pkt.type == PKT_OTA_NOTIFY) {
     // OTA implementation similar to buttons (abbreviated for brevity)
@@ -510,8 +526,15 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
 
 // --- SLEEP FUNCTIONS ---
 void goToSleepWithTimer() {
-  uint64_t cooldown_us = (uint64_t)cooldown_seconds * 1000000ULL;
-  Serial.printf("Going to sleep with timer wakeup (%u seconds cooldown)\n", cooldown_seconds);
+  // Check for one-time sleep override
+  uint32_t sleep_duration = cooldown_seconds;
+  if (one_time_sleep_seconds > 0) {
+    sleep_duration = one_time_sleep_seconds;
+    one_time_sleep_seconds = 0;  // Clear after use
+  }
+  
+  uint64_t cooldown_us = (uint64_t)sleep_duration * 1000000ULL;
+  Serial.printf("Going to sleep with timer wakeup (%u seconds cooldown)\n", sleep_duration);
   Serial.flush();
   
   pinMode(PIN_LED, INPUT);

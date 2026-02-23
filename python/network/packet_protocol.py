@@ -247,24 +247,29 @@ class PacketEncoder:
         
         return packet
     
-    def encode_sys_cmd(self, target_mac: str, command: int, value: int = 0, msg_id: int = 0) -> bytes:
+    def encode_sys_cmd(self, target_mac: str, command: int, value: int = 0, msg_id: int = 0, value_uint32: Optional[int] = None) -> bytes:
         """Encode a system command packet.
         
         Args:
             target_mac: MAC address of target device
-            command: Command code (1=night mode on, 2=night mode off, etc.)
-            value: Optional command value
+            command: Command code (1=night mode on, 2=night mode off, 0x40=motion cooldown, etc.)
+            value: Optional command value (single byte)
             msg_id: Message ID
+            value_uint32: Optional uint32 value (used for motion sensor cooldown at offset 2)
             
         Returns:
             Complete 203-byte packet
         """
         pkt_type = PKT_SYS_CMD
-        src_mac = b'\x00' * 6
+        src_mac = b'\x00' * 6 
         tgt_mac = MACFormatter.to_bytes(target_mac)
         
-        # Payload: command(1) + value(1)
-        payload_data = struct.pack("<BB", command, value)
+        # Payload: command(1) + value(1) + optional uint32 data
+        if value_uint32 is not None:
+            # For commands that need uint32 at offset 2 (like motion sensor cooldown)
+            payload_data = struct.pack("<BBI", command, value, value_uint32)
+        else:
+            payload_data = struct.pack("<BB", command, value)
         
         # Pad payload to 185 bytes
         payload = payload_data + b'\x00' * (185 - len(payload_data))

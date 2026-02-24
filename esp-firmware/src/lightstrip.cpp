@@ -9,7 +9,6 @@
 #include <Ticker.h>
 
 // --- CONFIGURATION ---
-#define NUM_LEDS    60 // Max 60
 #define MAX_LEDS    60
 
 // --- MODEL ID ---
@@ -59,7 +58,7 @@
 // --- GLOBALS ---
 Preferences prefs;
 uint32_t HOME_ID = 0; 
-uint16_t numLeds = NUM_LEDS;
+uint16_t numLeds = MAX_LEDS;
 Payload_GatewayList gateways;
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 int lastSuccessfulGatewayIndex = -1;
@@ -117,7 +116,6 @@ struct CRGBW {
 
 #if IS_RGBW
 CRGBW leds[MAX_LEDS];
-#define NUM_LEDS_BUFFER ((MAX_LEDS * 4) + 2) / 3
 CRGB *ledsAsRGB = (CRGB*)leds;
 #else
 CRGB leds[MAX_LEDS];
@@ -944,7 +942,7 @@ void setup() {
   prefs.begin("huemixlink", false);
   
   // Load LED count from EEPROM (can be changed remotely)
-  numLeds = prefs.getUInt("leds", NUM_LEDS);
+  numLeds = prefs.getUInt("leds", MAX_LEDS);
   if (numLeds > MAX_LEDS) numLeds = MAX_LEDS;
   
   // Save default on first boot if not already saved

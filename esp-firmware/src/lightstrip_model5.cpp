@@ -1,17 +1,23 @@
 /* 
-  HUEMIXLINK V3 - LIGHT STRIP FIRMWARE - MODEL 5
-  Individual RGB (WS2812B) + Global Warm White PWM (Inverted)
+  HUEMIXLINK V3 - LIGHT STRIP FIRMWARE - MODEL 5 & 6
+  Individual RGB (WS2812B) + Global Warm White PWM
   
   Hardware:
-  - ESP32 platform
+  MODEL 5 (ESP32):
   - RGB LEDs on pin 27 (WS2812B)
-  - Warm White PWM on pin 26 (inverted - LOW = ON, HIGH = OFF)
+  - Warm White PWM on pin 26
   - Reset button on pin 23
+  
+  MODEL 6 (ESP8266):
+  - RGB LEDs on pin D2 (WS2812B)
+  - Warm White PWM on pin D1
+  - Reset button on pin D4
   
   Features:
   - Smart warm white extraction based on ~3000K color temperature
   - Extracts maximum shared warm white component from all pixels
   - RGB LEDs handle the remaining color information
+  - Supports both ESP32 and ESP8266 platforms
 */
 
 #include "HueMixLink.h"
@@ -20,10 +26,11 @@
 #include <Ticker.h>
 
 // --- MODEL ID ---
-#define LIGHTSTRIP_MODEL 5
+#ifndef LIGHTSTRIP_MODEL
+  #error "LIGHTSTRIP_MODEL not defined"
+#endif
 
 // --- CONFIGURATION ---
-#define NUM_LEDS    35 
 #define MAX_LEDS    60
 
 // --- PLATFORM SETUP ---
@@ -43,8 +50,8 @@
   #include <esp_ota_ops.h>
   #include <esp_partition.h>
   #include "mbedtls/sha256.h"
-  #define LED_PIN        27
-  #define PIN_RESET      23
+  #define LED_PIN        16
+  #define PIN_RESET      27
   #define WHITE_LED_PIN  26
   #define ONBOARD_LED    2
 #endif
@@ -63,7 +70,7 @@
 // --- GLOBALS ---
 Preferences prefs;
 uint32_t HOME_ID = 0; 
-uint16_t numLeds = NUM_LEDS;
+uint16_t numLeds = MAX_LEDS;
 Payload_GatewayList gateways;
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 int lastSuccessfulGatewayIndex = -1;
@@ -135,8 +142,6 @@ unsigned long last_ota_activity = 0;
 
 // --- WARM WHITE PWM CONTROL ---
 void setWhitePWM(uint8_t val) {
-  // val is 0..255
-  // Inverted: 0 = OFF (pin HIGH), 255 = FULL ON (pin LOW)
   #ifdef ESP32
     // Use LEDC PWM on ESP32
     static bool pwmConfigured = false;
@@ -144,10 +149,10 @@ void setWhitePWM(uint8_t val) {
       ledcAttach(WHITE_LED_PIN, LED_PWM_FREQ, LED_PWM_RESOLUTION);
       pwmConfigured = true;
     }
-    ledcWrite(WHITE_LED_PIN, 255 - val);  // Inverted
+    ledcWrite(WHITE_LED_PIN, val);
   #else
     // Use analogWrite on ESP8266
-    analogWrite(WHITE_LED_PIN, 255 - val);  // Inverted
+    analogWrite(WHITE_LED_PIN, val);
   #endif
 }
 
@@ -850,7 +855,6 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n\n=== HUEMIXLINK V3 - MODEL 5 (Warm White) ===");
   
   pinMode(PIN_RESET, INPUT_PULLUP);
   pinMode(WHITE_LED_PIN, OUTPUT);
@@ -859,7 +863,7 @@ void setup() {
   prefs.begin("huemixlink", false);
   
   // Load LED count
-  numLeds = prefs.getUInt("leds", NUM_LEDS);
+  numLeds = prefs.getUInt("leds", MAX_LEDS);
   if (numLeds > MAX_LEDS) numLeds = MAX_LEDS;
   
   if (!prefs.isKey("leds")) {

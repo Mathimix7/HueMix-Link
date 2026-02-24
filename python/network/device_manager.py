@@ -7,7 +7,7 @@ import logging
 from typing import Optional, List, Dict
 from datetime import datetime
 from services.data_manager import data_manager
-from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS, DEV_BUTTON
+from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS, DEV_REMOTE, DEV_BUTTON
 import uuid
 
 logger = logging.getLogger(__name__)

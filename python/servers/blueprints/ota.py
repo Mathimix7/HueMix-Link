@@ -736,8 +736,7 @@ def get_devices_with_versions():
                 'name': gw.get('name', f"Gateway {gw.get('mac_address', '')[-8:]}"),
                 'type': 'gateway_net',
                 'device_type': DEV_GATEWAY,
-                'version': gw.get('version_net', '0.0.0'),
-                'online': True
+                'version': gw.get('version_net', '0.0.0')
             })
             
             # Add Radio Node entry (Radio MAC) - only if radio_mac exists
@@ -748,8 +747,7 @@ def get_devices_with_versions():
                     'name': gw.get('name', f"Gateway {gw.get('mac_address', '')[-8:]}"),
                     'type': 'gateway_radio',
                     'device_type': DEV_GATEWAY,
-                    'version': gw.get('version_radio', '0.0.0'),
-                    'online': True
+                    'version': gw.get('version_radio', '0.0.0')
                 })
         
         # Get all lightstrips
@@ -762,8 +760,7 @@ def get_devices_with_versions():
                 'device_type': DEV_LIGHT,
                 'version': light.get('version', '0.0.0'),
                 'platform': light.get('platform', 'unknown'),
-                'model_id': light.get('model_id'),
-                'online': True
+                'model_id': light.get('model_id')
             })
         
         # Get all buttons/remotes
@@ -789,8 +786,7 @@ def get_devices_with_versions():
                 'type': type_name,
                 'device_type': btn_type,
                 'version': btn.get('version', '0.0.0'),
-                'platform': platform,
-                'online': True
+                'platform': platform
             })
         
         # Get all motion sensors
@@ -802,8 +798,7 @@ def get_devices_with_versions():
                 'type': 'motion_sensor',
                 'device_type': DEV_MOTION,
                 'version': sensor.get('version', '0.0.0'),
-                'platform': sensor.get('platform', 'esp32'),
-                'online': True
+                'platform': sensor.get('platform', 'esp32')
             })
         
         return jsonify({

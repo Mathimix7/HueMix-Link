@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 import re
 import sys
+import os
 
 # -------------------------
 # CLI Arguments
@@ -84,7 +85,7 @@ if not env_list:
 # -------------------------
 if args.run:
     print("[*] Running PlatformIO build...")
-    command = "pio run -e " + " -e ".join(env_list)
+    command = f"pio run -j {os.cpu_count()} -e " + " -e ".join(env_list)
     result = subprocess.run(command, shell=True, check=True)
     if result.returncode != 0:
         print("[!] PlatformIO build failed")

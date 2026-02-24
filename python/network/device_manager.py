@@ -286,7 +286,7 @@ class DeviceManager:
         """
         return data_manager.read_json(FILE_BUTTONS, default=[])
     
-    def update_button_tracking(self, button_mac: str, gateway_radio_mac: str, rssi: int, battery_mv: Optional[int] = None, version: Optional[str] = None, platform: Optional[str] = None):
+    def update_button_tracking(self, button_mac: str, gateway_radio_mac: str, rssi: int, battery_mv: Optional[int] = None, version: Optional[str] = None, platform: Optional[str] = None, button_count: Optional[int] = None):
         """Update button tracking information.
         
         Args:
@@ -296,6 +296,7 @@ class DeviceManager:
             battery_mv: Battery voltage in millivolts (optional)
             version: Firmware version (optional)
             platform: Platform type 'esp32' or 'esp8266' (optional)
+            button_count: Number of buttons for remote devices (optional)
         """
         def update_func(buttons):
             for button in buttons:
@@ -317,6 +318,10 @@ class DeviceManager:
                     # Update platform if provided
                     if platform:
                         button['platform'] = platform
+                    
+                    # Update button_count for remote devices if provided
+                    if button_count is not None and button.get('device_type') == DEV_REMOTE:
+                        button['button_count'] = button_count
                     
                     break
             
@@ -375,13 +380,14 @@ class DeviceManager:
         # Fallback
         return 0
     
-    def add_button(self, mac_address: str, name: str, device_type: int = DEV_BUTTON) -> Optional[Dict]:
+    def add_button(self, mac_address: str, name: str, device_type: int = DEV_BUTTON, button_count: Optional[int] = None) -> Optional[Dict]:
         """Add new button/remote to registry.
         
         Args:
             mac_address: Device MAC address
             name: Display name
             device_type: DEV_BUTTON or DEV_REMOTE (default DEV_BUTTON)
+            button_count: Number of buttons (2-4 for flexible buttons, None for default)
             
         Returns:
             Created device dict
@@ -413,6 +419,11 @@ class DeviceManager:
                 'battery_percent': None,
                 'battery_last_updated': None
             }
+            
+            # Add button_count for remote devices
+            if device_type == DEV_REMOTE:
+                new_button['button_count'] = button_count if button_count is not None else 4
+            
             buttons.append(new_button)
             
             return buttons

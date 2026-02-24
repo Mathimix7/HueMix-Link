@@ -1,6 +1,7 @@
 /* 
   HUEMIXLINK V3 - NORMAL BUTTON FIRMWARE
   Supports: ESP32 & ESP8266
+  DEPRECATED - This firmware is no longer recommended for use with ESP32 Normal Button board V3 or later. Please use the new "Remote Button" firmware which supports both single and multiple button configurations.
 */
 
 #include "HueMixLink.h"
@@ -685,6 +686,9 @@ void sendPacket(uint8_t type, uint8_t action) {
     #else
       pkt.payload.btn.platform = 0;
     #endif
+    
+    // Button count: 0 for normal buttons (not applicable)
+    pkt.payload.btn.button_count = 0;
     
     pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   } else if (type == PKT_HELLO) {

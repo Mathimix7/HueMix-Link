@@ -30,9 +30,6 @@
 #define HOLD_INTERVAL 500
 #define SLEEP_TIMEOUT 2000
 
-// EXT1 bitmask for all 4 buttons + reset
-#define EXT1_BUTTON_MASK ((1ULL << PIN_BTN0) | (1ULL << PIN_BTN1) | (1ULL << PIN_BTN2) | (1ULL << PIN_BTN3) | (1ULL << PIN_RESET))
-
 // --- LED BREATHING (for OTA) ---
 #define LED_PWM_FREQ 5000
 #define LED_PWM_RESOLUTION 8
@@ -89,11 +86,92 @@ unsigned long last_reset_press = 0;
 uint8_t reset_tap_count = 0;
 #define DOUBLE_TAP_WINDOW 1000
 
+// Pending OTA activation (wait to see if 3rd tap comes)
+unsigned long pending_ota_time = 0;
+bool pending_ota = false;
+#define OTA_ACTIVATION_DELAY 500  // Wait 500ms after 2nd tap before activating OTA
+
+// Button count configuration (1-4 buttons)
+uint8_t button_count = 4; // Default to 4 buttons
+unsigned long config_last_reset_press = 0;
+uint8_t config_reset_tap_count = 0;
+#define CONFIG_TAP_WINDOW 1000
+#define CONFIG_TAP_COUNT 3
+
 esp_now_peer_info_t peerInfo;
 esp_adc_cal_characteristics_t adc_chars;
 
+// Count how many buttons are currently held
+int countHeldButtons() {
+  int count = 0;
+  for(int i = 0; i < 4; i++) {
+    if (digitalRead(buttonPins[i]) == HIGH) {
+      count++;
+    }
+  }
+  return count;
+}
+
+// Validate if held buttons match a valid configuration pattern
+// Returns the valid button_count (1-4) or 0 if invalid
+int validateButtonConfig() {
+  bool btn0 = digitalRead(PIN_BTN0) == HIGH;
+  bool btn1 = digitalRead(PIN_BTN1) == HIGH;
+  bool btn2 = digitalRead(PIN_BTN2) == HIGH;
+  bool btn3 = digitalRead(PIN_BTN3) == HIGH;
+  
+  // 1 button: only BTN3 (pin 26)
+  if (!btn0 && !btn1 && !btn2 && btn3) {
+    return 1;
+  }
+  // 2 buttons: BTN0 and BTN1 (pins 32, 33)
+  else if (btn0 && btn1 && !btn2 && !btn3) {
+    return 2;
+  }
+  // 3 buttons: BTN0, BTN1, BTN3 (pins 32, 33, 26)
+  else if (btn0 && btn1 && !btn2 && btn3) {
+    return 3;
+  }
+  // 4 buttons: all buttons
+  else if (btn0 && btn1 && btn2 && btn3) {
+    return 4;
+  }
+  
+  return 0; // Invalid configuration
+}
+
+// Build dynamic wakeup mask based on button_count
+uint64_t getWakeupMask() {
+  uint64_t mask = (1ULL << PIN_RESET);  // Always include reset
+  
+  if (button_count == 1) {
+    // 1 button: only pin 26 (BTN3)
+    mask |= (1ULL << PIN_BTN3);
+  } else if (button_count == 2) {
+    // 2 buttons: pins 32, 33 (BTN0, BTN1)
+    mask |= (1ULL << PIN_BTN0) | (1ULL << PIN_BTN1);
+  } else if (button_count == 3) {
+    // 3 buttons: pins 32, 33, 26 (BTN0, BTN1, BTN3)
+    mask |= (1ULL << PIN_BTN0) | (1ULL << PIN_BTN1) | (1ULL << PIN_BTN3);
+  } else {
+    // 4 buttons: all pins
+    mask |= (1ULL << PIN_BTN0) | (1ULL << PIN_BTN1) | (1ULL << PIN_BTN2) | (1ULL << PIN_BTN3);
+  }
+  
+  return mask;
+}
+
 void triggerLed(int duration) {
   if (breathingActive) return;
+  
+  // Don't override if a longer LED duration is already active
+  if (ledActive) {
+    unsigned long remaining = ledTimer - millis();
+    if (remaining > duration) {
+      return;  // Keep the longer duration
+    }
+  }
+  
   digitalWrite(PIN_LED, LED_ACTIVE_HIGH);
   ledActive = true;
   ledTimer = millis() + duration;
@@ -147,8 +225,30 @@ void saveGateways() {
   prefs.putBytes("gw", &gateways, sizeof(gateways)); 
 }
 
+void saveButtonCount() {
+  prefs.putUChar("btn_cnt", button_count);
+  Serial.printf("[CONFIG] Button count saved: %d\n", button_count);
+}
+
+// Check if a physical button index is active based on button_count
+// 1 button:  only button 3 (pin 26)
+// 2 buttons: buttons 0,1 (pins 32, 33)
+// 3 buttons: buttons 0,1,3 (pins 32, 33, 26)
+// 4 buttons: all buttons (pins 32, 33, 27, 26)
+bool isButtonActive(int physicalIndex) {
+  if (button_count == 1) {
+    return physicalIndex == 3; // Only pin 26
+  } else if (button_count == 2) {
+    return physicalIndex <= 1; // Pins 32, 33
+  } else if (button_count == 3) {
+    return physicalIndex == 0 || physicalIndex == 1 || physicalIndex == 3; // Pins 32, 33, 26
+  } else {
+    return true; // All buttons active
+  }
+}
+
 void addGateway(const uint8_t *mac) {
-  for(int i = 0; i < gateways.count; i++) {
+  for(int i=0; i<gateways.count; i++) {
     if (memcmp(gateways.macs[i], mac, 6) == 0) return;
   }
   if (gateways.count < MAX_GATEWAYS) {
@@ -560,6 +660,9 @@ void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {
       pkt.payload.btn.platform = 0;
     #endif
     
+    // Set button count
+    pkt.payload.btn.button_count = button_count;
+    
     pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   } else if (type == PKT_HELLO) {
     pkt.payload.raw[0] = DEV_REMOTE;
@@ -584,6 +687,16 @@ void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {
       pkt.payload.raw[5] = 0;
     #endif
     
+    // Set platform in byte 5
+    #if defined(ESP8266)
+      pkt.payload.raw[5] = 1;
+    #else
+      pkt.payload.raw[5] = 0;
+    #endif
+    
+    // Set button count in byte 6
+    pkt.payload.raw[6] = button_count;
+    
     // Use HOME_ID for signature if paired, 0 if unpaired
     pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   }
@@ -594,42 +707,57 @@ void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {
 
   // A. PAIRED MODE
   if (HOME_ID != 0 && gateways.count > 0) {
-    Serial.printf("[REMOTE] Trying %d gateways for packet type 0x%02X action %d button %d\n", 
-      gateways.count, type, action, buttonIndex);
-
-    for(int i = 0; i < gateways.count; i++) {
-      Serial.printf("[REMOTE] Attempt %d/%d: %02X:%02X:%02X:%02X:%02X:%02X\n", i+1, gateways.count,
-        gateways.macs[i][0], gateways.macs[i][1], gateways.macs[i][2],
-        gateways.macs[i][3], gateways.macs[i][4], gateways.macs[i][5]);
-
-      memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
+    // HELLO packets don't need ACK - just send to first gateway
+    if (type == PKT_HELLO) {
+      Serial.println("[REMOTE] Sending HELLO packet (no ACK required)");
+      memcpy(peerInfo.peer_addr, gateways.macs[0], 6);
       peerInfo.channel = 0;
       peerInfo.encrypt = false;
-      if(!esp_now_is_peer_exist(gateways.macs[i])) esp_now_add_peer(&peerInfo);
-      if (esp_now_send(gateways.macs[i], (uint8_t*)&pkt, sizeof(pkt)) == ESP_OK) {
-        unsigned long w = millis();
-        while(millis() - w < 75 && !ackReceived) delay(1);
-        if (ackReceived) {
-          Serial.println("[REMOTE]   ACK received!");
-          sent = true;
-          successfulGatewayIndex = i;
-          break;
-        }
+      if(!esp_now_is_peer_exist(gateways.macs[0])) esp_now_add_peer(&peerInfo);
+      if (esp_now_send(gateways.macs[0], (uint8_t*)&pkt, sizeof(pkt)) == ESP_OK) {
+        Serial.println("[REMOTE] HELLO sent successfully");
+        sent = true;
       }
     }
+    // Button events need ACK
+    else {
+      Serial.printf("[REMOTE] Trying %d gateways for packet type 0x%02X action %d button %d\n", 
+        gateways.count, type, action, buttonIndex);
 
-    // Move successful gateway to front of list
-    if (successfulGatewayIndex > 0) {
-      Serial.printf("[REMOTE] Moving gateway %d to front\n", successfulGatewayIndex);
-      uint8_t tempMac[6];
-      memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
-      // Shift all entries before it down by one
-      for(int j = successfulGatewayIndex; j > 0; j--) {
-        memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+      for(int i = 0; i < gateways.count; i++) {
+        Serial.printf("[REMOTE] Attempt %d/%d: %02X:%02X:%02X:%02X:%02X:%02X\n", i+1, gateways.count,
+          gateways.macs[i][0], gateways.macs[i][1], gateways.macs[i][2],
+          gateways.macs[i][3], gateways.macs[i][4], gateways.macs[i][5]);
+
+        memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
+        peerInfo.channel = 0;
+        peerInfo.encrypt = false;
+        if(!esp_now_is_peer_exist(gateways.macs[i])) esp_now_add_peer(&peerInfo);
+        if (esp_now_send(gateways.macs[i], (uint8_t*)&pkt, sizeof(pkt)) == ESP_OK) {
+          unsigned long w = millis();
+          while(millis() - w < 75 && !ackReceived) delay(1);
+          if (ackReceived) {
+            Serial.println("[REMOTE]   ACK received!");
+            sent = true;
+            successfulGatewayIndex = i;
+            break;
+          }
+        }
       }
-      // Place successful gateway at index 0
-      memcpy(gateways.macs[0], tempMac, 6);
-      saveGateways();
+
+      // Move successful gateway to front of list
+      if (successfulGatewayIndex > 0) {
+        Serial.printf("[REMOTE] Moving gateway %d to front\n", successfulGatewayIndex);
+        uint8_t tempMac[6];
+        memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
+        // Shift all entries before it down by one
+        for(int j = successfulGatewayIndex; j > 0; j--) {
+          memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+        }
+        // Place successful gateway at index 0
+        memcpy(gateways.macs[0], tempMac, 6);
+        saveGateways();
+      }
     }
 
     if (action != ACT_SYNC) {
@@ -659,11 +787,13 @@ void goToSleep() {
   pinMode(PIN_LED, INPUT);
   WiFi.mode(WIFI_OFF);
   btStop();
-  Serial.println("Going to sleep with EXT1 wakeup on buttons 0-3 and reset");
+  
+  uint64_t wakeup_mask = getWakeupMask();
+  Serial.printf("Going to sleep with EXT1 wakeup (button_count=%d)\n", button_count);
   Serial.flush();
 
-  // Enable EXT1 wakeup on all 4 buttons + reset (HIGH level)
-  esp_sleep_enable_ext1_wakeup(EXT1_BUTTON_MASK, ESP_EXT1_WAKEUP_ANY_HIGH);
+  // Enable EXT1 wakeup on configured buttons + reset (HIGH level)
+  esp_sleep_enable_ext1_wakeup(wakeup_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
   esp_deep_sleep_start();
 }
 
@@ -704,6 +834,8 @@ void setup() {
   prefs.begin("huemixlink", false);
   HOME_ID = prefs.getUInt("hid", 0);
   prefs.getBytes("gw", &gateways, sizeof(gateways));
+  button_count = prefs.getUChar("btn_cnt", 4); // Default to 4 buttons  
+  Serial.printf("[CONFIG] Button count: %d\n", button_count);
 
   WiFi.mode(WIFI_STA);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
@@ -774,20 +906,44 @@ void loop() {
     }
   }
 
+  // BUTTON COUNT CONFIGURATION, FACTORY RESET, and OTA MODE
+  static bool reset_button_was_high = false;
+  bool reset_is_high = digitalRead(PIN_RESET) == HIGH;
+  
   // Handle reset pin from EXT1 wakeup
   if (wakeupExt1) {
     if (wakeupWasReset) {
       wakeupWasReset = false;
-      lastActivityTime = millis();
+      
+      // Update reset button state to prevent false rising edge detection
+      reset_button_was_high = reset_is_high;
+      
+      // Check if reset button is still held
+      if (reset_is_high) {
+        // Reset button is still held - this will be counted when released
+        Serial.println("[RESET] Woke up on reset button press (still held)");
+        // Don't count tap yet - wait for release
+        lastActivityTime = millis();
+      } else {
+        // Reset button already released during wakeup - count as first tap
+        Serial.println("[RESET] Woke up on reset button (already released)");
+        reset_tap_count = 1;
+        last_reset_press = millis();
+        config_reset_tap_count = 1;
+        config_last_reset_press = millis();
+        lastActivityTime = millis();
+      }
     }
     else if (wakeupButtonIndex >= 0) {
       if (digitalRead(buttonPins[wakeupButtonIndex]) == LOW) {
         // Button was released during wakeup
-        if (HOME_ID == 0) {
-          sendPacket(PKT_HELLO, 0, wakeupButtonIndex);
-          Serial.printf("Button %d press (pair request)\n", wakeupButtonIndex);
-        } else {
-          sendPacket(PKT_BTN_EVENT, ACT_CLICK, wakeupButtonIndex);
+        if (isButtonActive(wakeupButtonIndex)) {
+          if (HOME_ID == 0) {
+            sendPacket(PKT_HELLO, 0, wakeupButtonIndex);
+            Serial.printf("Button %d press (pair request)\n", wakeupButtonIndex);
+          } else {
+            sendPacket(PKT_BTN_EVENT, ACT_CLICK, wakeupButtonIndex);
+          }
         }
         buttonStates[wakeupButtonIndex].pressed = false;
       } else {
@@ -800,8 +956,13 @@ void loop() {
     lastActivityTime = millis();
   }
 
-  // Check for button state changes
+  // Check for button state changes (only for active buttons)
+  // Skip sending commands if multiple buttons are held (likely config change)
+  int heldCount = countHeldButtons();
+  
   for(int i = 0; i < 4; i++) {
+    if (!isButtonActive(i)) continue;
+    
     // Button pressed
     if (buttons[i].rose()) {
       buttonStates[i].pressed = true;
@@ -813,14 +974,16 @@ void loop() {
     if (buttons[i].read() == HIGH && buttonStates[i].pressed && !buttonStates[i].isHolding) {
       if (millis() - buttonStates[i].holdStartTime >= HOLD_TIME) {
         buttonStates[i].isHolding = true;
-        if (HOME_ID != 0) sendPacket(PKT_BTN_EVENT, ACT_HOLDING, i);
+        // Only send if not multiple buttons held
+        if (HOME_ID != 0 && heldCount <= 1) sendPacket(PKT_BTN_EVENT, ACT_HOLDING, i);
         buttonStates[i].holdingIntervalUpdate = millis();
       }
     }
 
     // Repeat holding signal while button held
     if (millis() - buttonStates[i].holdingIntervalUpdate >= HOLD_INTERVAL && buttonStates[i].isHolding) {
-      if (HOME_ID != 0) sendPacket(PKT_BTN_EVENT, ACT_HOLDING, i);
+      // Only send if not multiple buttons held
+      if (HOME_ID != 0 && heldCount <= 1) sendPacket(PKT_BTN_EVENT, ACT_HOLDING, i);
       buttonStates[i].holdingIntervalUpdate = millis();
       lastActivityTime = millis();
     }
@@ -829,15 +992,19 @@ void loop() {
     if (buttons[i].fell()) {
       if (buttonStates[i].isHolding) {
         buttonStates[i].isHolding = false;
-        if (HOME_ID != 0) sendPacket(PKT_BTN_EVENT, ACT_RELEASE, i);
-        Serial.printf("Button %d holding stopped\n", i);
+        // Only send if not multiple buttons held
+        if (HOME_ID != 0 && heldCount <= 1) sendPacket(PKT_BTN_EVENT, ACT_RELEASE, i);
+        if (heldCount <= 1) Serial.printf("Button %d holding stopped\n", i);
       } else if (buttonStates[i].pressed) {
-        if (HOME_ID == 0) {
-          sendPacket(PKT_HELLO, 0, i);
-          Serial.printf("Button %d press (pair request)\n", i);
-        } else {
-          sendPacket(PKT_BTN_EVENT, ACT_CLICK, i);
-          Serial.printf("Button %d click\n", i);
+        // Only send if not multiple buttons held
+        if (heldCount <= 1) {
+          if (HOME_ID == 0) {
+            sendPacket(PKT_HELLO, 0, i);
+            Serial.printf("Button %d press (pair request)\n", i);
+          } else {
+            sendPacket(PKT_BTN_EVENT, ACT_CLICK, i);
+            Serial.printf("Button %d click\n", i);
+          }
         }
       }
       buttonStates[i].pressed = false;
@@ -845,81 +1012,198 @@ void loop() {
     }
   }
 
-  // FACTORY RESET using RESET pin (5s hold) OR OTA MODE (double-tap)
-  static bool reset_button_was_high = false;
-  
   // Detect rising edge (button pressed)
-  if (digitalRead(PIN_RESET) == HIGH && !reset_button_was_high) {
+  if (reset_is_high && !reset_button_was_high) {
     unsigned long now = millis();
     
-    // Check if this is within double-tap window
+    // Always track reset button taps for OTA mode timing
     if (now - last_reset_press < DOUBLE_TAP_WINDOW) {
       reset_tap_count++;
+      Serial.printf("[RESET] Tap detected! Count: %d (time since last: %lums)\n", reset_tap_count, now - last_reset_press);
+      
+      // Cancel pending OTA if 3rd tap detected
+      if (reset_tap_count >= 3 && pending_ota) {
+        Serial.println("[OTA] 3rd tap detected, cancelling pending OTA");
+        pending_ota = false;
+      }
     } else {
       reset_tap_count = 1;
+      Serial.println("[RESET] First tap detected (or timeout, resetting count)");
     }
     last_reset_press = now;
+    
+    // Validate button configuration to see if it's a valid config change
+    int valid_config = validateButtonConfig();
+    
+    // If buttons are held in a valid configuration pattern
+    if (valid_config >= 1 && valid_config <= 4) {
+      // Check for triple-tap for button count config
+      if (now - config_last_reset_press < CONFIG_TAP_WINDOW) {
+        config_reset_tap_count++;
+      } else {
+        config_reset_tap_count = 1;
+      }
+      config_last_reset_press = now;
+      
+      // Triple-tap detected with valid button pattern -> configure button count
+      if (config_reset_tap_count >= CONFIG_TAP_COUNT) {
+        // Cancel any pending OTA
+        pending_ota = false;
+        reset_tap_count = 0;
+        
+        button_count = valid_config;
+        saveButtonCount();
+        
+        // Visual feedback: LED stays on for 2 seconds
+        digitalWrite(PIN_LED, LED_ACTIVE_HIGH);
+        ledActive = true;
+        ledTimer = millis() + 2000;
+        
+        Serial.printf("[CONFIG] Button count set to: %d (valid pattern detected)\n", button_count);
+        config_reset_tap_count = 0;
+        
+        // Send HELLO with new button count
+        if (HOME_ID != 0) {
+          sendPacket(PKT_HELLO, 0, 0);
+        }
+        lastActivityTime = millis();
+      }
+    }
+    // No valid button configuration
+    else if (valid_config == 0) {
+      // Check if any buttons are actually held
+      int held_count = countHeldButtons();
+      
+      // 4-button configuration: ONLY if no buttons are held (not invalid patterns)
+      if (held_count == 0) {
+        // Check for triple-tap for 4-button configuration
+        if (now - config_last_reset_press < CONFIG_TAP_WINDOW) {
+          config_reset_tap_count++;
+        } else {
+          config_reset_tap_count = 1;
+        }
+        config_last_reset_press = now;
+        
+        // Triple-tap without buttons -> set to 4-button mode
+        if (config_reset_tap_count >= CONFIG_TAP_COUNT) {
+          // Cancel any pending OTA
+          pending_ota = false;
+          
+          button_count = 4;
+          saveButtonCount();
+          
+          // Visual feedback: LED stays on for 2 seconds
+          digitalWrite(PIN_LED, LED_ACTIVE_HIGH);
+          ledActive = true;
+          ledTimer = millis() + 2000;
+          
+          Serial.println("[CONFIG] Button count set to: 4 (full remote mode)");
+          config_reset_tap_count = 0;
+          reset_tap_count = 0; // Clear OTA tap count
+          
+          // Send HELLO with new button count
+          if (HOME_ID != 0) {
+            sendPacket(PKT_HELLO, 0, 0);
+          }
+          lastActivityTime = millis();
+        }
+      } else {
+        // Invalid button pattern held - ignore for config purposes
+        Serial.printf("[RESET] Invalid button pattern held (%d buttons), ignoring for config\n", held_count);
+      }
+    }
   }
   
   // Detect falling edge (button released)
-  if (digitalRead(PIN_RESET) == LOW && reset_button_was_high) {
-    // Second tap released - enter OTA mode
-    if (reset_tap_count >= 2 && !ota_mode) {
-      Serial.println("[OTA] Double-tap detected! Entering OTA mode...");
-      otaState = OTA_WAITING_NOTIFY;
-      ota_mode = true;
-      ota_wake_time = millis();
+  if (!reset_is_high && reset_button_was_high) {
+    Serial.printf("[RESET] Button released (tap count: %d)\n", reset_tap_count);
+    
+    // If this is the first release after waking from sleep with button held,
+    // count it as the first tap (we missed the rising edge during wakeup)
+    if (reset_tap_count == 0) {
+      reset_tap_count = 1;
+      last_reset_press = millis();
+      config_reset_tap_count = 1;
+      config_last_reset_press = millis();
+      Serial.println("[RESET] First tap counted on release after wakeup");
+    }
+    
+    // Check if any buttons are held (would indicate config mode, not OTA)
+    bool any_button_held = false;
+    for(int i = 0; i < 4; i++) {
+      if (digitalRead(buttonPins[i]) == HIGH) {
+        any_button_held = true;
+        break;
+      }
+    }
+    
+    // Second tap release - set pending OTA (wait to see if 3rd tap comes)
+    if (reset_tap_count == 2 && !ota_mode && !pending_ota) {
+      Serial.println("[OTA] Double-tap detected! Waiting to confirm (no 3rd tap)...");
+      pending_ota = true;
+      pending_ota_time = millis();
       lastActivityTime = millis();
-      ledBlink(3, 200);
-      
-      // Send OTA_READY packet with firmware_size=0 to announce OTA mode
-      HueMixLinkPacket ready;
-      memset(&ready, 0, sizeof(HueMixLinkPacket));
-      ready.type = PKT_OTA_READY;
-      WiFi.macAddress(ready.sourceMAC);
-      memset(ready.targetMAC, 0xFF, 6);
-      ready.payload.otaReady.firmware_size = 0;
-      ready.payload.otaReady.battery_mv = battery_mv;
-      ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
-      
-      // Try sending to gateways sequentially
-      bool sent = false;
-      int successfulGatewayIndex = -1;
-      
-      for(int i = 0; i < gateways.count; i++) {
-        if (!esp_now_is_peer_exist(gateways.macs[i])) {
-          memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
-          peerInfo.channel = 0;
-          peerInfo.encrypt = false;
-          esp_now_add_peer(&peerInfo);
-        }
-        
-        if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
-          sent = true;
-          successfulGatewayIndex = i;
-          Serial.printf("[OTA] Sent OTA_READY announcement via gateway %d\n", i);
-          break;
-        }
-      }
-      
-      // Move successful gateway to front of list
-      if (successfulGatewayIndex > 0) {
-        uint8_t tempMac[6];
-        memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
-        for(int j = successfulGatewayIndex; j > 0; j--) {
-          memcpy(gateways.macs[j], gateways.macs[j-1], 6);
-        }
-        memcpy(gateways.macs[0], tempMac, 6);
-        saveGateways();
-      }
-      
-      reset_tap_count = 0;
     }
   }
   
-  reset_button_was_high = (digitalRead(PIN_RESET) == HIGH);
+  // Check if pending OTA should be activated (no 3rd tap came)
+  if (pending_ota && !ota_mode && millis() - pending_ota_time >= OTA_ACTIVATION_DELAY) {
+    Serial.println("[OTA] No 3rd tap detected, entering OTA mode...");
+    pending_ota = false;
+    otaState = OTA_WAITING_NOTIFY;
+    ota_mode = true;
+    ota_wake_time = millis();
+    lastActivityTime = millis();
+    ledBlink(3, 200);
+    
+    // Send OTA_READY packet with firmware_size=0 to announce OTA mode
+    HueMixLinkPacket ready;
+    memset(&ready, 0, sizeof(HueMixLinkPacket));
+    ready.type = PKT_OTA_READY;
+    WiFi.macAddress(ready.sourceMAC);
+    memset(ready.targetMAC, 0xFF, 6);
+    ready.payload.otaReady.firmware_size = 0;
+    ready.payload.otaReady.battery_mv = battery_mv;
+    ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
+    
+    // Try sending to gateways sequentially
+    bool sent = false;
+    int successfulGatewayIndex = -1;
+    
+    for(int i = 0; i < gateways.count; i++) {
+      if (!esp_now_is_peer_exist(gateways.macs[i])) {
+        memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
+        peerInfo.channel = 0;
+        peerInfo.encrypt = false;
+        esp_now_add_peer(&peerInfo);
+      }
+      
+      if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
+        sent = true;
+        successfulGatewayIndex = i;
+        Serial.printf("[OTA] Sent OTA_READY announcement via gateway %d\n", i);
+        break;
+      }
+    }
+    
+    // Move successful gateway to front of list
+    if (successfulGatewayIndex > 0) {
+      uint8_t tempMac[6];
+      memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
+      for(int j = successfulGatewayIndex; j > 0; j--) {
+        memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+      }
+      memcpy(gateways.macs[0], tempMac, 6);
+      saveGateways();
+    }
+    
+    reset_tap_count = 0;
+  }
   
-  if (digitalRead(PIN_RESET) == HIGH && !ota_mode) {
+  reset_button_was_high = reset_is_high;
+  
+  // Handle long press for factory reset (only when not in OTA mode)
+  if (reset_is_high && !ota_mode) {
     lastActivityTime = millis();
     unsigned long holdStart = millis();
     while(digitalRead(PIN_RESET) == HIGH) {
@@ -929,6 +1213,7 @@ void loop() {
         prefs.clear();
         HOME_ID = 0;
         gateways.count = 0;
+        button_count = 4; // Reset to default
         Serial.println("Reset complete, restarting...");
         ESP.restart();
       }
@@ -945,8 +1230,8 @@ void loop() {
     homeSetupDone = false;
   }
 
-  // If been idle long enough, go to sleep (but not in OTA mode)
-  if (!ota_mode && millis() - lastActivityTime > SLEEP_TIMEOUT) {
+  // If been idle long enough, go to sleep (but not in OTA mode or while LED is active)
+  if (!ota_mode && !ledActive && millis() - lastActivityTime > SLEEP_TIMEOUT) {
     // Make sure all buttons are released
     bool allReleased = true;
     for(int i = 0; i < 4; i++) {

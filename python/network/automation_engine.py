@@ -160,7 +160,7 @@ class AutomationEngine:
         action_type = button_config.get('action_type', None)
         room_id = button_config.get('room_id')
         
-        action_str = {ACT_CLICK: "CLICK", ACT_HOLDING: "HOLDING"}.get(action, f"UNKNOWN({action})")
+        action_str = {ACT_CLICK: "CLICK", ACT_HOLDING: "HOLDING", ACT_RELEASE: "RELEASE", ACT_SYNC: "SYNC"}.get(action, f"UNKNOWN({action})")
         logger.info(f"Remote {remote_mac} button {button_index}: {action_str} -> {action_type} action in room {room_id}")
         
         if not room_id:

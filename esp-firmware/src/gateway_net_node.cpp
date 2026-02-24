@@ -22,6 +22,7 @@
 Preferences prefs;
 uint32_t HOME_ID = 0; 
 bool nightMode = false;
+bool lastWiFiStatus = false;  // Track WiFi status changes
 
 #define PIN_BTN_MAIN  12   
 #define PIN_BTN_AUX   13 
@@ -29,6 +30,11 @@ bool nightMode = false;
 #define PIN_LED_DATA  19
 #define PIN_RX        16
 #define PIN_TX        17
+
+// --- DATA LED STATE MACHINE ---
+enum DataLEDState { DATA_LED_IDLE, DATA_LED_ON, DATA_LED_BRIEF_OFF };
+DataLEDState dataLEDState = DATA_LED_IDLE;
+unsigned long dataLEDTimer = 0;
 
 WiFiUDP udp;
 const char* ssidBase = "HueMix Link - ";
@@ -89,11 +95,19 @@ void setWifiLedState(int state) {
   else if (state == 2) wifiTicker.attach(0.5, tickWifiLed); 
   else if (state == 3) wifiTicker.attach(0.2, tickWifiLed); 
 }
-void flashDataLED(int times) {
+void flashDataLED() {
   if (nightMode) return;
-  for(int i=0; i<times; i++) {
-    digitalWrite(PIN_LED_DATA, !digitalRead(PIN_LED_DATA)); delay(50);
-    digitalWrite(PIN_LED_DATA, !digitalRead(PIN_LED_DATA)); delay(50);
+  
+  if (dataLEDState == DATA_LED_IDLE) {
+    // LED is off, turn it on
+    digitalWrite(PIN_LED_DATA, HIGH);
+    dataLEDTimer = millis() + LED_ON_DURATION;
+    dataLEDState = DATA_LED_ON;
+  } else if (dataLEDState == DATA_LED_ON) {
+    // LED is on, create brief blink-off to show new event
+    digitalWrite(PIN_LED_DATA, LOW);
+    dataLEDTimer = millis() + LED_BLINK_OFF_DURATION;
+    dataLEDState = DATA_LED_BRIEF_OFF;
   }
 }
 
@@ -134,7 +148,6 @@ void handleSerialPacket(uint8_t* data) {
     udp.beginPacket(server_ip, server_port);
     udp.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket));
     udp.endPacket();
-    flashDataLED(1);
   } else {
     Serial.println("[NET] WiFi down, cannot forward");
   }
@@ -610,7 +623,24 @@ void sendGatewayHello() {
   udp.beginPacket(server_ip, server_port);
   udp.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
   udp.endPacket();
-  flashDataLED(1);
+  flashDataLED();
+}
+
+void sendWiFiStatusToRadio(bool connected) {
+  HueMixLinkPacket pkt;
+  memset(&pkt, 0, sizeof(HueMixLinkPacket));
+  pkt.type = PKT_SYS_CMD;
+  WiFi.macAddress(pkt.sourceMAC);
+  pkt.payload.sys.cmd = 3;  // WiFi status command
+  pkt.payload.raw[1] = connected ? 1 : 0;
+  pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
+  
+  Serial2.write(SERIAL_START);
+  Serial2.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
+  Serial2.write(SERIAL_END);
+  Serial2.flush();
+  
+  Serial.printf("[NET] Sent WiFi status to radio: %s\n", connected ? "CONNECTED" : "DISCONNECTED");
 }
 
 void performFactoryReset() {
@@ -645,7 +675,10 @@ void setup() {
   
   last_serial_activity = millis();
   sendSerialHandshake();
-  flashDataLED(2);
+  for(int i=0; i<2; i++) {
+    digitalWrite(PIN_LED_DATA, !digitalRead(PIN_LED_DATA)); delay(50);
+    digitalWrite(PIN_LED_DATA, !digitalRead(PIN_LED_DATA)); delay(50);
+  }
 
   WiFiManagerParameter custom_ip("server", "Server IP", "", 40);
   char portStr[6]; itoa(server_port, portStr, 10);
@@ -689,7 +722,11 @@ void setup() {
   setWifiLedState(1);
   Serial.println("\n--- OPERATIONAL ---");
   Serial.printf("Server: %s:%d\n", server_ip, server_port);
-  sendGatewayHello(); 
+  sendGatewayHello();
+  
+  // Send initial WiFi status to radio node
+  lastWiFiStatus = true;
+  sendWiFiStatusToRadio(true);
 }
 
 void sendBtnEvent(uint8_t action) {
@@ -725,13 +762,20 @@ void sendBtnEvent(uint8_t action) {
     udp.beginPacket(server_ip, server_port);
     udp.write((uint8_t*)&btnPkt, sizeof(HueMixLinkPacket));
     udp.endPacket();
-    flashDataLED(1);
+    flashDataLED();
   }
 }
 
 void loop() {
   btnMain.update(); btnAux.update();
   if (btnAux.read() == LOW && btnAux.currentDuration() > 5000) performFactoryReset();
+  
+  // Track WiFi status changes and notify radio node
+  bool currentWiFiStatus = (WiFi.status() == WL_CONNECTED);
+  if (currentWiFiStatus != lastWiFiStatus) {
+    lastWiFiStatus = currentWiFiStatus;
+    sendWiFiStatusToRadio(currentWiFiStatus);
+  }
   
   if (WiFi.status() != WL_CONNECTED) {
     static unsigned long lastReconnect = 0;
@@ -749,6 +793,7 @@ void loop() {
         memset(&txPkt, 0, sizeof(HueMixLinkPacket));
         memcpy(&txPkt, udpBuffer, len);
         
+        flashDataLED();
         Serial.printf("[NET] UDP Recv Type 0x%02X (Len %d)\n", txPkt.type, len);
 
         // Handle OTA packets
@@ -782,7 +827,6 @@ void loop() {
           Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
           Serial2.write(SERIAL_END);
           Serial2.flush();
-          flashDataLED(1);
         } else if (txPkt.type == PKT_SYS_CMD) {
           if (txPkt.signature == calculateHash(txPkt.payload.raw, 185, HOME_ID)) {
             bool oldMode = nightMode;
@@ -823,14 +867,12 @@ void loop() {
           udp.write((uint8_t*)&pong, sizeof(HueMixLinkPacket));
           udp.endPacket();
           Serial.printf("[NET] PING Response: Uptime %d seconds\n", uptime_seconds);
-          flashDataLED(1);
         } else {
           // Forward other packet types to radio node
           Serial2.write(SERIAL_START); 
           Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
           Serial2.write(SERIAL_END);
           Serial2.flush();
-          flashDataLED(1);
         }
       }
     }
@@ -848,6 +890,7 @@ void loop() {
       
       // After sending handshake, send HELLO to notify server of radio node's current version
       delay(100);
+      sendWiFiStatusToRadio(lastWiFiStatus);
       sendGatewayHello();
     } else {
       // Process as regular framed packet
@@ -888,5 +931,15 @@ void loop() {
       sendBtnEvent(ACT_CLICK);
     }
     buttonPressed = false;
+  }
+
+  // 5. DATA LED STATE MACHINE HANDLER
+  if (dataLEDState == DATA_LED_ON && millis() >= dataLEDTimer) {
+    digitalWrite(PIN_LED_DATA, LOW);
+    dataLEDState = DATA_LED_IDLE;
+  } else if (dataLEDState == DATA_LED_BRIEF_OFF && millis() >= dataLEDTimer) {
+    digitalWrite(PIN_LED_DATA, HIGH);
+    dataLEDTimer = millis() + LED_ON_DURATION;
+    dataLEDState = DATA_LED_ON;
   }
 }

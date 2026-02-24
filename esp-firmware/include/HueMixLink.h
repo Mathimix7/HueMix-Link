@@ -11,6 +11,10 @@
 #define SERIAL_HANDSHAKE   0x11    
 #define SERIAL_REQ_HANDSHAKE 0x12
 
+// --- LED TIMING ---
+#define LED_ON_DURATION        150   // LED stays on for 150ms per event
+#define LED_BLINK_OFF_DURATION 75    // Brief off-time between events
+
 // --- PACKET TYPES ---
 enum PacketType {
   PKT_PAIR_CONFIRM = 0x01, 

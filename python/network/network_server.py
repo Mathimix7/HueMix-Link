@@ -2173,7 +2173,7 @@ class NetworkServer:
             
             # Set chunk delay based on target type
             if is_gateway and not is_radio_node:
-                chunk_delay = 0.008  # Net node direct
+                chunk_delay = 0.010  # Net node direct
             else:
                 chunk_delay = 0.016  # Other devices via ESP-NOW
             

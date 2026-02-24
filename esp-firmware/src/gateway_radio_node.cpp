@@ -19,10 +19,16 @@
 Preferences prefs;
 uint32_t HOME_ID = 0; 
 bool nightMode = false;
+bool netNodeHasWiFi = false;  // Tracks if net node has WiFi connectivity
 
 #define PIN_LED_STATUS 19
 #define PIN_RX         16
 #define PIN_TX         17
+
+// --- STATUS LED STATE MACHINE ---
+enum StatusLEDState { STATUS_LED_IDLE, STATUS_LED_ON, STATUS_LED_BRIEF_OFF };
+StatusLEDState statusLEDState = STATUS_LED_IDLE;
+unsigned long statusLEDTimer = 0;
 
 // --- DATA LED BREATHING (for OTA) ---
 #define DATA_LED_PWM_FREQ 5000
@@ -98,6 +104,22 @@ void stopDataLedBreathing() {
   ledcDetach(PIN_LED_STATUS);
   pinMode(PIN_LED_STATUS, OUTPUT);
   digitalWrite(PIN_LED_STATUS, LOW);
+}
+
+void triggerStatusLED() {
+  if (nightMode) return;
+  
+  if (statusLEDState == STATUS_LED_IDLE) {
+    // LED is off, turn it on
+    digitalWrite(PIN_LED_STATUS, HIGH);
+    statusLEDTimer = millis() + LED_ON_DURATION;
+    statusLEDState = STATUS_LED_ON;
+  } else if (statusLEDState == STATUS_LED_ON) {
+    // LED is on, create brief blink-off to show new event
+    digitalWrite(PIN_LED_STATUS, LOW);
+    statusLEDTimer = millis() + LED_BLINK_OFF_DURATION;
+    statusLEDState = STATUS_LED_BRIEF_OFF;
+  }
 }
 
 void sendSerialHandshake() {
@@ -579,6 +601,12 @@ void handleSerialPacket(uint8_t* data) {
     
     if (radioTx.payload.sys.cmd == 1) nightMode = true;
     else if (radioTx.payload.sys.cmd == 2) nightMode = false;
+    else if (radioTx.payload.sys.cmd == 3) {
+      // WiFi status update from net node
+      netNodeHasWiFi = (radioTx.payload.raw[1] == 1);
+      Serial.printf("[RADIO] Net node WiFi status: %s\n", netNodeHasWiFi ? "CONNECTED" : "DISCONNECTED");
+      return;  // Don't forward this command via ESP-NOW
+    }
     else {
       esp_now_peer_info_t peer = {};
       memcpy(peer.peer_addr, radioTx.targetMAC, 6);
@@ -708,10 +736,7 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     Serial2.flush();
     waitingForDelivery = false;
     
-    if (!nightMode) {
-      digitalWrite(PIN_LED_STATUS, (status == ESP_NOW_SEND_SUCCESS) ? HIGH : LOW);
-      delay(50); digitalWrite(PIN_LED_STATUS, LOW);
-    }
+    triggerStatusLED();
   }
 }
 
@@ -734,9 +759,7 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
   memcpy(&bufferPkt, &radioRx, sizeof(HueMixLinkPacket));
   pktReady = true;
   
-  if (!nightMode) {
-    digitalWrite(PIN_LED_STATUS, HIGH);
-  }
+  triggerStatusLED();
 }
 
 void setup() {
@@ -807,26 +830,40 @@ void loop() {
     Serial2.flush();
     
     if (bufferPkt.type == PKT_BTN_EVENT) {
-      HueMixLinkPacket ack; 
-      memset(&ack, 0, sizeof(HueMixLinkPacket));
-      ack.type = PKT_ACK_TO_BTN;
-      esp_read_mac(ack.sourceMAC, ESP_MAC_WIFI_STA);
-      memcpy(ack.targetMAC, bufferPkt.sourceMAC, 6);
-      ack.msgID = 0;
-      ack.payload.gwList = activeGateways;
-      
-      // Security: Sign the ACK packet with HOME_ID
-      ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
-      
-      esp_now_peer_info_t peer = {}; 
-      memcpy(peer.peer_addr, bufferPkt.sourceMAC, 6);
-      peer.channel = HUEMIXLINK_CHANNEL; 
-      peer.encrypt = false;
-      if(!esp_now_is_peer_exist(bufferPkt.sourceMAC)) esp_now_add_peer(&peer);
-      esp_now_send(bufferPkt.sourceMAC, (uint8_t*)&ack, sizeof(ack));
+      // Only send ACK if net node has WiFi connectivity
+      if (netNodeHasWiFi) {
+        HueMixLinkPacket ack; 
+        memset(&ack, 0, sizeof(HueMixLinkPacket));
+        ack.type = PKT_ACK_TO_BTN;
+        esp_read_mac(ack.sourceMAC, ESP_MAC_WIFI_STA);
+        memcpy(ack.targetMAC, bufferPkt.sourceMAC, 6);
+        ack.msgID = 0;
+        ack.payload.gwList = activeGateways;
+        
+        // Security: Sign the ACK packet with HOME_ID
+        ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
+        
+        esp_now_peer_info_t peer = {}; 
+        memcpy(peer.peer_addr, bufferPkt.sourceMAC, 6);
+        peer.channel = HUEMIXLINK_CHANNEL; 
+        peer.encrypt = false;
+        if(!esp_now_is_peer_exist(bufferPkt.sourceMAC)) esp_now_add_peer(&peer);
+        esp_now_send(bufferPkt.sourceMAC, (uint8_t*)&ack, sizeof(ack));
+      } else {
+        Serial.println("[RADIO] Button ACK suppressed - Net node has no WiFi");
+      }
     }
-    digitalWrite(PIN_LED_STATUS, LOW);
     pktReady = false;
+  }
+
+  // STATUS LED STATE MACHINE HANDLER
+  if (statusLEDState == STATUS_LED_ON && millis() >= statusLEDTimer) {
+    digitalWrite(PIN_LED_STATUS, LOW);
+    statusLEDState = STATUS_LED_IDLE;
+  } else if (statusLEDState == STATUS_LED_BRIEF_OFF && millis() >= statusLEDTimer) {
+    digitalWrite(PIN_LED_STATUS, HIGH);
+    statusLEDTimer = millis() + LED_ON_DURATION;
+    statusLEDState = STATUS_LED_ON;
   }
 
   if (!waitingForDelivery) {

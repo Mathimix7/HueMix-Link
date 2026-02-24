@@ -89,6 +89,9 @@ int breathingBrightness = 0;
 bool breathingActive = false;
 volatile bool breathingUpdatePending = false;  // Flag for interrupt-safe LED update
 
+#define CMD_SET_LED_COUNT 0x50
+#define CMD_FACTORY_RESET 0xFF
+
 const uint8_t gamma8[] = {
     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  1,  1,  1,  1,
@@ -948,7 +951,7 @@ void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
     Serial.printf("[LIGHT] Received PKT_SYS_CMD from %02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     if (rx->signature == calculateHash(rx->payload.raw, 185, HOME_ID)) {
         // Factory Reset
-        if (rx->payload.sys.cmd == 0xFF) {
+        if (rx->payload.sys.cmd == CMD_FACTORY_RESET) {
           // Selective reset: only clear pairing data
           prefs.remove("hid");
           prefs.remove("gw");
@@ -956,7 +959,7 @@ void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
           ESP.restart();
         }
         // Update Configured Length
-        else if (rx->payload.sys.cmd == 0x50) {
+        else if (rx->payload.sys.cmd == CMD_SET_LED_COUNT) {
           numLeds = rx->payload.sys.value;
           prefs.putUInt("leds", numLeds);
           Serial.printf("[LIGHT] Updated LED count to %d\n", numLeds);

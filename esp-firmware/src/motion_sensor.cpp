@@ -160,6 +160,251 @@ void addGateway(const uint8_t *mac) {
   }
 }
 
+// --- OTA FUNCTIONS ---
+void abortOta(const char* reason) {
+  Serial.printf("[OTA] ABORT: %s\n", reason);
+  if (update_handle) {
+    esp_ota_abort(update_handle);
+    update_handle = 0;
+  }
+  otaState = OTA_IDLE;
+  expected_chunk_index = 0;
+  received_bytes = 0;
+  ota_mode = false;
+  stopLedBreathing();
+  ledBlink(3, 100);
+}
+
+void handleOtaNotify(HueMixLinkPacket* pkt) {
+  if (otaState != OTA_WAITING_NOTIFY) {
+    Serial.println("[OTA] Not in OTA mode");
+    return;
+  }
+  
+  Serial.println("[OTA] NOTIFY received");
+  
+  expected_firmware_size = pkt->payload.otaNotify.firmware_size;
+  memcpy(expected_sha256, pkt->payload.otaNotify.sha256_hash, 32);
+  
+  update_partition = esp_ota_get_next_update_partition(NULL);
+  if (!update_partition) {
+    Serial.println("[OTA] No update partition available");
+    abortOta("No partition");
+    return;
+  }
+  
+  Serial.printf("[OTA] Starting update: %u bytes\n", expected_firmware_size);
+  
+  esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA] Begin failed: %d\n", err);
+    abortOta("Begin failed");
+    return;
+  }
+  
+  mbedtls_sha256_init(&sha256_ctx);
+  mbedtls_sha256_starts(&sha256_ctx, 0);
+  
+  otaState = OTA_RECEIVING;
+  expected_chunk_index = 0;
+  received_bytes = 0;
+  last_ota_activity = millis();
+  
+  Serial.println("[OTA] Ready to receive chunks");
+  startLedBreathing();
+  
+  // Send OTA_READY response with actual firmware size to confirm readiness
+  HueMixLinkPacket ready;
+  memset(&ready, 0, sizeof(HueMixLinkPacket));
+  ready.type = PKT_OTA_READY;
+  WiFi.macAddress(ready.sourceMAC);
+  memset(ready.targetMAC, 0xFF, 6);
+  ready.payload.otaReady.firmware_size = expected_firmware_size;
+  ready.payload.otaReady.battery_mv = battery_mv;
+  ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
+  
+  // Try sending to gateways sequentially
+  bool sent = false;
+  int successfulGatewayIndex = -1;
+  
+  for(int i = 0; i < gateways.count; i++) {
+    if (!esp_now_is_peer_exist(gateways.macs[i])) {
+      memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
+      peerInfo.channel = 0;
+      peerInfo.encrypt = false;
+      esp_now_add_peer(&peerInfo);
+    }
+    
+    if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
+      sent = true;
+      successfulGatewayIndex = i;
+      Serial.printf("[OTA] Sent OTA_READY response via gateway %d\n", i);
+      break;
+    }
+  }
+  
+  // Move successful gateway to front of list
+  if (successfulGatewayIndex > 0) {
+    uint8_t tempMac[6];
+    memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
+    for(int j = successfulGatewayIndex; j > 0; j--) {
+      memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+    }
+    memcpy(gateways.macs[0], tempMac, 6);
+    saveGateways();
+  }
+  
+  if (!sent) {
+    Serial.println("[OTA] Failed to send OTA_READY to any gateway");
+  }
+}
+
+void handleOtaChunk(HueMixLinkPacket* pkt) {
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  
+  last_ota_activity = millis();
+  ota_wake_time = millis();
+  
+  uint16_t chunk_idx = pkt->payload.otaChunk.chunk_index;
+  uint8_t data_len = pkt->payload.otaChunk.data_len;
+  
+  // Check chunk order: accept current or future chunks, ignore duplicates
+  if (chunk_idx < expected_chunk_index) {
+    // This is a duplicate chunk we already received - ignore it silently
+    Serial.printf("[OTA] Ignoring duplicate chunk %d (already at %d)\n", chunk_idx, expected_chunk_index);
+    return;
+  }
+  
+  if (chunk_idx != expected_chunk_index) {
+    Serial.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
+    return;
+  }
+  
+  esp_err_t err = esp_ota_write(update_handle, pkt->payload.otaChunk.data, data_len);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA] Write failed at chunk %d: %d\n", chunk_idx, err);
+    abortOta("Write failed");
+    return;
+  }
+  
+  mbedtls_sha256_update(&sha256_ctx, pkt->payload.otaChunk.data, data_len);
+  
+  received_bytes += data_len;
+  expected_chunk_index++;
+  
+  if (chunk_idx % 50 == 0) {
+    Serial.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n", 
+      received_bytes, expected_firmware_size, 
+      (received_bytes * 100.0) / expected_firmware_size);
+    triggerLed(20);
+  }
+}
+
+void handleOtaComplete(HueMixLinkPacket* pkt) {
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  
+  Serial.println("[OTA] COMPLETE received, validating...");
+  otaState = OTA_VALIDATING;
+  
+  uint8_t calculated_sha256[32];
+  mbedtls_sha256_finish(&sha256_ctx, calculated_sha256);
+  mbedtls_sha256_free(&sha256_ctx);
+  
+  if (memcmp(calculated_sha256, expected_sha256, 32) != 0) {
+    Serial.println("[OTA] SHA256 MISMATCH!");
+    abortOta("SHA256 mismatch");
+    return;
+  }
+  
+  Serial.println("[OTA] SHA256 verified!");
+  
+  esp_err_t err = esp_ota_end(update_handle);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA] End failed: %d\n", err);
+    abortOta("End failed");
+    return;
+  }
+  update_handle = 0;
+  
+  err = esp_ota_set_boot_partition(update_partition);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA] Set boot partition failed: %d\n", err);
+    abortOta("Set boot failed");
+    return;
+  }
+  
+  Serial.println("[OTA] UPDATE SUCCESSFUL! Rebooting...");
+  otaState = OTA_COMPLETE;
+  
+  stopLedBreathing();
+  ledBlink(10, 100);
+  ESP.restart();
+}
+
+void handleOtaAbort(HueMixLinkPacket* pkt) {
+  Serial.println("[OTA] ABORT received from server");
+  abortOta("Server abort");
+}
+
+void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  
+  // Send checkpoint ACK with last successfully received chunk
+  uint16_t last_chunk = (expected_chunk_index > 0) ? (expected_chunk_index - 1) : 0;
+  Serial.printf("[OTA] Checkpoint request - last chunk received: %d\n", last_chunk);
+  
+  // Build OTA_CHUNK_ACK packet
+  HueMixLinkPacket ack;
+  memset(&ack, 0, sizeof(HueMixLinkPacket));
+  ack.type = PKT_OTA_CHUNK_ACK;
+  WiFi.macAddress(ack.sourceMAC);
+  memset(ack.targetMAC, 0, 6);  // Server doesn't need target MAC
+  ack.msgID = 0;
+  ack.payload.otaChunkAck.last_chunk_index = last_chunk;
+  ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
+  
+  // Try sending to gateways (not to pkt->sourceMAC which is Python server)
+  bool sent = false;
+  int successfulGatewayIndex = -1;
+  
+  for(int i = 0; i < gateways.count; i++) {
+    if (!esp_now_is_peer_exist(gateways.macs[i])) {
+      memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
+      peerInfo.channel = 0;
+      peerInfo.encrypt = false;
+      esp_now_add_peer(&peerInfo);
+    }
+    
+    if (esp_now_send(gateways.macs[i], (uint8_t*)&ack, sizeof(ack)) == ESP_OK) {
+      sent = true;
+      successfulGatewayIndex = i;
+      Serial.printf("[OTA] Sent checkpoint ACK via gateway %d: last_chunk=%d\n", i, last_chunk);
+      break;
+    }
+  }
+  
+  // Move successful gateway to front of list for future OTA packets
+  if (successfulGatewayIndex > 0) {
+    uint8_t tempMac[6];
+    memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
+    for(int j = successfulGatewayIndex; j > 0; j--) {
+      memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+    }
+    memcpy(gateways.macs[0], tempMac, 6);
+    saveGateways();
+  }
+  
+  if (!sent) {
+    Serial.println("[OTA] Failed to send checkpoint ACK to any gateway");
+  }
+}
+
 // --- BATTERY MONITORING ---
 void getBatteryVoltage() {  
   uint32_t raw = 0;
@@ -424,108 +669,43 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
       }
     }
   }
-  else if (pkt.type == PKT_OTA_NOTIFY) {
-    // OTA implementation similar to buttons (abbreviated for brevity)
-    if (!ota_mode || otaState != OTA_WAITING_NOTIFY) return;
-    
-    expected_firmware_size = pkt.payload.otaNotify.firmware_size;
-    memcpy(expected_sha256, pkt.payload.otaNotify.sha256_hash, 32);
-      
-    update_partition = esp_ota_get_next_update_partition(NULL);
-    if (update_partition == NULL) {
-      Serial.println("[OTA] No update partition!");
-      return;
+  // OTA Handling
+  // Security: Verify all OTA packets before processing
+  if (pkt.type == PKT_OTA_NOTIFY || pkt.type == PKT_OTA_CHUNK || 
+      pkt.type == PKT_OTA_CHECKPOINT_REQ || pkt.type == PKT_OTA_COMPLETE || 
+      pkt.type == PKT_OTA_ABORT) {
+    if (HOME_ID != 0) {
+      uint32_t expected_sig = calculateHash(pkt.payload.raw, 185, HOME_ID);
+      if (pkt.signature != expected_sig) {
+        Serial.printf("[MOTION] SECURITY: Invalid OTA signature. Expected 0x%08X, got 0x%08X\n", expected_sig, pkt.signature);
+        Serial.println("[MOTION] Rejected unauthorized OTA packet");
+        return;
+      }
     }
-      
-    esp_err_t err = esp_ota_begin(update_partition, expected_firmware_size, &update_handle);
-    if (err != ESP_OK) {
-      Serial.printf("[OTA] Begin failed: %d\n", err);
-      return;
-    }
-      
-    mbedtls_sha256_init(&sha256_ctx);
-    mbedtls_sha256_starts(&sha256_ctx, 0);
-    
-    received_bytes = 0;
-    expected_chunk_index = 0;
-    otaState = OTA_RECEIVING;
-    last_ota_activity = millis();
-    
-    startLedBreathing();
-    
-    // Send OTA_READY with actual firmware size
-    HueMixLinkPacket ready;
-    memset(&ready, 0, sizeof(ready));
-    ready.type = PKT_OTA_READY;
-    WiFi.macAddress(ready.sourceMAC);
-    memcpy(ready.targetMAC, mac, 6);
-    ready.payload.otaReady.firmware_size = expected_firmware_size;
-    ready.payload.otaReady.battery_mv = battery_mv;
-    ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
-    esp_now_send(mac, (uint8_t*)&ready, sizeof(ready));
-    
-    Serial.printf("[OTA] Ready to receive %u bytes\n", expected_firmware_size);
   }
+  
+  if (pkt.type == PKT_OTA_NOTIFY) {
+    handleOtaNotify(&pkt);
+    lastActivityTime = millis();
+    ota_wake_time = millis();
+    return;
+  } 
   else if (pkt.type == PKT_OTA_CHUNK) {
-    if (otaState != OTA_RECEIVING) return;
-      
-    if (pkt.payload.otaChunk.chunk_index == expected_chunk_index) {
-      esp_ota_write(update_handle, pkt.payload.otaChunk.data, pkt.payload.otaChunk.data_len);
-      mbedtls_sha256_update(&sha256_ctx, pkt.payload.otaChunk.data, pkt.payload.otaChunk.data_len);
-      
-      received_bytes += pkt.payload.otaChunk.data_len;
-      expected_chunk_index++;
-      last_ota_activity = millis();
-      
-      // Send ACK every 10 chunks
-      if (expected_chunk_index % 10 == 0) {
-        HueMixLinkPacket ack;
-        memset(&ack, 0, sizeof(ack));
-        ack.type = PKT_OTA_CHUNK_ACK;
-        WiFi.macAddress(ack.sourceMAC);
-        memcpy(ack.targetMAC, mac, 6);
-        ack.payload.otaChunkAck.last_chunk_index = expected_chunk_index - 1;
-        ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
-        esp_now_send(mac, (uint8_t*)&ack, sizeof(ack));
-      }
-      
-      if (received_bytes >= expected_firmware_size) {
-        otaState = OTA_VALIDATING;
-      }
-    }
-  }
+    handleOtaChunk(&pkt);
+    lastActivityTime = millis();
+    return;
+  } 
+  else if (pkt.type == PKT_OTA_CHECKPOINT_REQ) {
+    handleOtaCheckpointReq(&pkt);
+    return;
+  } 
   else if (pkt.type == PKT_OTA_COMPLETE) {
-    if (otaState == OTA_VALIDATING) {
-      uint8_t calculated_sha256[32];
-      mbedtls_sha256_finish(&sha256_ctx, calculated_sha256);
-      
-      if (memcmp(calculated_sha256, expected_sha256, 32) == 0) {
-        esp_ota_end(update_handle);
-        esp_ota_set_boot_partition(update_partition);
-        
-        stopLedBreathing();
-        ledBlink(5, 100);
-        
-        Serial.println("[OTA] Update successful! Rebooting...");
-        delay(500);
-        ESP.restart();
-      } else {
-        Serial.println("[OTA] Hash mismatch!");
-        esp_ota_abort(update_handle);
-        otaState = OTA_IDLE;
-        ota_mode = false;
-        stopLedBreathing();
-      }
-    }
-  }
+    handleOtaComplete(&pkt);
+    return;
+  } 
   else if (pkt.type == PKT_OTA_ABORT) {
-    if (otaState == OTA_RECEIVING || otaState == OTA_VALIDATING) {
-      esp_ota_abort(update_handle);
-    }
-    otaState = OTA_IDLE;
-    ota_mode = false;
-    stopLedBreathing();
-    Serial.println("[OTA] Aborted by server");
+    handleOtaAbort(&pkt);
+    return;
   }
 }
 
@@ -600,6 +780,17 @@ void setup() {
   HOME_ID = prefs.getUInt("hid", 0);
   prefs.getBytes("gw", &gateways, sizeof(gateways));
   cooldown_seconds = prefs.getUInt("cooldown", DEFAULT_COOLDOWN_SECONDS);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  if (esp_now_init() != ESP_OK) ESP.restart();
+  
+  esp_now_register_recv_cb(OnDataRecv);
+  
+  // Initialize peer info structure
+  memset(&peerInfo, 0, sizeof(peerInfo));
+  
+  lastActivityTime = millis();
   
   // Check wakeup reason
   esp_sleep_wakeup_cause_t wakeupReason = esp_sleep_get_wakeup_cause();
@@ -635,21 +826,34 @@ void setup() {
   } else {
     // Cold boot
     Serial.println("Cold boot");
+    
+    // Check if we just rebooted from software reset (e.g., after OTA)
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    if (reset_reason == ESP_RST_SW && HOME_ID != 0 && gateways.count > 0) {
+      Serial.println("[OTA] Software reset detected - sending HELLO with new version");
+      delay(100);
+      sendPacket(PKT_HELLO, 0);
+      delay(200);
+    } 
+    ledBlink(5, 100);
+    goToSleepWithPIR();
   }
-  
-  // If we reach here, it's cold boot or reset button press
-  WiFi.mode(WIFI_STA);
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);
-  if (esp_now_init() != ESP_OK) ESP.restart();
-  
-  esp_now_register_recv_cb(OnDataRecv);
-  
-  lastActivityTime = millis();
   
   Serial.printf("HOME_ID: 0x%08X\n", HOME_ID);
   Serial.printf("Battery: %d mV\n", battery_mv);
   Serial.printf("Gateways: %d\n", gateways.count);
   Serial.printf("Cooldown: %u seconds\n", cooldown_seconds);
+  
+  // If software reset after OTA, send HELLO immediately then sleep
+  if (wakeupFromReset) {
+    Serial.println("[OTA] Sending HELLO with new firmware version");
+    sendPacket(PKT_HELLO, 0);
+    delay(200);  // Wait for transmission
+    ledBlink(5, 100);  // Visual confirmation
+    Serial.println("[OTA] HELLO sent, returning to sleep");
+    delay(100);
+    goToSleepWithPIR();
+  }
 }
 
 // --- MAIN LOOP ---
@@ -693,21 +897,29 @@ void loop() {
     sleepWithPIR = false;
   }
   
-  // Handle OTA mode timeout
-  if (otaState == OTA_WAITING_NOTIFY && millis() - ota_wake_time > 30000) {
-    Serial.println("[OTA] No NOTIFY received within 30s, returning to normal");
-    otaState = OTA_IDLE;
-    ota_mode = false;
-    stopLedBreathing();
-    goToSleepWithPIR();
-  }
-  
-  if (ota_mode && millis() - ota_wake_time > 300000) {
-    Serial.println("[OTA] Timeout, returning to normal mode");
-    ota_mode = false;
-    otaState = OTA_IDLE;
-    stopLedBreathing();
-    goToSleepWithPIR();
+  // Handle OTA mode timeouts
+  if (ota_mode) {
+    if (otaState == OTA_WAITING_NOTIFY) {
+      // Waiting for NOTIFY packet - timeout after 30 seconds
+      if (millis() - ota_wake_time > 30000) {
+        Serial.println("[OTA] No NOTIFY received within 30s, returning to normal");
+        abortOta("NOTIFY timeout");
+        goToSleepWithPIR();
+      }
+    } else if (otaState == OTA_RECEIVING) {
+      // Actively receiving chunks - timeout if no activity for 30 seconds
+      if (millis() - last_ota_activity > 30000) {
+        Serial.println("[OTA] No chunk received for 30s, aborting");
+        abortOta("Chunk timeout");
+        goToSleepWithPIR();
+      }
+      // Overall OTA timeout - 10 minutes from start
+      if (millis() - ota_wake_time > 600000) {
+        Serial.println("[OTA] Overall timeout (10 min), aborting");
+        abortOta("Overall timeout");
+        goToSleepWithPIR();
+      }
+    }
   }
   
   // Handle RESET button: single press (HELLO), double-tap (OTA), 5s hold (factory reset)
@@ -762,6 +974,10 @@ void loop() {
         ready.payload.otaReady.battery_mv = battery_mv;
         ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
         
+        // Try sending to gateways sequentially
+        bool sent = false;
+        int successfulGatewayIndex = -1;
+        
         for(int i = 0; i < gateways.count; i++) {
           if (!esp_now_is_peer_exist(gateways.macs[i])) {
             memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
@@ -769,7 +985,28 @@ void loop() {
             peerInfo.encrypt = false;
             esp_now_add_peer(&peerInfo);
           }
-          esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready));
+          
+          if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
+            sent = true;
+            successfulGatewayIndex = i;
+            Serial.printf("[OTA] Sent OTA_READY announcement via gateway %d\n", i);
+            break;
+          }
+        }
+        
+        // Move successful gateway to front of list
+        if (successfulGatewayIndex > 0) {
+          uint8_t tempMac[6];
+          memcpy(tempMac, gateways.macs[successfulGatewayIndex], 6);
+          for(int j = successfulGatewayIndex; j > 0; j--) {
+            memcpy(gateways.macs[j], gateways.macs[j-1], 6);
+          }
+          memcpy(gateways.macs[0], tempMac, 6);
+          saveGateways();
+        }
+        
+        if (!sent) {
+          Serial.println("[OTA] Failed to send OTA_READY to any gateway");
         }
         
         reset_tap_count = 0;

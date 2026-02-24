@@ -163,27 +163,14 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Device Type</label>
                     <select id="uploadDeviceType" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        <optgroup label="Gateways">
-                            <option value="gateway_net">Gateway Net Node (WiFi)</option>
-                            <option value="gateway_radio">Gateway Radio Node (ESP-NOW)</option>
+                        <option value="">Select a device type...</option>
+                        {% for group_name, device_keys in device_type_groups.items() %}
+                        <optgroup label="{{ group_name }}">
+                            {% for key in device_keys %}
+                            <option value="{{ key }}">{{ device_type_labels.get(key, key) }}</option>
+                            {% endfor %}
                         </optgroup>
-                        <optgroup label="Lightstrips">
-                            <option value="lightstrip_model1">Lightstrip Model 1 (ESP32, RGB, WS2812B)</option>
-                            <option value="lightstrip_model2">Lightstrip Model 2 (ESP32, RGBW, SK6812)</option>
-                            <option value="lightstrip_model3">Lightstrip Model 3 (ESP8266, RGB, WS2812B)</option>
-                            <option value="lightstrip_model4">Lightstrip Model 4 (ESP8266, RGBW, SK6812)</option>
-                        </optgroup>
-                        <optgroup label="Buttons">
-                            <option value="button_esp32">Button ESP32</option>
-                            <option value="button_esp8266">Button ESP8266</option>
-                        </optgroup>
-                        <optgroup label="Remotes">
-                            <option value="remote_esp32">Remote ESP32</option>
-                            <!-- <option value="remote_esp8266">Remote ESP8266</option> -->
-                        </optgroup>
-                        <optgroup label="Motion Sensors">
-                            <option value="motion_sensor_esp32">Motion Sensor ESP32</option>
-                        </optgroup>
+                        {% endfor %}
                     </select>
                 </div>
                 
@@ -226,27 +213,13 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Select Firmware</label>
                     <select id="serialFirmwareSelect" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-                        <optgroup label="Gateways">
-                            <option value="gateway_net" disabled>Gateway Net Node (WiFi)</option>
-                            <option value="gateway_radio" disabled>Gateway Radio Node (ESP-NOW)</option>
+                        {% for group_name, device_keys in device_type_groups.items() %}
+                        <optgroup label="{{ group_name }}">
+                            {% for key in device_keys %}
+                            <option value="{{ key }}" disabled>{{ device_type_labels.get(key, key) }}</option>
+                            {% endfor %}
                         </optgroup>
-                        <optgroup label="Lightstrips">
-                            <option value="lightstrip_model1" disabled>Lightstrip Model 1 (ESP32, RGB, WS2812B)</option>
-                            <option value="lightstrip_model2" disabled>Lightstrip Model 2 (ESP32, RGBW, SK6812)</option>
-                            <option value="lightstrip_model3" disabled>Lightstrip Model 3 (ESP8266, RGB, WS2812B)</option>
-                            <option value="lightstrip_model4" disabled>Lightstrip Model 4 (ESP8266, RGBW, SK6812)</option>
-                        </optgroup>
-                        <optgroup label="Buttons">
-                            <option value="button_esp32" disabled>Button ESP32</option>
-                            <option value="button_esp8266" disabled>Button ESP8266</option>
-                        </optgroup>
-                        <optgroup label="Remotes">
-                            <option value="remote_esp32" disabled>Remote ESP32</option>
-                            <!-- <option value="remote_esp8266" disabled>Remote ESP8266</option> -->
-                        </optgroup>
-                        <optgroup label="Motion Sensors">
-                            <option value="motion_sensor_esp32" disabled>Motion Sensor ESP32</option>
-                        </optgroup>
+                        {% endfor %}
                     </select>
                 </div>
                 <div>
@@ -276,6 +249,9 @@
 </div>
 
 <script>
+// Lightstrip model names from server
+const modelNames = {{ lightstrip_model_names | tojson }};
+
 let availableFirmwares = {};
 let devices = [];
 let currentUpdateMac = null;
@@ -517,12 +493,6 @@ function renderDevicesTable() {
         const platformLabel = (device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor') && device.platform ? ` (${device.platform.toUpperCase()})` : '';
         
         // Model label for lightstrips
-        const modelNames = {
-            1: 'ESP32, RGB, WS2812B',
-            2: 'ESP32, RGBW, SK6812',
-            3: 'ESP8266, RGB, WS2812B',
-            4: 'ESP8266, RGBW, SK6812'
-        };
         const modelLabel = device.type === 'lightstrip' && device.model_id ? ` (Model ${device.model_id}: ${modelNames[device.model_id] || 'Unknown'})` : '';
         
         const hasActiveOta = activeSessions[device.mac_address] || false;

@@ -1,7 +1,6 @@
 /* 
   HUEMIXLINK V3 - LIGHT STRIP FIRMWARE - MODEL 5 & 6
-  Individual RGB (WS2812B) + Global Warm White PWM
-  
+  Individual RGB (WS2812B) + Global Warm White PWM  
   Hardware:
   MODEL 5 (ESP32):
   - RGB LEDs on pin 27 (WS2812B)

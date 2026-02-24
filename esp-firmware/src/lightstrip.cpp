@@ -13,20 +13,20 @@
 
 // --- MODEL ID ---
 // Each firmware variant has a unique model ID for identification
-// Model 1: ESP32, RGB, GRB, WS2812B
-// Model 2: ESP32, RGBW, GRB, SK6812
-// Model 3: ESP8266, RGB, GRB, WS2812B
-// Model 4: ESP8266, RGBW, GRB, SK6812
+// ODD numbers = ESP32, EVEN numbers = ESP8266
+// Pairs represent the same type across platforms:
+// Model 1 (ESP32) & 2 (ESP8266): RGB, GRB, WS2812B
+// Model 3 (ESP32) & 4 (ESP8266): RGBW, GRB, SK6812
 #ifndef LIGHTSTRIP_MODEL
   #error "LIGHTSTRIP_MODEL not defined"
 #endif
-  // Option 1: Standard RGB
-#if LIGHTSTRIP_MODEL == 1 || LIGHTSTRIP_MODEL == 3
+  // Models 1 & 2: Standard RGB
+#if LIGHTSTRIP_MODEL == 1 || LIGHTSTRIP_MODEL == 2
   #define IS_RGBW  false
   #define COLOR_ORDER GRB
   #define LED_TYPE WS2812B
-#elif LIGHTSTRIP_MODEL == 2 || LIGHTSTRIP_MODEL == 4
-  // Option 2: RGBW Strip
+#elif LIGHTSTRIP_MODEL == 3 || LIGHTSTRIP_MODEL == 4
+  // Models 3 & 4: RGBW Strip
   #define IS_RGBW  true
   #define LED_TYPE SK6812
   #define COLOR_ORDER GRB 

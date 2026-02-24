@@ -17,6 +17,7 @@
 // Pairs represent the same type across platforms:
 // Model 1 (ESP32) & 2 (ESP8266): RGB, GRB, WS2812B
 // Model 3 (ESP32) & 4 (ESP8266): RGBW, GRB, SK6812
+// Model 5 (ESP32) & 6 (ESP8266): RGB (WS2812B) + Global Warm White PWM
 #ifndef LIGHTSTRIP_MODEL
   #error "LIGHTSTRIP_MODEL not defined"
 #endif
@@ -30,6 +31,16 @@
   #define IS_RGBW  true
   #define LED_TYPE SK6812
   #define COLOR_ORDER GRB 
+#elif LIGHTSTRIP_MODEL == 5 || LIGHTSTRIP_MODEL == 6
+  // Models 5 & 6: RGB + Global Warm White PWM
+  #define IS_RGBW  false
+  #define HAS_WARMWHITE_PWM true
+  #define COLOR_ORDER RGB
+  #define LED_TYPE WS2812B
+  // Warm white color profile (3000K)
+  #define WW_R 255
+  #define WW_G 180
+  #define WW_B 107
 #else
   #error "Unknown LIGHTSTRIP_MODEL"
 #endif
@@ -43,6 +54,9 @@
   #define LED_PIN     D2
   #define PIN_RESET   D1
   #define ONBOARD_LED D4
+  #if LIGHTSTRIP_MODEL == 6
+    #define WHITE_LED_PIN  D3
+  #endif
 #else
   #include <WiFi.h>
   #include <esp_now.h>
@@ -53,6 +67,9 @@
   #define LED_PIN     16  
   #define PIN_RESET   27
   #define ONBOARD_LED 2
+  #if LIGHTSTRIP_MODEL == 5
+    #define WHITE_LED_PIN  26
+  #endif
 #endif
 
 // --- GLOBALS ---
@@ -154,6 +171,66 @@ CRGBW rgbToRgbw(const CRGB &rgb) {
   }
 }
 
+#ifdef HAS_WARMWHITE_PWM
+// --- WARM WHITE PWM CONTROL (Models 5 & 6) ---
+void setWhitePWM(uint8_t val) {
+  #ifdef ESP32
+    // Use LEDC PWM on ESP32
+    static bool pwmConfigured = false;
+    if (!pwmConfigured) {
+      ledcAttach(WHITE_LED_PIN, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+      pwmConfigured = true;
+    }
+    ledcWrite(WHITE_LED_PIN, val);
+  #else
+    // Use analogWrite on ESP8266
+    analogWrite(WHITE_LED_PIN, val);
+  #endif
+}
+
+// --- WARM WHITE EXTRACTION ALGORITHM (Models 5 & 6) ---
+// Calculates how much warm white component is shared across all pixels
+// Returns the warm white level (0-255)
+uint8_t extractWarmWhite(CRGB* pixelData, uint8_t count) {
+  if (count == 0) return 0;
+  
+  // Find the maximum amount of warm white that ALL pixels contain
+  uint8_t maxSharedWW = 255;
+  
+  for(int i = 0; i < count; i++) {
+    uint8_t r = pixelData[i].r;
+    uint8_t g = pixelData[i].g;
+    uint8_t b = pixelData[i].b;
+    
+    // Calculate how much warm white fits in this pixel
+    // by finding the limiting factor (bottleneck)
+    uint16_t ww_from_r = ((uint16_t)r * 255) / WW_R;
+    uint16_t ww_from_g = ((uint16_t)g * 255) / WW_G;
+    uint16_t ww_from_b = ((uint16_t)b * 255) / WW_B;
+    
+    // The minimum determines how much warm white this pixel can contribute
+    uint8_t pixel_ww = min(ww_from_r, min(ww_from_g, ww_from_b));
+    
+    // Track the minimum across all pixels (shared amount)
+    if (pixel_ww < maxSharedWW) {
+      maxSharedWW = pixel_ww;
+    }
+  }
+  
+  // Now subtract the warm white contribution from each pixel
+  uint16_t ww_r = ((uint16_t)maxSharedWW * WW_R) / 255;
+  uint16_t ww_g = ((uint16_t)maxSharedWW * WW_G) / 255;
+  uint16_t ww_b = ((uint16_t)maxSharedWW * WW_B) / 255;
+  for(int i = 0; i < count; i++) {
+    pixelData[i].r = (pixelData[i].r > ww_r) ? (pixelData[i].r - ww_r) : 0;
+    pixelData[i].g = (pixelData[i].g > ww_g) ? (pixelData[i].g - ww_g) : 0;
+    pixelData[i].b = (pixelData[i].b > ww_b) ? (pixelData[i].b - ww_b) : 0;
+  }
+  
+  return maxSharedWW;
+}
+#endif
+
 // --- OTA STATE MACHINE ---
 enum OtaState { OTA_IDLE, OTA_RECEIVING, OTA_VALIDATING, OTA_COMPLETE };
 OtaState otaState = OTA_IDLE;
@@ -239,6 +316,9 @@ void stopLedBreathing() {
 
 // --- LED FEEDBACK ---
 void showStatusColor(CRGB color) {
+  #ifdef HAS_WARMWHITE_PWM
+    setWhitePWM(0);  // Turn off white for status colors
+  #endif
   for(int i=0; i<numLeds; i++) leds[i] = color;
   FastLED.show();
 }
@@ -270,6 +350,12 @@ void addGateway(const uint8_t *mac) {
 
 // --- FORWARD DECLARATIONS ---
 void sendHello();
+void abortOta(const char* reason);
+void handleOtaNotify(HueMixLinkPacket* pkt);
+void handleOtaChunk(HueMixLinkPacket* pkt);
+void handleOtaCheckpointReq(HueMixLinkPacket* pkt);
+void handleOtaComplete(HueMixLinkPacket* pkt);
+void handleOtaAbort(HueMixLinkPacket* pkt);
 
 #if defined(ESP8266)
 void OnDataSent(uint8_t *mac_addr, uint8_t status) {
@@ -815,19 +901,43 @@ void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
          uint8_t* d = rx->payload.light.data;
          int idx = 0;
          
-         for(int i=0; i<count; i++) {
-            uint8_t rawR = d[idx];
-            uint8_t rawG = d[idx+1];
-            uint8_t rawB = d[idx+2];
-            CRGB rgb(gamma8[rawR], gamma8[rawG], gamma8[rawB]);
+         #ifdef HAS_WARMWHITE_PWM
+           // Model 5 & 6: Extract warm white component
+           CRGB tempLeds[MAX_LEDS];
+           for(int i=0; i<count; i++) {
+              uint8_t rawR = d[idx];
+              uint8_t rawG = d[idx+1];
+              uint8_t rawB = d[idx+2];
+              tempLeds[i] = CRGB(gamma8[rawR], gamma8[rawG], gamma8[rawB]);
+              idx += 3;
+           }
+           
+           // Extract and remove warm white, then apply to RGB LEDs
+           uint8_t warmWhiteLevel = extractWarmWhite(tempLeds, count);
+           for(int i=0; i<count; i++) {
+              leds[i] = tempLeds[i];
+           }
+           
+           // Apply warm white to separate PWM channel with brightness
+           uint16_t finalWhite = ((uint16_t)warmWhiteLevel * bri) / 255;
+           setWhitePWM(finalWhite);
+         #else
+           // Models 1-4: Standard or RGBW processing
+           for(int i=0; i<count; i++) {
+              uint8_t rawR = d[idx];
+              uint8_t rawG = d[idx+1];
+              uint8_t rawB = d[idx+2];
+              CRGB rgb(gamma8[rawR], gamma8[rawG], gamma8[rawB]);
 
-            #if IS_RGBW
-              leds[i] = rgbToRgbw(rgb);
-            #else
-              leds[i] = rgb;
-            #endif
-            idx += 3; 
-         }
+              #if IS_RGBW
+                leds[i] = rgbToRgbw(rgb);
+              #else
+                leds[i] = rgb;
+              #endif
+              idx += 3; 
+           }
+         #endif
+         
          FastLED.show();
       }
     }
@@ -925,6 +1035,9 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
 }
 
 void fillSolid(CRGB color) {
+  #ifdef HAS_WARMWHITE_PWM
+    setWhitePWM(0);  // Turn off white for solid colors
+  #endif
   for(int i=0; i<numLeds; i++) {
     #if IS_RGBW
       leds[i] = rgbToRgbw(color);
@@ -938,6 +1051,14 @@ void fillSolid(CRGB color) {
 void setup() {
   Serial.begin(115200);
   pinMode(PIN_RESET, INPUT_PULLUP); 
+  #ifdef HAS_WARMWHITE_PWM
+    pinMode(WHITE_LED_PIN, OUTPUT);
+    #ifdef ESP8266
+      analogWriteRange(255); // Ensure 8-bit matching ESP32
+      analogWriteFreq(5000); // 5kHz prevents flickering
+    #endif
+    setWhitePWM(0);
+  #endif
 
   prefs.begin("huemixlink", false);
   
@@ -972,6 +1093,10 @@ void setup() {
   FastLED.setBrightness(255); 
   fillSolid(CRGB::Black);
   FastLED.show();
+  
+  #ifdef HAS_WARMWHITE_PWM
+    setWhitePWM(0);  // Initialize warm white PWM off
+  #endif
 
   // WiFi
   WiFi.mode(WIFI_STA);
@@ -1051,7 +1176,11 @@ void loop() {
     }
     
     Serial.println("Reset Aborted. Requesting State...");
-    fillSolid(CRGB::Black); FastLED.show();
+    fillSolid(CRGB::Black);
+    FastLED.show();
+    #ifdef HAS_WARMWHITE_PWM
+      setWhitePWM(0);
+    #endif
     sendHello();
   }
 

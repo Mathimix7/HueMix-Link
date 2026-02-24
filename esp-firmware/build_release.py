@@ -51,8 +51,7 @@ def get_output_name(env_name, firmware_version, lightstrip_model):
         type_str = env_name.split("_")[1]  # still works for your env names
         return f"huemixlink-{platform_str}-{type_str}-v{firmware_version}.bin"
     elif "button" in env_name:
-        type_str = env_name.split("_")[2]
-        return f"huemixlink-{platform_str}-button-{type_str}-v{firmware_version}.bin"
+        return f"huemixlink-{platform_str}-button-v{firmware_version}.bin"
     else:
         return f"{platform_str}-{env_name}-v{firmware_version}.bin"
 

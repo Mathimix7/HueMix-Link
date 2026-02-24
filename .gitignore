@@ -69,3 +69,18 @@ _old/
 data.old-*/
 data/
 release/
+**/.DS_Store
+
+# KiCad (Hardware-designs): ignore backups, autosaves, and local/cache files
+Hardware-designs/**/_autosave-*
+Hardware-designs/**/~_autosave-*.lck
+Hardware-designs/**/*-backups/
+Hardware-designs/**/fp-info-cache
+Hardware-designs/**/*.kicad_prl
+Hardware-designs/**/.kicad_prl
+Hardware-designs/**/production/**/backups/
+Hardware-designs/**/panel/
+
+# KiCad local/editor swap files
+Hardware-designs/**/*.lck
+Hardware-designs/**/.~lock.*

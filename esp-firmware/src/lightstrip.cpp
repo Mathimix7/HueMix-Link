@@ -81,7 +81,7 @@ uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 int lastSuccessfulGatewayIndex = -1;
 
 // --- OTA LED BREATHING (using onboard LED) ---
-#define LED_PWM_FREQ 5000
+#define LED_PWM_FREQ 500
 #define LED_PWM_RESOLUTION 8
 Ticker breathingTicker;
 int breathingDirection = 1;

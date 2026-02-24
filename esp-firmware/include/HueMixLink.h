@@ -22,7 +22,8 @@ enum PacketType {
   PKT_HELLO        = 0x10, 
   PKT_BTN_EVENT    = 0x11, 
   PKT_SCENE_REQ    = 0x12, 
-  PKT_DELIVERY_RPT = 0x13, 
+  PKT_DELIVERY_RPT = 0x13,
+  PKT_MOTION_EVENT = 0x14, 
 
   PKT_OTA_NOTIFY   = 0x20,
   PKT_OTA_READY    = 0x21,
@@ -42,12 +43,14 @@ enum PacketType {
 #define DEV_BUTTON  2
 #define DEV_LIGHT   3
 #define DEV_REMOTE  4
+#define DEV_MOTION  5
 
 // --- ACTION CODES ---
 #define ACT_CLICK        1
 #define ACT_HOLDING      2 
 #define ACT_RELEASE      3 
 #define ACT_SYNC         9
+#define ACT_MOTION_DETECTED  10
 
 // --- STRUCTURES ---
 #pragma pack(push, 1) 
@@ -76,6 +79,16 @@ typedef struct {
   uint8_t platform;  // 0=ESP32, 1=ESP8266
   uint8_t button_count;  // Number of buttons configured (1-4)
 } Payload_Button;
+
+typedef struct {
+  uint8_t action;  // ACT_MOTION_DETECTED
+  uint16_t battery_mv;
+  uint8_t light_level;  // LDR sensor reading (0-10)
+  uint8_t version_major;
+  uint8_t version_minor;
+  uint8_t version_patch;
+  uint8_t platform;  // 0=ESP32, 1=ESP8266
+} Payload_Motion;
 
 typedef struct {
   uint8_t count;
@@ -130,6 +143,7 @@ typedef struct {
   union {
     Payload_Light       light;
     Payload_Button      btn;
+    Payload_Motion      motion;
     Payload_GatewayList gwList;
     Payload_Report      report;
     Payload_SysCmd      sys;

@@ -19,6 +19,7 @@ PKT_HELLO = 0x10
 PKT_BTN_EVENT = 0x11
 PKT_SCENE_REQ = 0x12
 PKT_DELIVERY_RPT = 0x13
+PKT_MOTION_EVENT = 0x14
 PKT_OTA_NOTIFY = 0x20
 PKT_OTA_READY = 0x21
 PKT_OTA_CHUNK = 0x22
@@ -34,11 +35,13 @@ DEV_GATEWAY = 1
 DEV_BUTTON = 2
 DEV_LIGHT = 3
 DEV_REMOTE = 4
+DEV_MOTION = 5
 
 # ===== Button Action Codes =====
 ACT_CLICK = 1
 ACT_HOLDING = 2
 ACT_RELEASE = 3
+ACT_MOTION_DETECTED = 10
 ACT_SYNC = 9
 
 # ===== Remote Button Action Types =====
@@ -51,6 +54,8 @@ REMOTE_ACTION_SCENE_CYCLE = 'scene_cycle'          # Click = cycle scenes only (
 # ===== System Commands =====
 CMD_NIGHT_MODE_ON = 1   # LED OFF
 CMD_NIGHT_MODE_OFF = 2  # LED ON
+CMD_SET_MOTION_COOLDOWN = 0x40  # Set motion sensor cooldown period (persistent)
+CMD_SET_MOTION_SLEEP = 0x41  # Set motion sensor one-time sleep duration (not saved)
 CMD_SET_LED_COUNT = 0x50
 
 # ===== Network Limits =====
@@ -102,6 +107,7 @@ FNV_MASK = 0xFFFFFFFF
 
 # ===== File Names =====
 FILE_GATEWAYS = 'gateways.json'
+FILE_MOTION_SENSORS = 'motion_sensors.json'
 FILE_BUTTONS = 'buttons.json'
 FILE_LIGHTSTRIPS = 'lightstrips.json'
 FILE_BRIDGE = 'bridge.json'

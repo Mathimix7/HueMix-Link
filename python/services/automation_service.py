@@ -99,6 +99,7 @@ class AutomationService:
             if self._network_server:
                 self._engine.set_network_server(self._network_server)
                 self._network_server.set_button_event_handler(self._engine.handle_button_event)
+                self._network_server.set_motion_event_handler(self._engine.handle_motion_event)
                 self._network_server.set_automation_engine(self._engine)
             
             # Start the engine

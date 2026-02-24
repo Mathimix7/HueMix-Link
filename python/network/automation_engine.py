@@ -7,13 +7,14 @@ import logging
 import threading
 import time
 from typing import Dict, List, Tuple, Optional
-from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, ACT_SYNC, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN, REMOTE_ACTION_SCENE_CYCLE
+from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN, REMOTE_ACTION_SCENE_CYCLE, FILE_MOTION_SENSORS, ACT_MOTION_DETECTED
 from controllers.hue_controller import Hue
 from controllers.color_controller import color_controller
 from services.hue_state_manager import hue_state_manager
 from services.data_manager import data_manager
 from .device_manager import device_manager
 from .network_server import NetworkServer
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,13 @@ class AutomationEngine:
         # Button state tracking: mac -> {scene_index, last_press, brightness_direction}
         self._button_states: Dict[str, Dict] = {}
         self._button_lock = threading.RLock()
+        
+        # Motion sensor state tracking: mac -> {after_timer, room_id, expected_scene_id, last_expected_clear_time}
+        self._motion_states: Dict[str, Dict] = {}
+        self._motion_lock = threading.RLock()
+        
+        # Room manual turn-off tracking: room_id -> timestamp (to prevent motion triggers after manual off)
+        self._room_manual_off_times: Dict[str, float] = {}
         
         # Scene cycling timeout
         self.scene_timeout = TIMEOUT_SCENE_CYCLE
@@ -500,12 +508,13 @@ class AutomationEngine:
     
     # ===== Hue Control =====
     
-    def _activate_scene(self, room_id: str, scene_id: str):
+    def _activate_scene(self, room_id: str, scene_id: str, source: str = 'button'):
         """Activate a scene in a room.
         
         Args:
             room_id: Room ID
             scene_id: Scene ID to activate
+            source: Source of activation ('button', 'motion', 'web', etc.)
         """
         # Activate scene via API
         payload = {
@@ -516,7 +525,7 @@ class AutomationEngine:
 
         room_state = hue_state_manager.get_room_state(room_id)
         old_scene_id = room_state.get('current_scene_id') if room_state else None
-        hue_state_manager.set_room_scene(room_id, scene_id, old_scene_id, source='button')
+        hue_state_manager.set_room_scene(room_id, scene_id, old_scene_id, source=source)
         
         logger.info(f"Activated scene {scene_id} in room {room_id}")
     
@@ -600,6 +609,364 @@ class AutomationEngine:
         
         logger.debug(f"Room {room_id} brightness: {current_brightness:.1f}% -> {new_brightness:.1f}%")
     
+    def _dim_room_brightness(self, room_id: str, dim_percentage: float = 0.5):
+        """Dim room brightness by a percentage.
+        
+        Args:
+            room_id: Room ID
+            dim_percentage: Percentage to dim (0.5 = 50% brightness)
+        """
+        # Get room to find grouped_light
+        room = self.hue.get_room(room_id)
+        services = room.get('services', [])
+        
+        grouped_light_id = None
+        for service in services:
+            if service.get('rtype') == 'grouped_light':
+                grouped_light_id = service.get('rid')
+                break
+        
+        if not grouped_light_id:
+            raise ValueError(f"No grouped_light found for room {room_id}")
+        
+        # Get current brightness
+        grouped_light = self.hue.get_grouped_light(grouped_light_id)
+        current_brightness = grouped_light.get('dimming', {}).get('brightness', 50.0)
+        
+        # Calculate dimmed brightness
+        new_brightness = max(1.0, current_brightness * dim_percentage)
+        
+        # Set new brightness
+        payload = {
+            'dimming': {'brightness': new_brightness}
+        }
+        self.hue._put_resource('grouped_light', grouped_light_id, payload)
+        
+        logger.info(f"Room {room_id} dimmed: {current_brightness:.1f}% -> {new_brightness:.1f}%")
+    
+    # ===== Motion Sensor Event Handling =====
+    
+    def handle_motion_event(self, sensor_mac: str, action: int, light_level: Optional[int] = None, battery_mv: Optional[int] = None):
+        """Handle motion sensor event.
+        
+        Args:
+            sensor_mac: Motion sensor MAC address
+            action: 10 for MOTION_DETECTED, 9 for SYNC
+            light_level: Ambient light level (0-10)
+            battery_mv: Battery voltage in millivolts
+        """
+        # Only handle actual motion events, not sync
+        if action != ACT_MOTION_DETECTED:  # 10 = MOTION_DETECTED
+            return
+        
+        # Get sensor configuration
+        sensors = data_manager.read_json(FILE_MOTION_SENSORS, default=[])
+        sensor = None
+        for s in sensors:
+            if s.get('mac_address', '').upper() == sensor_mac.upper():
+                sensor = s
+                break
+        
+        if not sensor:
+            logger.debug(f"Motion detected but sensor {sensor_mac} not configured")
+            return
+        
+        config = sensor.get('config', {})
+        
+        # Check if sensor is enabled
+        if not config.get('enabled', True):
+            logger.debug(f"Motion sensor {sensor_mac} is disabled, ignoring event")
+            return
+        
+        # Get room_id from config (needed for timer check)
+        room_id = config.get('room_id')
+        if not room_id:
+            logger.debug(f"Motion sensor {sensor_mac} has no room assigned")
+            return
+        
+        # Check if lights were manually turned off recently (within last 10 seconds)
+        # Send one-time sleep command to prevent sensor from wasting its cooldown period
+        with self._motion_lock:
+            if room_id in self._room_manual_off_times:
+                time_since_manual_off = time.time() - self._room_manual_off_times[room_id]
+                if time_since_manual_off < 10.0:
+                    # Calculate remaining sleep time (round up to nearest second)
+                    remaining_seconds = int(10.0 - time_since_manual_off) + 1
+                    logger.info(f"Motion sensor {sensor_mac}: lights manually turned off {time_since_manual_off:.1f}s ago, sending sleep command for {remaining_seconds}s")
+                    
+                    # Send one-time sleep command to the sensor
+                    if self.network_server:
+                        self.network_server._send_motion_sleep_command(sensor_mac, remaining_seconds)
+                    
+                    return
+        
+        # Check if there's an active timer from a previous motion event
+        # If there is, we should restart it even if conditions prevent new action
+        has_active_timer = False
+        with self._motion_lock:
+            if sensor_mac in self._motion_states:
+                if 'after_timer' in self._motion_states[sensor_mac]:
+                    timer = self._motion_states[sensor_mac]['after_timer']
+                    if timer and timer.is_alive():
+                        has_active_timer = True
+        
+        # Check light sensitivity threshold
+        light_sensitivity = config.get('light_sensitivity', 5)
+        if light_level is not None and light_level > light_sensitivity:
+            if has_active_timer:
+                logger.debug(f"Motion sensor {sensor_mac} light level too high ({light_level} > {light_sensitivity}), but restarting existing timer")
+            else:
+                logger.debug(f"Motion sensor {sensor_mac} light level too high ({light_level} > {light_sensitivity})")
+                return
+        
+        # Find current time slot
+        time_slots = config.get('time_slots', [])
+        current_slot = self._get_current_time_slot(time_slots)
+        
+        if not current_slot:
+            logger.debug(f"Motion sensor {sensor_mac} has no matching time slot")
+            return
+        
+        # Check "Do Not Disturb" mode
+        if current_slot.get('do_not_disturb', False):
+            # Don't activate if lights are already on
+            room_state = hue_state_manager.get_room_state(room_id)
+            if room_state and room_state.get('is_on', False):
+                if has_active_timer:
+                    logger.debug(f"Motion sensor {sensor_mac} DND mode: lights already on, but restarting existing timer")
+                else:
+                    logger.debug(f"Motion sensor {sensor_mac} DND mode: lights already on, ignoring")
+                    return
+        
+        # Execute motion action
+        motion_action = current_slot.get('motion_action', 'nothing')
+        action_executed = False
+        
+        if motion_action == 'scene':
+            scene_id = current_slot.get('scene_id')
+            if scene_id:
+                logger.info(f"🏃 Motion sensor {sensor_mac} activating scene {scene_id} in room {room_id}")
+                
+                # Store expected scene before activation
+                with self._motion_lock:
+                    if sensor_mac not in self._motion_states:
+                        self._motion_states[sensor_mac] = {}
+                    self._motion_states[sensor_mac]['expected_scene_id'] = scene_id
+                
+                try:
+                    self._activate_scene(room_id, scene_id, source='motion')
+                    action_executed = True
+                except Exception as e:
+                    logger.error(f"Failed to activate scene {scene_id}: {e}")
+                    # Clear expected scene if activation failed
+                    with self._motion_lock:
+                        if sensor_mac in self._motion_states:
+                            self._motion_states[sensor_mac].pop('expected_scene_id', None)
+        
+        # Schedule/restart after-action timer if:
+        # 1. Motion action was executed, OR
+        # 2. There's already an active timer (extend it even if conditions prevent new action)
+        if action_executed or has_active_timer:
+            with self._motion_lock:
+                if sensor_mac not in self._motion_states:
+                    self._motion_states[sensor_mac] = {}
+                
+                # Cancel any existing after timer
+                if 'after_timer' in self._motion_states[sensor_mac]:
+                    old_timer = self._motion_states[sensor_mac]['after_timer']
+                    if old_timer:
+                        old_timer.cancel()
+                        if not action_executed:
+                            logger.debug(f"Restarting existing timer for {sensor_mac} due to continued motion")
+                
+                # Store room_id for timer cancellation
+                self._motion_states[sensor_mac]['room_id'] = room_id
+                
+                # Schedule after action
+                after_duration = current_slot.get('after_duration', 5) * 60  # Convert minutes to seconds
+                after_action = current_slot.get('after_action', 'off')
+                
+                if after_action != 'nothing' and after_duration > 0:
+                    # Check if we should use dim warning (for 'off' action with duration > 15s)
+                    use_dim_warning = (after_action == 'off' and after_duration > 15)
+                    
+                    if use_dim_warning:
+                        # Schedule dim warning 15 seconds before turn-off
+                        warning_delay = after_duration - 15
+                        timer = threading.Timer(
+                            warning_delay,
+                            self._execute_motion_dim_warning,
+                            args=(sensor_mac, room_id, after_action, current_slot)
+                        )
+                        timer.daemon = True
+                        timer.start()
+                        self._motion_states[sensor_mac]['after_timer'] = timer
+                        if action_executed:
+                            logger.debug(f"Scheduled dim warning for {sensor_mac} in {warning_delay}s (off in {after_duration}s)")
+                        else:
+                            logger.debug(f"Restarted dim warning timer for {sensor_mac} ({warning_delay}s)")
+                    else:
+                        # Schedule normal after action
+                        timer = threading.Timer(
+                            after_duration,
+                            self._execute_motion_after_action,
+                            args=(sensor_mac, room_id, after_action, current_slot)
+                        )
+                        timer.daemon = True
+                        timer.start()
+                        self._motion_states[sensor_mac]['after_timer'] = timer
+                        if action_executed:
+                            logger.debug(f"Scheduled after action for {sensor_mac} in {after_duration}s")
+                        else:
+                            logger.debug(f"Restarted after action timer for {sensor_mac} ({after_duration}s)")
+
+    
+    def _get_current_time_slot(self, time_slots: List[Dict]) -> Optional[Dict]:
+        """Find the time slot that matches the current time.
+        
+        Args:
+            time_slots: List of time slot configurations
+            
+        Returns:
+            Matching time slot or None
+        """
+        if not time_slots:
+            return None
+                
+        # Get current time
+        now = datetime.now()
+        current_time = now.strftime("%H:%M")
+        
+        # Sort slots by start time
+        sorted_slots = sorted(time_slots, key=lambda x: x.get('start_time', '00:00'))
+        
+        # Find matching slot
+        for i, slot in enumerate(sorted_slots):
+            start_time = slot.get('start_time', '00:00')
+            
+            # This slot is active if current time >= start_time
+            # and current time < next slot's start time (or 24:00 if last slot)
+            if current_time >= start_time:
+                # Check if there's a next slot
+                if i + 1 < len(sorted_slots):
+                    next_start = sorted_slots[i + 1].get('start_time', '00:00')
+                    if current_time < next_start:
+                        return slot
+                else:
+                    # Last slot - active until midnight or until first slot
+                    return slot
+        
+        # Handle wrap-around case: current time is before first slot
+        # Check if last slot wraps around
+        if sorted_slots:
+            last_slot = sorted_slots[-1]
+            first_slot = sorted_slots[0]
+            if current_time < first_slot.get('start_time', '00:00'):
+                # We're before the first slot, so last slot is active (wraps around midnight)
+                return last_slot
+        
+        return None
+    
+    def _execute_motion_dim_warning(self, sensor_mac: str, room_id: str, after_action: str, time_slot: Dict):
+        """Execute dim warning before turning off lights (15 seconds before off).
+        
+        Args:
+            sensor_mac: Motion sensor MAC address
+            room_id: Room ID
+            after_action: 'off' (should always be 'off' for dim warning)
+            time_slot: Time slot configuration
+        """
+        try:
+            # Set last_expected_clear_time BEFORE dimming to prevent timer cancellation
+            with self._motion_lock:
+                if sensor_mac in self._motion_states:
+                    self._motion_states[sensor_mac]['last_expected_clear_time'] = time.time()
+            
+            # Dim lights to 50% as warning
+            logger.info(f"⚠️  Motion sensor {sensor_mac} dimming lights in room {room_id} (warning: off in 15s)")
+            self._dim_room_brightness(room_id, dim_percentage=0.5)
+            
+            # Schedule final off action in 15 seconds
+            with self._motion_lock:
+                if sensor_mac in self._motion_states:
+                    timer = threading.Timer(
+                        15,
+                        self._execute_motion_after_action,
+                        args=(sensor_mac, room_id, after_action, time_slot)
+                    )
+                    timer.daemon = True
+                    timer.start()
+                    self._motion_states[sensor_mac]['after_timer'] = timer
+                    logger.debug(f"Scheduled final off action for {sensor_mac} in 15s")
+                    
+        except Exception as e:
+            logger.error(f"Failed to execute dim warning for {sensor_mac}: {e}")
+            # On error, try to schedule the off action anyway
+            with self._motion_lock:
+                if sensor_mac in self._motion_states:
+                    timer = threading.Timer(
+                        15,
+                        self._execute_motion_after_action,
+                        args=(sensor_mac, room_id, after_action, time_slot)
+                    )
+                    timer.daemon = True
+                    timer.start()
+                    self._motion_states[sensor_mac]['after_timer'] = timer
+    
+    def _execute_motion_after_action(self, sensor_mac: str, room_id: str, after_action: str, time_slot: Dict):
+        """Execute the after action for a motion sensor.
+        
+        Args:
+            sensor_mac: Motion sensor MAC address
+            room_id: Room ID
+            after_action: 'off', 'scene', or 'nothing'
+            time_slot: Time slot configuration
+        """
+        try:
+            # Set last_expected_clear_time BEFORE action to prevent this from being treated as manual
+            with self._motion_lock:
+                if sensor_mac in self._motion_states:
+                    self._motion_states[sensor_mac]['last_expected_clear_time'] = time.time()
+            
+            if after_action == 'off':
+                logger.info(f"🏃 Motion sensor {sensor_mac} turning off lights in room {room_id}")
+                self._turn_off_room(room_id)
+            elif after_action == 'scene':
+                after_scene_id = time_slot.get('after_scene_id')
+                if after_scene_id:
+                    logger.info(f"🏃 Motion sensor {sensor_mac} activating after-scene {after_scene_id} in room {room_id}")
+                    self._activate_scene(room_id, after_scene_id, source='motion')
+        except Exception as e:
+            logger.error(f"Failed to execute after action for {sensor_mac}: {e}")
+        finally:
+            # Clear the timer reference
+            with self._motion_lock:
+                if sensor_mac in self._motion_states:
+                    self._motion_states[sensor_mac]['after_timer'] = None
+    
+    def _cancel_motion_timers_for_room(self, room_id: str):
+        """Cancel all pending motion sensor after-action timers for a specific room.
+        
+        This is called when lights in a room are manually changed to prevent
+        automatic actions from interfering with user intent.
+        
+        Args:
+            room_id: Room ID to cancel timers for
+        """
+        with self._motion_lock:
+            cancelled_count = 0
+            for sensor_mac, state in self._motion_states.items():
+                if state.get('room_id') == room_id and 'after_timer' in state:
+                    timer = state['after_timer']
+                    if timer and timer.is_alive():
+                        timer.cancel()
+                        state['after_timer'] = None
+                        cancelled_count += 1
+                        logger.debug(f"Cancelled motion timer for sensor {sensor_mac} (room {room_id} was manually changed)")
+            
+            if cancelled_count > 0:
+                logger.info(f"Cancelled {cancelled_count} motion timer(s) for room {room_id}")
+    
     # ===== Lightstrip Synchronization =====
     
     def _on_hue_room_changed(self, room_id: str, room_state: Dict):
@@ -610,6 +977,30 @@ class AutomationEngine:
             room_state: New room state
         """
         logger.debug(f"Room state changed for {room_id}: is_on={room_state.get('is_on')}, brightness={room_state.get('avg_brightness')}")
+        
+        # Check if there's any pending expected scene for this room OR recently cleared (within 1 second)
+        # (scene changes are handled in _on_hue_scene_changed, but brightness might change with scene)
+        has_expected_scene = False
+        with self._motion_lock:
+            current_time = time.time()
+            for sensor_mac, state in self._motion_states.items():
+                if state.get('room_id') == room_id:
+                    # Check if there's a pending expected scene
+                    if 'expected_scene_id' in state:
+                        has_expected_scene = True
+                        break
+                    # Check if an expected scene was recently cleared (within 2 seconds)
+                    # This handles race condition where room change fires after scene change
+                    last_clear = state.get('last_expected_clear_time', 0)
+                    if current_time - last_clear < 2.0:
+                        has_expected_scene = True
+                        logger.debug(f"Room change within cooldown period for {sensor_mac} ({current_time - last_clear:.2f}s ago)")
+                        break
+        
+        # Only cancel motion timers if there's no expected scene pending or recently cleared
+        # This prevents cancellation when room brightness changes as part of scene activation
+        if not has_expected_scene:
+            self._cancel_motion_timers_for_room(room_id)
         
         if not self.network_server:
             return
@@ -649,6 +1040,41 @@ class AutomationEngine:
             source: Source of change
         """
         logger.info(f"Scene changed in room {room_id}: {scene_id} (from {source})")
+        
+        # Check if this scene change was expected from any motion sensor
+        # OR if an expected scene was recently cleared (within 2 seconds)
+        is_expected = False
+        with self._motion_lock:
+            current_time = time.time()
+            for sensor_mac, state in self._motion_states.items():
+                if state.get('room_id') == room_id:
+                    # Check if there's a pending expected scene
+                    if state.get('expected_scene_id') == scene_id and scene_id is not None:
+                        # This scene change was expected, mark it as done
+                        state.pop('expected_scene_id', None)
+                        # Store timestamp to handle race condition with subsequent SSE events
+                        state['last_expected_clear_time'] = current_time
+                        is_expected = True
+                        logger.debug(f"Scene change to {scene_id} in {room_id} was expected from motion sensor {sensor_mac}")
+                        break
+                    # Check if an expected scene was recently cleared (within 2 seconds)
+                    # This handles the case where SSE event arrives after button event
+                    last_clear = state.get('last_expected_clear_time', 0)
+                    if current_time - last_clear < 2.0:
+                        is_expected = True
+                        logger.debug(f"Scene change within cooldown period for {sensor_mac} ({current_time - last_clear:.2f}s ago)")
+                        break
+        
+        # Only cancel motion timers if this was NOT an expected motion sensor action
+        if not is_expected:
+            self._cancel_motion_timers_for_room(room_id)
+        
+        # Track manual turn-offs to prevent motion sensors from triggering immediately after
+        # (scene_id is None = lights turned off, NOT is_expected = not from motion sensor timer)
+        if scene_id is None and not is_expected:
+            with self._motion_lock:
+                self._room_manual_off_times[room_id] = time.time()
+                logger.debug(f"Room {room_id} manually turned off (source: {source})")
         
         # Only sync lightstrips when we get SSE confirmation (actual color change)
         # Skip button/web sources since colors haven't updated yet

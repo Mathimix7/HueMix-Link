@@ -809,6 +809,11 @@ void processReceivedPacket(HueMixLinkPacket* rx, uint8_t* mac) {
         prefs.clear();
         delay(500);
         ESP.restart();
+      } else if (rx->payload.sys.cmd == 0x50) {
+        numLeds = rx->payload.sys.value;
+        prefs.putUInt("leds", numLeds);
+        Serial.printf("[LIGHT] Updated LED count to %d\n", numLeds);
+        flashStatus(CRGB::White, 1);
       }
     }
   }

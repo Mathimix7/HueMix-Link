@@ -18,15 +18,15 @@ from services.home_id_manager import home_id_manager
 from services.ota_manager import ota_manager, OTAState
 from constants import (
     DEFAULT_UDP_IP, DEFAULT_UDP_PORT, DEFAULT_GATEWAY_PORT,
-    PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_GW_LIST_UPD, PKT_PING, PKT_PING_DEVICE,
+    PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_GW_LIST_UPD, PKT_PING, PKT_PING_DEVICE, PKT_MOTION_EVENT,
     PKT_OTA_READY, PKT_OTA_CHUNK_ACK, PKT_OTA_ABORT,
-    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE,
+    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION,
     MAX_GATEWAY_ATTEMPTS, GATEWAY_DELIVERY_TIMEOUT_SECONDS,
     TIMEOUT_SOCKET, OTA_READY_TIMEOUT, OTA_CHUNK_DATA_SIZE,
     OTA_CHUNK_ACK_TIMEOUT, OTA_CHUNK_MAX_RETRIES, OTA_CHECKPOINT_INTERVAL,
     OTA_POST_UPDATE_TIMEOUT,
     RSSI_AUTO_PAIR_THRESHOLD, MAX_GATEWAYS_PER_PACKET,
-    FILE_GATEWAYS, FILE_LIGHTSTRIPS
+    FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS, CMD_SET_MOTION_COOLDOWN, CMD_SET_MOTION_SLEEP
 )
 from network.pairing_manager import pairing_manager
 from .packet_protocol import PacketEncoder, PacketDecoder, MACFormatter
@@ -98,6 +98,7 @@ class NetworkServer:
         
         # Event handlers
         self._button_event_handler = None
+        self._motion_event_handler = None
         self._pairing_handler = None
         
         # Load persisted gateways
@@ -189,6 +190,14 @@ class NetworkServer:
             handler: Callable(button_mac, action, rssi)
         """
         self._button_event_handler = handler
+    
+    def set_motion_event_handler(self, handler):
+        """Set callback for motion sensor events.
+        
+        Args:
+            handler: Callable(sensor_mac, action, light_level, battery_mv)
+        """
+        self._motion_event_handler = handler
     
     def set_pairing_handler(self, handler):
         """Set callback for pairing requests.
@@ -561,6 +570,9 @@ class NetworkServer:
         elif pkt_type == PKT_BTN_EVENT:
             self._handle_button_event(src_mac, payload, sender_ip)
         
+        elif pkt_type == PKT_MOTION_EVENT:
+            self._handle_motion_event(src_mac, payload, sender_ip)
+        
         elif pkt_type == PKT_DELIVERY_RPT:
             self._handle_delivery_report(payload, sender_ip)
         
@@ -611,6 +623,9 @@ class NetworkServer:
         
         elif dev_type == DEV_REMOTE:
             self._handle_remote_hello(src_mac, hello_data, sender_ip, is_paired)
+        
+        elif dev_type == DEV_MOTION:
+            self._handle_motion_hello(src_mac, hello_data, sender_ip, is_paired)
     
     def _handle_gateway_hello(self, wifi_mac: str, hello_data: Dict, sender_ip: str, is_paired: bool):
         """Handle HELLO from gateway.
@@ -1013,6 +1028,58 @@ class NetworkServer:
             
             logger.debug(f"Remote {remote_mac} online (RSSI: {rssi} dBm, buttons: {button_count})")
     
+    def _handle_motion_hello(self, sensor_mac: str, hello_data: Dict, sender_ip: str, is_paired: bool):
+        """Handle HELLO from motion sensor.
+        
+        Args:
+            sensor_mac: Motion sensor MAC
+            hello_data: Parsed HELLO data
+            sender_ip: Gateway IP that forwarded
+            is_paired: Whether sensor is paired
+        """
+        rssi = hello_data.get('rssi', 0)
+        
+        # Find gateway radio MAC by sender IP
+        gateway_radio_mac = None
+        with self._gateway_lock:
+            for radio_mac, info in self._gateway_table.items():
+                if info['ip_address'] == sender_ip:
+                    gateway_radio_mac = radio_mac
+                    break
+        
+        if not is_paired:
+            # UNPAIRED - Check pairing mode
+            pairing_mode_active = pairing_manager.is_pairing_allowed(sensor_mac, DEV_MOTION, rssi)
+            
+            if rssi >= RSSI_AUTO_PAIR_THRESHOLD or pairing_mode_active:
+                # AUTO-PAIR or PAIRING MODE
+                logger.info(f"📡 Motion sensor {sensor_mac} RSSI: {rssi} dBm → Pairing...")
+                self._send_pair_confirm(sensor_mac, sender_ip)
+                
+                # Auto-register motion sensor
+                sensor = device_manager.get_motion_sensor_by_mac(sensor_mac)
+                if not sensor:
+                    device_manager.add_motion_sensor(sensor_mac, f"Motion Sensor {sensor_mac[-8:]}")
+                
+                # Update with version, platform, and RSSI from this HELLO packet
+                if gateway_radio_mac:
+                    device_manager.update_motion_sensor_tracking(sensor_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
+                
+                if pairing_mode_active:
+                    logger.info(f"🏃 Paired motion sensor via pairing mode: {sensor_mac}")
+                    pairing_manager.record_device_paired(sensor_mac, DEV_MOTION, f"Motion Sensor {sensor_mac[-8:]}", 'long_range')
+                else:
+                    logger.info(f"🏃 Auto-paired motion sensor (RSSI: {rssi} dBm): {sensor_mac}")
+                    pairing_manager.record_device_paired(sensor_mac, DEV_MOTION, f"Motion Sensor {sensor_mac[-8:]}", 'short_range')
+            else:
+                logger.warning(f"Motion sensor {sensor_mac} RSSI too weak for auto-pairing: {rssi} dBm (use pairing mode to pair anyway)")
+        else:
+            # Paired motion sensor - update tracking
+            if gateway_radio_mac:
+                device_manager.update_motion_sensor_tracking(sensor_mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
+            
+            logger.debug(f"Motion sensor {sensor_mac} online (RSSI: {rssi} dBm)")
+    
     def _handle_button_event(self, button_mac: str, payload: bytes, sender_ip: str):
         """Handle button event.
         
@@ -1077,6 +1144,157 @@ class NetworkServer:
         # Call event handler
         if self._button_event_handler:
             self._button_event_handler(button_mac, action, 0, button_index=button_index)
+    
+    def _handle_motion_event(self, sensor_mac: str, payload: bytes, sender_ip: str):
+        """Handle motion sensor event.
+        
+        Args:
+            sensor_mac: Motion sensor MAC
+            payload: Raw payload
+            sender_ip: Gateway IP that forwarded
+        """
+        event_data = self.decoder.parse_motion_event(payload)
+        if not event_data:
+            logger.warning(f"Invalid motion event from {sensor_mac}")
+            return
+        
+        action = event_data['action']
+        battery_mv = event_data.get('battery_mv')
+        light_level = event_data.get('light_level')
+        version = event_data.get('version')
+        platform = event_data.get('platform')
+        
+        action_str = {10: "MOTION_DETECTED", 9: "SYNC"}.get(action, f"UNKNOWN({action})")
+        
+        logger.info(f"🏃 Motion sensor {sensor_mac} -> {action_str} (light_level: {light_level})")
+        
+        # Auto-add motion sensor if it doesn't exist
+        sensor = device_manager.get_motion_sensor_by_mac(sensor_mac)
+        if not sensor:
+            logger.info(f"Auto-registering motion sensor: {sensor_mac}")
+            device_manager.add_motion_sensor(sensor_mac, f"Motion Sensor {sensor_mac[-8:]}")
+            pairing_manager.record_device_paired(sensor_mac, DEV_MOTION, f"Motion Sensor {sensor_mac[-8:]}", 'short_range')
+        
+        # Find gateway for tracking
+        gateway_radio_mac = None
+        with self._gateway_lock:
+            for radio_mac, info in self._gateway_table.items():
+                if info['ip_address'] == sender_ip:
+                    gateway_radio_mac = radio_mac
+                    break
+        
+        if gateway_radio_mac:
+            device_manager.update_motion_sensor_tracking(
+                sensor_mac, 
+                gateway_radio_mac, 
+                0,  # RSSI not available in motion event packets
+                battery_mv=battery_mv,
+                light_level=light_level,
+                version=version,
+                platform=platform
+            )
+        
+        # Update last_motion timestamp
+        sensors = device_manager.get_all_motion_sensors()
+        for s in sensors:
+            if s.get('mac_address', '').upper() == sensor_mac.upper():
+                
+                def update_func(sensors_list):
+                    for sensor in sensors_list:
+                        if sensor.get('mac_address', '').upper() == sensor_mac.upper():
+                            sensor['last_motion'] = datetime.now().isoformat()
+                            break
+                    return sensors_list
+                
+                data_manager.update_json(FILE_MOTION_SENSORS, update_func)
+                
+                # Check if there's a pending cooldown update
+                if s.get('pending_cooldown_update'):
+                    cooldown_seconds = s.get('config', {}).get('cooldown_seconds', 60)
+                    logger.info(f"🔧 Sending cooldown update to {sensor_mac}: {cooldown_seconds}s")
+                    
+                    # Send cooldown command to sensor with delivery tracking and feedback
+                    try:
+                        # Generate message ID
+                        with self._delivery_lock:
+                            msg_id = self._next_msg_id
+                            self._next_msg_id = (self._next_msg_id + 1) % 256
+                        
+                        # Encode packet with uint32 cooldown value
+                        packet = self.encoder.encode_sys_cmd(
+                            sensor_mac, 
+                            CMD_SET_MOTION_COOLDOWN, 
+                            value=0,
+                            msg_id=msg_id,
+                            value_uint32=cooldown_seconds
+                        )
+                        
+                        # Send with automatic gateway routing, delivery tracking, and failover
+                        success = self._send_with_fallback(sensor_mac, packet, wait_for_delivery=True, msg_id=msg_id)
+                        
+                        if success:
+                            logger.info(f"✅ Cooldown command delivered to {sensor_mac}: {cooldown_seconds}s")
+                            
+                            # Clear the pending flag on successful delivery
+                            def clear_flag(sensors_list):
+                                for sensor in sensors_list:
+                                    if sensor.get('mac_address', '').upper() == sensor_mac.upper():
+                                        sensor['pending_cooldown_update'] = False
+                                        break
+                                return sensors_list
+                            
+                            data_manager.update_json(FILE_MOTION_SENSORS, clear_flag)
+                        else:
+                            logger.warning(f"⚠️  Cooldown command failed to deliver to {sensor_mac}, will retry on next motion event")
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to send cooldown update to {sensor_mac}: {e}")
+                
+                break
+        
+        # Call event handler
+        if self._motion_event_handler:
+            self._motion_event_handler(sensor_mac, action, light_level, battery_mv)
+    
+    def _send_motion_sleep_command(self, sensor_mac: str, sleep_seconds: int):
+        """Send one-time sleep command to motion sensor.
+        
+        Args:
+            sensor_mac: Motion sensor MAC address
+            sleep_seconds: Sleep duration in seconds (1-60)
+        """
+        try:
+            # Validate duration
+            if sleep_seconds < 1 or sleep_seconds > 60:
+                logger.warning(f"Invalid sleep duration {sleep_seconds}s for {sensor_mac}, clamping to 1-60 range")
+                sleep_seconds = max(1, min(60, sleep_seconds))
+            
+            logger.info(f"💤 Sending one-time sleep command to {sensor_mac}: {sleep_seconds}s")
+            
+            # Generate message ID
+            with self._delivery_lock:
+                msg_id = self._next_msg_id
+                self._next_msg_id = (self._next_msg_id + 1) % 256
+            
+            # Encode packet with uint32 sleep duration
+            packet = self.encoder.encode_sys_cmd(
+                sensor_mac, 
+                CMD_SET_MOTION_SLEEP, 
+                value=0,
+                msg_id=msg_id,
+                value_uint32=sleep_seconds
+            )
+            
+            # Send with automatic gateway routing (no need to wait for delivery since device sleeps immediately)
+            success = self._send_with_fallback(sensor_mac, packet, wait_for_delivery=False, msg_id=msg_id)
+            
+            if success:
+                logger.info(f"✅ Sleep command sent to {sensor_mac}: {sleep_seconds}s")
+            else:
+                logger.warning(f"⚠️  Sleep command may not have reached {sensor_mac}")
+                
+        except Exception as e:
+            logger.error(f"Failed to send sleep command to {sensor_mac}: {e}")
     
     def _handle_delivery_report(self, payload: bytes, sender_ip: str):
         """Handle delivery report from gateway.

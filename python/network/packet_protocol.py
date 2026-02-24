@@ -9,10 +9,10 @@ from typing import Tuple, Optional, List
 import logging
 from constants import (
     PKT_PAIR_CONFIRM, PKT_LIGHT_RAW, PKT_SYS_CMD, PKT_GW_LIST_UPD,
-    PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT,
+    PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_MOTION_EVENT,
     PKT_PING_DEVICE, PKT_PING,
     PKT_OTA_NOTIFY, PKT_OTA_READY, PKT_OTA_CHUNK, PKT_OTA_CHUNK_ACK, PKT_OTA_COMPLETE, PKT_OTA_ABORT, PKT_OTA_CHECKPOINT_REQ,
-    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE,
+    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION,
     FNV_OFFSET_BASIS, FNV_PRIME, FNV_MASK, OTA_CHUNK_DATA_SIZE
 )
 from services.home_id_manager import home_id_manager
@@ -247,24 +247,29 @@ class PacketEncoder:
         
         return packet
     
-    def encode_sys_cmd(self, target_mac: str, command: int, value: int = 0, msg_id: int = 0) -> bytes:
+    def encode_sys_cmd(self, target_mac: str, command: int, value: int = 0, msg_id: int = 0, value_uint32: Optional[int] = None) -> bytes:
         """Encode a system command packet.
         
         Args:
             target_mac: MAC address of target device
-            command: Command code (1=night mode on, 2=night mode off, etc.)
-            value: Optional command value
+            command: Command code (1=night mode on, 2=night mode off, 0x40=motion cooldown, etc.)
+            value: Optional command value (single byte)
             msg_id: Message ID
+            value_uint32: Optional uint32 value (used for motion sensor cooldown at offset 2)
             
         Returns:
             Complete 203-byte packet
         """
         pkt_type = PKT_SYS_CMD
-        src_mac = b'\x00' * 6
+        src_mac = b'\x00' * 6 
         tgt_mac = MACFormatter.to_bytes(target_mac)
         
-        # Payload: command(1) + value(1)
-        payload_data = struct.pack("<BB", command, value)
+        # Payload: command(1) + value(1) + optional uint32 data
+        if value_uint32 is not None:
+            # For commands that need uint32 at offset 2 (like motion sensor cooldown)
+            payload_data = struct.pack("<BBI", command, value, value_uint32)
+        else:
+            payload_data = struct.pack("<BB", command, value)
         
         # Pad payload to 185 bytes
         payload = payload_data + b'\x00' * (185 - len(payload_data))
@@ -544,7 +549,7 @@ class PacketDecoder:
         payload_for_hash = bytearray(payload)
         if pkt_type == PKT_HELLO:
             dev_type = struct.unpack("<B", payload[0:1])[0]
-            if dev_type in (DEV_BUTTON, DEV_LIGHT, DEV_REMOTE):
+            if dev_type in (DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION):
                 payload_for_hash[1] = 0  # Zero out RSSI byte for signature validation
         elif pkt_type == PKT_PING_DEVICE:
             payload_for_hash[0] = 0  # Zero out RSSI byte for signature validation
@@ -636,6 +641,13 @@ class PacketDecoder:
             else:
                 result['button_count'] = 4  # Default for legacy remotes
         
+        elif dev_type == DEV_MOTION and len(payload) >= 6:
+            # Motion sensor: type(1) + RSSI(1) + version(3) + platform(1)
+            major, minor, patch, build = struct.unpack("<BBBB", payload[2:6])
+            result['version'] = f"{major}.{minor}.{patch}"
+            result['rssi'] = MACFormatter.parse_rssi(payload[1])
+            result['platform'] = 'esp8266' if build == 1 else 'esp32'
+        
         elif dev_type == DEV_LIGHT and len(payload) >= 9:
             # Light: type(1) + RSSI(1) + RGBW(1) + LED_COUNT(2) + version(3) + platform(1) + model_id(2)
             result['rssi'] = MACFormatter.parse_rssi(payload[1])
@@ -719,6 +731,59 @@ class PacketDecoder:
                 button_count = struct.unpack("<B", payload[8:9])[0]
                 if button_count >= 1 and button_count <= 4:
                     result['button_count'] = button_count
+        
+        return result
+    
+    def parse_motion_event(self, payload: bytes) -> Optional[dict]:
+        """Parse motion sensor event payload.
+        
+        Args:
+            payload: Raw payload bytes
+            
+        Returns:
+            Dictionary with event info:
+            {
+                'action': ACT_MOTION_DETECTED/ACT_SYNC,
+                'battery_mv': Battery voltage in millivolts (uint16),
+                'light_level': Light level from LDR sensor (0-255),
+                'version_major': Firmware major version,
+                'version_minor': Firmware minor version,
+                'version_patch': Firmware patch version,
+                'platform': 'esp32' or 'esp8266'
+            }
+        """
+        if len(payload) < 4:
+            return None
+        
+        # Payload_Motion structure (8 bytes):
+        # action(1) + battery_mv(2) + light_level(1) + version_major(1) + version_minor(1) + version_patch(1) + platform(1)
+        action = struct.unpack("<B", payload[0:1])[0]
+        battery_mv = struct.unpack("<H", payload[1:3])[0]  # uint16 little-endian
+        light_level = struct.unpack("<B", payload[3:4])[0]
+        
+        result = {
+            'action': action,
+            'battery_mv': battery_mv,
+            'light_level': light_level
+        }
+        
+        # Parse version fields - only include if all version bytes are present AND not all zeros
+        if len(payload) >= 7:
+            version_major = struct.unpack("<B", payload[4:5])[0]
+            version_minor = struct.unpack("<B", payload[5:6])[0]
+            version_patch = struct.unpack("<B", payload[6:7])[0]
+            
+            # Only set version if it's not 0.0.0 (indicates valid firmware version)
+            if version_major > 0 or version_minor > 0 or version_patch > 0:
+                result['version_major'] = version_major
+                result['version_minor'] = version_minor
+                result['version_patch'] = version_patch
+                result['version'] = f"{version_major}.{version_minor}.{version_patch}"
+        
+            # Parse platform (0=ESP32, 1=ESP8266)
+            if len(payload) >= 8:
+                platform_byte = struct.unpack("<B", payload[7:8])[0]
+                result['platform'] = 'esp8266' if platform_byte == 1 else 'esp32'
         
         return result
     

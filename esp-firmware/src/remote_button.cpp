@@ -675,11 +675,15 @@ void sendPacket(uint8_t type, uint8_t action, uint8_t buttonIndex) {
       pkt.payload.raw[2] = major;
       pkt.payload.raw[3] = minor;
       pkt.payload.raw[4] = patch;
-      pkt.payload.raw[5] = 0;  // Platform (will be set below)
     #else
       pkt.payload.raw[2] = 0;
       pkt.payload.raw[3] = 0;
       pkt.payload.raw[4] = 0;
+    #endif
+
+    #if defined(ESP8266)
+      pkt.payload.raw[5] = 1;
+    #else
       pkt.payload.raw[5] = 0;
     #endif
     

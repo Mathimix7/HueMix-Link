@@ -85,6 +85,11 @@ unsigned long last_reset_press = 0;
 uint8_t reset_tap_count = 0;
 #define DOUBLE_TAP_WINDOW 1000
 
+// Pending single press (wait to see if double-tap comes)
+unsigned long pending_single_press_time = 0;
+bool pending_single_press = false;
+#define SINGLE_PRESS_DELAY 500  // Wait 500ms after first tap before acting
+
 esp_now_peer_info_t peerInfo;
 esp_adc_cal_characteristics_t adc_chars_battery;
 esp_adc_cal_characteristics_t adc_chars_ldr;
@@ -581,7 +586,7 @@ void setup() {
   analogSetWidth(12);
   analogSetPinAttenuation(PIN_BATTERY, ADC_2_5db);
   analogSetPinAttenuation(PIN_LDR, ADC_11db);
-  
+    
   // Characterize both ADC channels with their respective attenuations
   esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_2_5, ADC_WIDTH_BIT_12, 1100, &adc_chars_battery);
   esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars_ldr);
@@ -689,6 +694,14 @@ void loop() {
   }
   
   // Handle OTA mode timeout
+  if (otaState == OTA_WAITING_NOTIFY && millis() - ota_wake_time > 30000) {
+    Serial.println("[OTA] No NOTIFY received within 30s, returning to normal");
+    otaState = OTA_IDLE;
+    ota_mode = false;
+    stopLedBreathing();
+    goToSleepWithPIR();
+  }
+  
   if (ota_mode && millis() - ota_wake_time > 300000) {
     Serial.println("[OTA] Timeout, returning to normal mode");
     ota_mode = false;
@@ -707,8 +720,18 @@ void loop() {
     
     if (now - last_reset_press < DOUBLE_TAP_WINDOW) {
       reset_tap_count++;
+      // Cap at 2 to prevent counter from running away
+      if (reset_tap_count > 2) reset_tap_count = 2;
+      Serial.printf("[RESET] Tap detected! Count: %d\n", reset_tap_count);
+      
+      // Cancel pending single press if second tap detected
+      if (reset_tap_count >= 2 && pending_single_press) {
+        Serial.println("[RESET] Second tap detected, cancelling pending single press");
+        pending_single_press = false;
+      }
     } else {
       reset_tap_count = 1;
+      Serial.println("[RESET] First tap detected");
     }
     last_reset_press = now;
   }
@@ -716,53 +739,65 @@ void loop() {
   if (digitalRead(PIN_RESET) == LOW && reset_button_was_high) {
     unsigned long press_duration = millis() - reset_press_start;
     
-    // Check for double-tap (OTA mode)
+    Serial.printf("[RESET] Button released (count=%d, duration=%lums, ota_mode=%d)\n", 
+                  reset_tap_count, press_duration, ota_mode);
+    
+    // Check for double-tap (OTA mode) - only if not already in OTA mode
     if (reset_tap_count >= 2 && !ota_mode) {
-      Serial.println("[OTA] Double-tap detected! Entering OTA mode...");
-      otaState = OTA_WAITING_NOTIFY;
-      ota_mode = true;
-      ota_wake_time = millis();
-      lastActivityTime = millis();
-      ledBlink(3, 200);
-      
-      // Send OTA_READY announcement
-      HueMixLinkPacket ready;
-      memset(&ready, 0, sizeof(ready));
-      ready.type = PKT_OTA_READY;
-      WiFi.macAddress(ready.sourceMAC);
-      memset(ready.targetMAC, 0xFF, 6);
-      ready.payload.otaReady.firmware_size = 0;
-      ready.payload.otaReady.battery_mv = battery_mv;
-      ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
-      
-      for(int i = 0; i < gateways.count; i++) {
-        if (!esp_now_is_peer_exist(gateways.macs[i])) {
-          memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
-          peerInfo.channel = 0;
-          peerInfo.encrypt = false;
-          esp_now_add_peer(&peerInfo);
+        Serial.println("[OTA] Double-tap detected! Entering OTA mode...");
+        pending_single_press = false;  // Cancel any pending single press
+        otaState = OTA_WAITING_NOTIFY;
+        ota_mode = true;
+        ota_wake_time = millis();
+        lastActivityTime = millis();
+        ledBlink(3, 200);
+        
+        // Send OTA_READY announcement
+        HueMixLinkPacket ready;
+        memset(&ready, 0, sizeof(ready));
+        ready.type = PKT_OTA_READY;
+        WiFi.macAddress(ready.sourceMAC);
+        memset(ready.targetMAC, 0xFF, 6);
+        ready.payload.otaReady.firmware_size = 0;
+        ready.payload.otaReady.battery_mv = battery_mv;
+        ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
+        
+        for(int i = 0; i < gateways.count; i++) {
+          if (!esp_now_is_peer_exist(gateways.macs[i])) {
+            memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
+            peerInfo.channel = 0;
+            peerInfo.encrypt = false;
+            esp_now_add_peer(&peerInfo);
+          }
+          esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready));
         }
-        esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready));
-      }
-      
-      reset_tap_count = 0;
+        
+        reset_tap_count = 0;
     }
-    // Single press - send HELLO for pairing
-    else if (reset_tap_count == 1 && press_duration < 5000 && !ota_mode) {
-      Serial.println("Single RESET press - sending pairing request");
-      ledBlink(2, 100);
-      sendPacket(PKT_HELLO, 0);
+    // Single press - set pending (wait to see if second tap comes)
+    else if (reset_tap_count == 1 && press_duration < 5000 && !pending_single_press) {
+      Serial.println("[RESET] Single tap released, waiting to confirm (no second tap)...");
+      pending_single_press = true;
+      pending_single_press_time = millis();
       lastActivityTime = millis();
-      delay(200); // Wait for potential pairing response
-      reset_tap_count = 0;
     }
   }
   
   reset_button_was_high = (digitalRead(PIN_RESET) == HIGH);
   
-  // Reset button 5s hold for factory reset
-  if (digitalRead(PIN_RESET) == HIGH && !ota_mode) {
+  // Check if pending single press should be activated (no second tap came)
+  if (pending_single_press && millis() - pending_single_press_time >= SINGLE_PRESS_DELAY) {
+    Serial.println("[RESET] No second tap detected, sending pairing request");
+    pending_single_press = false;
+    ledBlink(2, 100);
+    sendPacket(PKT_HELLO, 0);
     lastActivityTime = millis();
+    delay(200); // Wait for potential pairing response
+    reset_tap_count = 0;
+  }
+  
+  // Reset button 5s hold for factory reset (check on rising edge only to avoid updating lastActivityTime every loop)
+  if (digitalRead(PIN_RESET) == HIGH && !ota_mode) {
     unsigned long holdStart = millis();
     while(digitalRead(PIN_RESET) == HIGH) {
       if (millis() - holdStart > 5000) {
@@ -777,6 +812,8 @@ void loop() {
       }
       delay(10);
     }
+    // Only update activity time after checking for 5s hold
+    lastActivityTime = millis();
   }
   
   // Save pairing info if just paired

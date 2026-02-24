@@ -1147,8 +1147,8 @@ class AutomationEngine:
             brightness_pct = room_state.get('avg_brightness', 100.0) if room_state else 100.0
             brightness_val = int(brightness_pct * 2.55)  # Convert 0-100 to 0-255
             
-            # Update each lightstrip
-            for strip in strips_for_room:
+            # Helper function to update a single lightstrip
+            def update_single_strip(strip):
                 try:
                     light_mac = strip.get('mac_address')
                     
@@ -1156,7 +1156,7 @@ class AutomationEngine:
                     with self._preview_lock:
                         if light_mac in self._preview_mode_lightstrips:
                             logger.debug(f"Skipping lightstrip {strip.get('name', light_mac)} - in preview mode")
-                            continue
+                            return
                     
                     rgb_data = self._get_lightstrip_colors(strip, scene_id, room_id)
                     if rgb_data is not None:
@@ -1165,6 +1165,17 @@ class AutomationEngine:
                         logger.info(f"Sent colors to lightstrip {strip.get('name', light_mac)} (brightness: {brightness_pct:.0f}%)")
                 except Exception as e:
                     logger.error(f"Error syncing lightstrip {strip.get('id')}: {e}")
+            
+            # Update all lightstrips in parallel using threads
+            threads = []
+            for strip in strips_for_room:
+                thread = threading.Thread(target=update_single_strip, args=(strip,), daemon=True)
+                thread.start()
+                threads.append(thread)
+            
+            # Wait for all updates to complete (with a reasonable timeout)
+            for thread in threads:
+                thread.join(timeout=30)  # 30 second max wait per thread
             
             # Clean up timer references (both scene and room timers may exist)
             with self._timer_lock:

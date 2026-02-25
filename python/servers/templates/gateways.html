@@ -332,7 +332,12 @@ function renderGateways() {
     container.innerHTML = '';
 
     if (gateways.length === 0) {
-        container.innerHTML = '<p class="text-gray-400 text-center py-8 col-span-2">No gateways configured</p>';
+        container.innerHTML = `
+            <div class="col-span-2 text-center text-gray-500 py-12">
+                <p class="text-lg">No gateways found</p>
+                <p class="text-sm mt-1">Gateways will appear here automatically once detected.</p>
+            </div>
+        `;
         return;
     }
 

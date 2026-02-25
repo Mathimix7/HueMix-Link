@@ -654,7 +654,12 @@ function renderLightstrips() {
     container.innerHTML = '';
 
     if (lightstrips.length === 0) {
-        container.innerHTML = '<p class="text-gray-400 text-center py-8 col-span-2">No lightstrips available. Lightstrips will appear here automatically once detected.</p>';
+        container.innerHTML = `
+            <div class="col-span-2 text-center text-gray-500 py-12">
+                <p class="text-lg">No lightstrips found</p>
+                <p class="text-sm mt-1">Lightstrips will appear here automatically once detected.</p>
+            </div>
+        `;
         return;
     }
 

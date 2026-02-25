@@ -2,6 +2,7 @@
 from flask import Blueprint, render_template, jsonify
 from services.hue_state_manager import hue_state_manager
 from controllers.color_controller import color_controller
+from controllers.bridge_controller import BridgeController
 
 overview_bp = Blueprint('overview', __name__)
 
@@ -42,6 +43,15 @@ def get_rooms_overview_data():
     - Average brightness
     - Color distribution
     """
+    bridge_controller = BridgeController()
+    config = bridge_controller.load_config()
+    
+    if not config or not config.get('ip'):
+        return jsonify({
+            "success": False,
+            "error": "Hue Bridge not configured"
+        }), 200
+    
     try:
         rooms = hue_state_manager.get_all_rooms()
         lights = hue_state_manager.get_all_lights()

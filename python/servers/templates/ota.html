@@ -325,7 +325,10 @@ function renderDevicesTable() {
     if (devices.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="5" class="px-6 py-8 text-center text-gray-500">No devices found</td>
+                <td colspan="5" class="px-6 py-12 text-center text-gray-500">
+                    <p class="text-lg">No devices found</p>
+                    <p class="text-sm mt-1">Devices will appear here automatically once detected.</p>
+                </td>
             </tr>
         `;
         return;

@@ -1069,7 +1069,6 @@ async function handleSerialFlash() {
 
         // 2. Initialize esptool-js transport
         transport = new Transport(device);
-        // await transport.connect(); 
 
         espLoader = new ESPLoader({
             transport: transport,
@@ -1081,7 +1080,44 @@ async function handleSerialFlash() {
         const chip = await espLoader.main();
         logToTerminal(`Connected to ${chip}`);
 
-        // 3. Fetch the binary from the server endpoint
+        // 3. Prepare flash files (bootloader/partitions for ESP32 only)
+        const flashFiles = [];
+        const isESP32 = chip.includes('ESP32');
+        const isESP8266 = chip.includes('ESP8266');
+        
+        if (isESP32) {
+            logToTerminal("ESP32 detected - Full flash mode (bootloader + partitions + firmware)");
+            
+            // Fetch bootloader from static folder
+            const bootloaderResponse = await fetch('/static/common-binaries/esp32_bootloader.bin');
+            if (!bootloaderResponse.ok) throw new Error('Failed to fetch bootloader');
+            const bootloaderBuffer = await bootloaderResponse.arrayBuffer();
+            const bootloaderArray = new Uint8Array(bootloaderBuffer);
+            let bootloaderString = "";
+            for (let i = 0; i < bootloaderArray.length; i += 8192) {
+                bootloaderString += String.fromCharCode.apply(null, bootloaderArray.subarray(i, i + 8192));
+            }
+            flashFiles.push({ data: bootloaderString, address: 0x1000 });
+            logToTerminal(`  Bootloader: ${(bootloaderBuffer.byteLength / 1024).toFixed(1)} KB @ 0x1000`);
+            
+            // Fetch partitions from static folder
+            const partitionsResponse = await fetch('/static/common-binaries/esp32_partitions.bin');
+            if (!partitionsResponse.ok) throw new Error('Failed to fetch partitions');
+            const partitionsBuffer = await partitionsResponse.arrayBuffer();
+            const partitionsArray = new Uint8Array(partitionsBuffer);
+            let partitionsString = "";
+            for (let i = 0; i < partitionsArray.length; i += 8192) {
+                partitionsString += String.fromCharCode.apply(null, partitionsArray.subarray(i, i + 8192));
+            }
+            flashFiles.push({ data: partitionsString, address: 0x8000 });
+            logToTerminal(`  Partitions: ${(partitionsBuffer.byteLength / 1024).toFixed(1)} KB @ 0x8000`);
+        } else if (isESP8266) {
+            logToTerminal("ESP8266 detected - Firmware-only flash mode");
+        } else {
+            throw new Error(`Unsupported chip: ${chip}`);
+        }
+        
+        // Fetch firmware
         logToTerminal("Fetching firmware binary...");
         
         const binaryResponse = await fetch('/api/ota/binary', {
@@ -1111,17 +1147,20 @@ async function handleSerialFlash() {
             binaryString += String.fromCharCode.apply(null, firmwareArray.subarray(i, i + chunkSize));
         }
         
-        logToTerminal(`Firmware loaded: ${(firmwareBuffer.byteLength / 1024).toFixed(1)} KB`);
+        // Firmware address depends on chip type
+        const firmwareAddress = isESP32 ? 0x10000 : 0x00000;
+        flashFiles.push({ data: binaryString, address: firmwareAddress });
+        logToTerminal(`  Firmware: ${(firmwareBuffer.byteLength / 1024).toFixed(1)} KB @ 0x${firmwareAddress.toString(16)}`);
 
-        // 4. Flash
-        logToTerminal("Starting flash...");
+        // 4. Flash all files
+        logToTerminal(`Starting flash (${flashFiles.length} file${flashFiles.length > 1 ? 's' : ''})...`);
         
         await espLoader.writeFlash({
-            fileArray: [{ data: binaryString, address: 0x10000 }],
+            fileArray: flashFiles,
             flashSize: 'keep',
-            flashMode: 'dio', 
+            flashMode: isESP32 ? 'dio' : 'qio',  // ESP8266 typically uses QIO
             flashFreq: '40m',
-            eraseAll: false,
+            eraseAll: true,
             compress: true,
             reportProgress: (idx, written, total) => {
                 console.log(`Progress: ${Math.round(written/total*100)}%`);

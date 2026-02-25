@@ -992,10 +992,11 @@ function showInfo(message) {
 </script>
 
 <script type="module">
-import { Transport, ESPLoader } from "/static/bundle.js";
+import { Transport, ESPLoader, HardReset } from "/static/bundle.js";
 // Add these to your global variables
 let espLoader;
 let transport;
+let hardReset;
 const terminal = document.getElementById('serialTerminal');
 
 // Log helper for the terminal UI
@@ -1075,6 +1076,8 @@ async function handleSerialFlash() {
             baudrate: baudRate,
             terminal: loaderTerminal
         });
+
+        hardReset = new HardReset(transport);
 
         // Connect/Sync
         const chip = await espLoader.main();
@@ -1168,6 +1171,11 @@ async function handleSerialFlash() {
         });
 
         logToTerminal("FLASH COMPLETE!");
+        
+        // Hard reset the device to boot into new firmware
+        logToTerminal("Resetting device...");
+        hardReset.reset();
+        
         showSuccess("Device flashed successfully via Serial");
 
     } catch (err) {

@@ -31,7 +31,12 @@ reset=$(echo -en "\e[0m")
 
 # Message helpers with visual markers and distinct colors
 log()  { printf '%b\n' "${blue}● ${reset}${white}$*${reset}" >&2; }
-die()  { printf '%b\n' "${bold}${red}ERROR:${reset} ${red}$*${reset}" >&2; exit 1; }
+die()  { 
+  printf '%b\n' "${bold}${red}ERROR:${reset} ${red}$*${reset}" >&2
+  # Remove VERSION file if it exists to prevent false "already installed" on next run
+  [ -f "$APP_DIR/VERSION" ] && rm -f "$APP_DIR/VERSION" 2>/dev/null || true
+  exit 1
+}
 success() { printf '%b\n' "${green}${reset}${white}$*${reset}" >&2; }
 warn()    { printf '%b\n' "${yellow}${reset}${white}$*${reset}" >&2; }
 debug()   { printf '%b\n' "${gray}$*${reset}" >&2; }
@@ -140,7 +145,39 @@ detect_python() {
   done
   # Validate venv module
   if ! "$PYTHON_BIN" -c "import venv" >/dev/null 2>&1; then
-    die "$PYTHON_BIN does not support venv module. Install a compatible Python (3.8+)."
+    warn "$PYTHON_BIN venv module not found. Attempting to install..."
+    
+    # Determine the venv package name based on Python version
+    PYTHON_VERSION=$("$PYTHON_BIN" -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "python3")
+    VENV_PACKAGE="${PYTHON_VERSION}-venv"
+    
+    log "Installing ${VENV_PACKAGE}..."
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "DRY-RUN: would run apt install -y ${VENV_PACKAGE}"
+    else
+      if command -v apt >/dev/null 2>&1; then
+        apt update -y -qq || warn "Failed to update package list"
+        if apt install -y "$VENV_PACKAGE"; then
+          success "Successfully installed ${VENV_PACKAGE}"
+        else
+          die "Failed to install ${VENV_PACKAGE}. Please install it manually: sudo apt install ${VENV_PACKAGE}"
+        fi
+      elif command -v yum >/dev/null 2>&1; then
+        # For RHEL/CentOS/Fedora systems
+        if yum install -y "$PYTHON_BIN-devel"; then
+          success "Successfully installed ${PYTHON_BIN}-devel"
+        else
+          die "Failed to install ${PYTHON_BIN}-devel. Please install it manually: sudo yum install ${PYTHON_BIN}-devel"
+        fi
+      else
+        die "Package manager not found. Please manually install venv support: apt install ${VENV_PACKAGE}"
+      fi
+    fi
+    
+    # Re-validate venv module after installation
+    if ! "$PYTHON_BIN" -c "import venv" >/dev/null 2>&1; then
+      die "$PYTHON_BIN still does not support venv module after installation attempt. Please check your Python installation."
+    fi
   fi
 }
 
@@ -454,7 +491,7 @@ main_install() {
         log "--no-restart specified; leaving service running"
       fi
     fi
-  fi
+  [ -f "$APP_DIR/VERSION" ] && rm -f "$APP_DIR/VERSION"fi
 
   create_service_user
   copy_files

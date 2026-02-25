@@ -125,6 +125,9 @@ class BridgeController:
     
     def get_config_with_status(self, timeout=5):
         """Get the current bridge configuration with connection status"""
+        # Reload config from file to avoid stale cache
+        self.config = self.load_config()
+        
         if self.config:
             # Test connection to bridge
             try:
@@ -165,6 +168,9 @@ class BridgeController:
     
     def test_connection(self):
         """Test the bridge connection by fetching lights"""
+        # Reload config from file to avoid stale cache
+        self.config = self.load_config()
+        
         if not self.config:
             return {'success': False, 'error': 'Bridge not configured'}
         

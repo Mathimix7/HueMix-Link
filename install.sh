@@ -16,7 +16,7 @@ ASSUME_YES=0
 LOCAL=1
 EXT_PORT=80
 OLD_HOSTNAME_FILE="$APP_DIR/.prev-hostname"
-HTTPS=0
+HTTPS=1
 
 # Colors for nicer output
 bold=$(echo -en "\e[1m")
@@ -75,7 +75,7 @@ ${blue}${bold}Usage:${reset} $0 [${magenta}install${reset}|${magenta}uninstall${
   ${gray}--no-restart${reset}    Do not stop or restart the service during update
   ${gray}--show-version${reset}  Show installed and source version information and exit
   ${gray}--no-local${reset}      Do not create huemixlink.local host entry
-  ${gray}--https${reset}         Enable HTTPS (port 443) with self-signed certificate
+  ${gray}--no-https${reset}      Disable HTTPS (only serve HTTP on specified port)
   ${gray}--port <port>${reset}   External HTTP port (default: ${EXT_PORT})
   ${gray}-h|--help${reset}       Show this help message
 EOF
@@ -90,7 +90,7 @@ parse_args() {
       --force) FORCE=1; shift ;;
       --delete) DELETE=1; shift ;;
       --no-restart) NO_RESTART=1; shift ;;
-      --https) HTTPS=1; shift ;;
+      --no-https) HTTPS=0; shift ;;
       --port) shift; EXT_PORT="$1"; shift ;;
       --show-version) SHOW_VERSION=1; shift ;;
       --no-local) LOCAL=0; shift ;;

@@ -939,7 +939,7 @@ function showToast(title, message, type = 'success') {
 
     // Set content
     toastTitle.textContent = title;
-    toastMessage.textContent = message;
+    toastMessage.innerHTML = message;  // Use innerHTML to support HTML links
 
     // Set colors and icons based on type
     if (type === 'success') {
@@ -962,10 +962,11 @@ function showToast(title, message, type = 'success') {
         toastContainer.classList.remove('translate-x-full', 'opacity-0');
     }, 10);
 
-    // Auto hide after 4 seconds
+    // Auto hide after 4 seconds (or 8 seconds for errors with links)
+    const hideDelay = (type === 'error' && message.includes('<a')) ? 8000 : 4000;
     setTimeout(() => {
         hideToast();
-    }, 4000);
+    }, hideDelay);
 }
 
 function hideToast() {
@@ -1024,7 +1025,16 @@ document.getElementById('connectSerialBtn').addEventListener('click', handleSeri
 function openSerialModal() {
     // Check if Web Serial API is available
     if (!navigator.serial) {
-        showError("Web Serial API is not available.");
+        // Check if we're on HTTP and can redirect to HTTPS
+        if (window.location.protocol === 'http:') {
+            // Replace http:// with https:// and remove any port number
+            const httpsUrl = window.location.href
+                .replace('http://', 'https://')
+                .replace(/:\d+/, '');  // Remove any port number
+            showError(`Web Serial API requires HTTPS. <a href="${httpsUrl}" class="underline text-red-700 hover:text-red-800 font-semibold">Click here to switch to HTTPS</a>`);
+        } else {
+            showError("Web Serial API is not available. Please use a supported browser (Chrome, Edge, etc).");
+        }
         return;
     }
 

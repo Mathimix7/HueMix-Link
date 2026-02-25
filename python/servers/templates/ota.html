@@ -439,6 +439,7 @@ function renderDevicesTable() {
                         <div class="flex items-center space-x-2">
                             <span class="text-xs text-gray-500 w-12">Net:</span>
                             <span class="text-sm ${netHasUpdate ? 'text-orange-600 font-semibold' : 'text-gray-500'}">${netAvailable}</span>
+                            ${netHasUpdate && radioHasUpdate ? '<i class="fas fa-lock text-xs text-gray-400" title="Update Radio first"></i>' : ''}
                         </div>
                         <div class="flex items-center space-x-2">
                             <span class="text-xs text-gray-500 w-12">Radio:</span>
@@ -452,6 +453,11 @@ function renderDevicesTable() {
                             <button onclick="reopenProgressModal('${gateway.net.mac_address}', 'gateway_net')"
                                     class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs transition">
                                 View Progress
+                            </button>
+                        ` : netHasUpdate && radioHasUpdate ? `
+                            <button disabled title="Update Radio node first"
+                                    class="bg-gray-400 cursor-not-allowed text-white px-4 py-1 rounded text-xs flex items-center justify-center gap-1">
+                                <i class="fas fa-lock text-xs"></i> Update
                             </button>
                         ` : netHasUpdate ? `
                             <button onclick="startUpdate('${gateway.net.mac_address}', 'gateway_net', 'gateway_net')" 
@@ -1015,6 +1021,12 @@ document.getElementById('closeSerialModal').addEventListener('click', () => {
 document.getElementById('connectSerialBtn').addEventListener('click', handleSerialFlash);
 
 function openSerialModal() {
+    // Check if Web Serial API is available
+    if (!navigator.serial) {
+        showError("Web Serial API is not available.");
+        return;
+    }
+
     const select = document.getElementById('serialFirmwareSelect');
     
     // Enable/disable options based on available firmwares
@@ -1043,6 +1055,12 @@ async function handleSerialFlash() {
     const baudRate = parseInt(document.getElementById('serialBaudRate').value);
 
     if (!fwInfo) return showError("Select a firmware first");
+
+    // Check if Web Serial API is available
+    if (!navigator.serial) {
+        showError("Web Serial API is not available.");
+        return;
+    }
 
     try {
         // 1. Request Browser Serial Port

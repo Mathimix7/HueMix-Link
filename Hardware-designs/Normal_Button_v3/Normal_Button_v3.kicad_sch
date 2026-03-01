@@ -10,6 +10,192 @@
 		(rev "3.0")
 	)
 	(lib_symbols
+		(symbol "2025-12-22_17-16-21:MCP1700T-3302E_TT"
+			(pin_names
+				(offset 0.254)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "U"
+				(at 44.704 10.16 0)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Value" "MCP1700T-3302E/TT"
+				(at 44.704 7.62 0)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Footprint" "SOT-23_MC_MCH"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+						(italic yes)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "MCP1700T-3302E/TT"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+						(italic yes)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_locked" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "MCP1700T-3302E/TT"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_fp_filters" "SOT-23_MC_MCH SOT-23_MC_MCH-M SOT-23_MC_MCH-L"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "MCP1700T-3302E_TT_0_1"
+				(polyline
+					(pts
+						(xy 38.1 5.08) (xy 38.1 -7.62)
+					)
+					(stroke
+						(width 0.127)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 38.1 -7.62) (xy 48.26 -7.62)
+					)
+					(stroke
+						(width 0.127)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 48.26 5.08) (xy 38.1 5.08)
+					)
+					(stroke
+						(width 0.127)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 48.26 -7.62) (xy 48.26 5.08)
+					)
+					(stroke
+						(width 0.127)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "MCP1700T-3302E_TT_1_1"
+				(pin unspecified line
+					(at 35.56 -1.27 0)
+					(length 2.54)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin unspecified line
+					(at 50.8 0 180)
+					(length 2.54)
+					(name "VIN"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin unspecified line
+					(at 50.8 -2.54 180)
+					(length 2.54)
+					(name "VOUT"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Battery_Management:TP4057"
 			(exclude_from_sim no)
 			(in_bom yes)
@@ -3330,147 +3516,6 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Regulator_Linear:MCP1700-3302E_TO92"
-			(pin_names
-				(offset 0.254)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(property "Reference" "U"
-				(at -3.81 -3.175 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Value" "MCP1700-3302E_TO92"
-				(at 0 -3.175 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left)
-				)
-			)
-			(property "Footprint" "Package_TO_SOT_THT:TO-92_Inline"
-				(at 0 -5.08 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-						(italic yes)
-					)
-					(hide yes)
-				)
-			)
-			(property "Datasheet" "http://ww1.microchip.com/downloads/en/DeviceDoc/20001826D.pdf"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Description" "250mA Low Quiscent Current LDO, 3.3V output, TO-92"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_keywords" "regulator linear ldo"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_fp_filters" "TO?92*"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "MCP1700-3302E_TO92_0_1"
-				(rectangle
-					(start -5.08 5.08)
-					(end 5.08 -1.905)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type background)
-					)
-				)
-			)
-			(symbol "MCP1700-3302E_TO92_1_1"
-				(pin power_in line
-					(at -7.62 0 0)
-					(length 2.54)
-					(name "VI"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at 0 7.62 270)
-					(length 2.54)
-					(name "GND"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_out line
-					(at 7.62 0 180)
-					(length 2.54)
-					(name "VO"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "3"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
 		(symbol "Switch:SW_Push"
 			(pin_numbers
 				(hide yes)
@@ -4397,12 +4442,6 @@
 		(uuid "82fa735d-2814-4a6a-8a6c-4a21e64aafae")
 	)
 	(junction
-		(at 204.47 34.29)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "8f98f18b-3fe6-4410-8942-fd8d687a6501")
-	)
-	(junction
 		(at 96.52 163.83)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -4419,6 +4458,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "a370b588-70f4-482f-b0b7-638560621e3f")
+	)
+	(junction
+		(at 204.47 34.29)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "d5c23c40-7163-45f1-a80b-ad72674753bc")
 	)
 	(junction
 		(at 219.71 34.29)
@@ -4723,6 +4768,16 @@
 			(type default)
 		)
 		(uuid "366e3877-4317-4f17-938b-f78091012f5d")
+	)
+	(wire
+		(pts
+			(xy 196.85 26.67) (xy 196.85 19.05)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3b50efa5-70e4-41c1-b63b-224e4a4a1084")
 	)
 	(wire
 		(pts
@@ -5056,16 +5111,6 @@
 	)
 	(wire
 		(pts
-			(xy 204.47 34.29) (xy 219.71 34.29)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "99c58a60-44e8-4085-8e8b-039594f9fc32")
-	)
-	(wire
-		(pts
 			(xy 223.52 26.67) (xy 232.41 26.67)
 		)
 		(stroke
@@ -5073,6 +5118,16 @@
 			(type default)
 		)
 		(uuid "9ee55acd-7387-49d6-88e0-47bc2e335deb")
+	)
+	(wire
+		(pts
+			(xy 212.09 26.67) (xy 212.09 19.05)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a1a6a8c8-f7e4-4863-b59d-3d780d3794df")
 	)
 	(wire
 		(pts
@@ -5226,6 +5281,16 @@
 	)
 	(wire
 		(pts
+			(xy 196.85 19.05) (xy 203.2 19.05)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c24e7b74-e0f9-4acc-84c0-831c94eb7f89")
+	)
+	(wire
+		(pts
 			(xy 166.37 36.83) (xy 162.56 36.83)
 		)
 		(stroke
@@ -5303,6 +5368,26 @@
 			(type default)
 		)
 		(uuid "d96051b8-9a90-4347-b603-c81bc625cbf8")
+	)
+	(wire
+		(pts
+			(xy 204.47 34.29) (xy 219.71 34.29)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "da98f744-d5ca-498b-85d6-c674aa805900")
+	)
+	(wire
+		(pts
+			(xy 212.09 19.05) (xy 205.74 19.05)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "dba40dd7-2db4-4943-8acb-693ebb31e94b")
 	)
 	(wire
 		(pts
@@ -6509,6 +6594,80 @@
 		)
 	)
 	(symbol
+		(lib_id "2025-12-22_17-16-21:MCP1700T-3302E_TT")
+		(at 203.2 69.85 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "42b401f5-4713-4108-8258-2ca9d4ec19a1")
+		(property "Reference" "U4"
+			(at 203.2 16.764 90)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "MCP1700T-3302E/TT"
+			(at 194.056 36.83 90)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "SOT-23_MC_MCH"
+			(at 203.2 69.85 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+					(italic yes)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "MCP1700T-3302E/TT"
+			(at 203.2 69.85 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+					(italic yes)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 203.2 69.85 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "dfa2e593-d021-4616-a3b5-ee2ef704638e")
+		)
+		(pin "3"
+			(uuid "50152877-10ef-435b-9fc0-f391f92312ea")
+		)
+		(pin "2"
+			(uuid "bd1892ee-e5ce-4762-8bea-68ff93b76012")
+		)
+		(instances
+			(project ""
+				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
+					(reference "U4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:R")
 		(at 105.41 152.4 180)
 		(unit 1)
@@ -6572,77 +6731,6 @@
 			(project ""
 				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
 					(reference "R1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Regulator_Linear:MCP1700-3302E_TO92")
-		(at 204.47 26.67 0)
-		(mirror x)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "4f6a4742-cec4-4176-9783-f69bcb3f8c20")
-		(property "Reference" "U4"
-			(at 204.47 21.59 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "MCP1700"
-			(at 204.47 19.05 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "MCP1700T_3302E_TT 3:SOT-23_MC_MCH"
-			(at 204.47 21.59 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-					(italic yes)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "http://ww1.microchip.com/downloads/en/DeviceDoc/20001826D.pdf"
-			(at 204.47 26.67 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 204.47 26.67 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "51039574-0250-478f-9b38-ca9e80412a60")
-		)
-		(pin "2"
-			(uuid "04c83a4c-9e9d-4142-b5f2-3ba9c9d496f0")
-		)
-		(pin "3"
-			(uuid "bb838fec-d147-473d-8cc7-d1bd8c3913a1")
-		)
-		(instances
-			(project ""
-				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
-					(reference "U4")
 					(unit 1)
 				)
 			)

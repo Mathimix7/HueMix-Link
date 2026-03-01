@@ -425,15 +425,4 @@
 		(uuid "adaa9a6d-6faf-46d1-a025-dc8f6ef283d7")
 	)
 	(embedded_fonts no)
-	(model "${KIPRJMOD}/components/MCP1700T_3302E_MB/SOT-23_MC_MCH.step"
-		(offset
-			(xyz 0 0 0)
-		)
-		(scale
-			(xyz 1 1 1)
-		)
-		(rotate
-			(xyz 0 0 0)
-		)
-	)
 )

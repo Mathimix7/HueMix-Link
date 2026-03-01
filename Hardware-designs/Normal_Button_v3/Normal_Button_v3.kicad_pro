@@ -514,7 +514,7 @@
       "plot": "",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "",
+      "step": "Normal_Button_v3.step",
       "svg": "",
       "vrml": "ESP_Now_Hue.wrl"
     },

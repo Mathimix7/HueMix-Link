@@ -9,7 +9,7 @@ from network.network_server import network_server
 from network.pairing_manager import pairing_manager
 from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY, DEFAULT_WEB_PORT, FILE_MOTION_SENSORS
 from waitress import serve
-from servers.blueprints.buttons import validate_scenes_at_startup
+from services.hue_config_sync import sync_device_configs_with_hue
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +59,12 @@ if __name__ == '__main__':
         automation_service.set_network_server(network_server)
         automation_service.start()
         
-        # This cleans up any scenes that were deleted while the system was offline
-        logger.info("Validating button scene configurations...")
+        # Reconcile local automation configs with current Hue rooms/scenes.
+        logger.info("Synchronizing button/motion configurations with Hue...")
         try:
-            validate_scenes_at_startup()
+            sync_device_configs_with_hue()
         except Exception as e:
-            logger.error(f"Error during startup scene validation: {e}", exc_info=True)
+            logger.error(f"Error during startup Hue config sync: {e}", exc_info=True)
         
         # Start Flask web server (blocking) — bind to localhost only; proxy will expose externally
         logger.info(f"Starting Flask web server on port {DEFAULT_WEB_PORT} (127.0.0.1)...")

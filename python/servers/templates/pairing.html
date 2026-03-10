@@ -452,7 +452,8 @@ async function loadPairedDevices() {
                     1: '/gateways',  // Gateway
                     2: '/buttons',   // Button
                     3: '/lightstrips', // Light
-                    4: '/buttons'    // Remote
+                    4: '/buttons',   // Remote
+                    5: '/motion-sensors' // Motion Sensor
                 };
                 const configUrl = configUrls[device.type] || '#';
                 
@@ -616,6 +617,13 @@ async function confirmRename() {
             endpoint = `/buttons/api/devices/${renameDeviceId}/rename`;
             method = 'POST';
             body = { name: newName };
+        } else if (renameDeviceType === 5) { // Motion Sensor
+            endpoint = `/motion-sensors/api/devices/${renameDeviceId}/rename`;
+            method = 'POST';
+            body = { name: newName };
+        } else {
+            showToast('Error', `Unsupported device type: ${renameDeviceType}`, 'error');
+            return;
         }
         
         const response = await fetch(endpoint, {
@@ -676,6 +684,12 @@ async function confirmDelete() {
             endpoint = `/lightstrips/api/lightstrips/${deleteDeviceId}`;
         } else if (deleteDeviceType === 4) { // Remote
             endpoint = `/buttons/api/devices/${deleteDeviceId}`;
+        } else if (deleteDeviceType === 5) { // Motion Sensor
+            endpoint = `/motion-sensors/api/devices/${deleteDeviceId}`;
+        } else {
+            showToast('Error', `Unsupported device type: ${deleteDeviceType}`, 'error');
+            closeDeleteModal();
+            return;
         }
         
         const response = await fetch(endpoint, {

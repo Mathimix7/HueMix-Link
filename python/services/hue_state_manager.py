@@ -162,6 +162,8 @@ class HueStateManager:
             grouped_light_id: Grouped light ID for this room
         """
         with self._lock:
+            old_grouped_light_id = self._rooms.get(room_id, {}).get('grouped_light_id')
+
             if room_id not in self._rooms:
                 self._rooms[room_id] = {
                     'lights': [],
@@ -180,6 +182,11 @@ class HueStateManager:
                 self._rooms[room_id]['lights'] = lights
             if grouped_light_id is not None:
                 self._rooms[room_id]['grouped_light_id'] = grouped_light_id
+                if old_grouped_light_id and old_grouped_light_id in self._grouped_light_to_room:
+                    if self._grouped_light_to_room[old_grouped_light_id] == room_id:
+                        del self._grouped_light_to_room[old_grouped_light_id]
+                if grouped_light_id:
+                    self._grouped_light_to_room[grouped_light_id] = room_id
             
             self._rooms[room_id]['last_update'] = datetime.now().isoformat()
             

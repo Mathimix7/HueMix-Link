@@ -375,11 +375,33 @@ class HueSSEListener:
                 if service.get('rtype') == 'grouped_light':
                     grouped_light_id = service.get('rid')
                     break
+
+            # SSE room-add payload can be partial; fetch full room data when needed.
+            if self._hue_controller:
+                try:
+                    full_room = self._hue_controller.get_room(room_id)
+                    room_name = full_room.get('metadata', {}).get('name', room_name)
+                    if not grouped_light_id:
+                        for service in full_room.get('services', []):
+                            if service.get('rtype') == 'grouped_light':
+                                grouped_light_id = service.get('rid')
+                                break
+                except Exception:
+                    logger.debug(f"Failed to fetch full room details for {room_id}", exc_info=True)
+
+            is_on = None
+            if grouped_light_id and self._hue_controller:
+                try:
+                    grouped_light = self._hue_controller.get_grouped_light(grouped_light_id)
+                    is_on = grouped_light.get('on', {}).get('on')
+                except Exception:
+                    logger.debug(f"Failed to fetch grouped_light state for room {room_id}", exc_info=True)
             
             # Update room in state manager
             hue_state_manager.update_room(
                 room_id=room_id,
                 name=room_name,
+                is_on=is_on,
                 grouped_light_id=grouped_light_id
             )
             sync_device_configs_with_hue(self._hue_controller)

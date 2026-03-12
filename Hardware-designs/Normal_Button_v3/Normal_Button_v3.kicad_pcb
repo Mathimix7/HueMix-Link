@@ -8880,7 +8880,7 @@
 			)
 		)
 	)
-	(gr_text "HueMix Link\nV3.0\n"
+	(gr_text "HueMix Link\nV3.0 Rev. B\n"
 		(at 152.654 55.118 0)
 		(layer "B.SilkS")
 		(uuid "87f97554-8a90-48f1-972b-3e2b99ba63d1")
@@ -8892,14 +8892,14 @@
 			(justify mirror)
 		)
 	)
-	(gr_text "February 2026\n"
+	(gr_text "March 2026\n"
 		(at 152.654 107.95 0)
 		(layer "B.SilkS")
 		(uuid "d663b6cb-dd97-49fa-a796-7b770fde4348")
 		(effects
 			(font
 				(size 2 2)
-				(thickness 0.3)
+				(thickness 0.25)
 			)
 			(justify mirror)
 		)

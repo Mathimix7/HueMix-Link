@@ -7485,7 +7485,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "300"
+		(property "Value" "300k"
 			(at 254 125.73 0)
 			(effects
 				(font

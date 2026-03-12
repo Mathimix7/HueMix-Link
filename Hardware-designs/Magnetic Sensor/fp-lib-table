@@ -1,0 +1,13 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "APHBM2012ETSGTC")(type "KiCad")(uri "${KIPRJMOD}/components/APHBM2012ETSGTC")(options "")(descr ""))
+  (lib (name "PTS526_SK15_SMTR2_LFS")(type "KiCad")(uri "${KIPRJMOD}/components/PTS526_SK15_SMTR2_LFS")(options "")(descr ""))
+  (lib (name "PTS526_SM15_SMTR2_LFS")(type "KiCad")(uri "${KIPRJMOD}/components/PTS526_SM15_SMTR2_LFS")(options "")(descr ""))
+  (lib (name "MCP1700T_3302E_TT 3")(type "KiCad")(uri "${KIPRJMOD}/components/MCP1700T_3302E_TT 3")(options "")(descr ""))
+  (lib (name "IRA_S410ST01")(type "KiCad")(uri "${KIPRJMOD}/components/IRA_S410ST01")(options "")(descr ""))
+  (lib (name "TPS63021DSJR")(type "KiCad")(uri "${KIPRJMOD}/components/TPS63021DSJR")(options "")(descr ""))
+  (lib (name "BH123A")(type "KiCad")(uri "${KIPRJMOD}/components/BH123A")(options "")(descr ""))
+  (lib (name "MSASJ21GBB5476MTNA01")(type "KiCad")(uri "${KIPRJMOD}/components/MSASJ21GBB5476MTNA01")(options "")(descr ""))
+  (lib (name "DFE201610E_1R0M_P2")(type "KiCad")(uri "${KIPRJMOD}/components/DFE201610E_1R0M_P2")(options "")(descr ""))
+  (lib (name "C1608X5R1A226M080AC")(type "KiCad")(uri "${KIPRJMOD}/components/C1608X5R1A226M080AC")(options "")(descr ""))
+)

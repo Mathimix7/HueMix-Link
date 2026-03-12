@@ -2625,7 +2625,7 @@
 				)
 			)
 		)
-		(property "Value" "300"
+		(property "Value" "300k"
 			(at 0 1.83 0)
 			(layer "F.Fab")
 			(uuid "0255316a-0925-428e-92e9-450c6b0507f7")
@@ -8764,6 +8764,17 @@
 			(uuid "b282e9ff-f046-4d82-b195-b442ed313d62")
 		)
 		(embedded_fonts no)
+		(model "/Users/gmixich/OneDrive/github/HueMix-Link-V3/Hardware-designs/Motion_Sensor_v1.1/components/PTS526_SM15_SMTR2_LFS/PTS526SK15SMTR2_LFS.stp"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 	)
 	(gr_line
 		(start 40 115)

@@ -2540,6 +2540,141 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "PCM_Voltage_Regulator_AKL:MCP1700T-3302E-TT"
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "U"
+				(at 0 6.35 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "MCP1700T-3302E-TT"
+				(at 0 3.81 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" "PCM_Package_TO_SOT_SMD_AKL:SOT-23"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "https://ww1.microchip.com/downloads/en/DeviceDoc/MCP1700-Low-Quiescent-Current-LDO-20001826E.pdf"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "SOT-23 3.3V 250mA Low dropout 3-terminal voltage regulator, Alternate KiCad Library"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "3.3V 250mA ldo low dropout voltage regulator vreg pmic power supply 3-terminal"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "MCP1700T-3302E-TT_0_0"
+				(rectangle
+					(start -5.08 1.27)
+					(end 5.08 -3.81)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(text "GND"
+					(at 0 -2.54 0)
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(symbol "MCP1700T-3302E-TT_1_1"
+				(pin power_in line
+					(at -7.62 0 0)
+					(length 2.54)
+					(name "IN"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 0 -6.35 90)
+					(length 2.54)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 7.62 0 180)
+					(length 2.54)
+					(name "OUT"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "RF_Module:ESP32-WROOM-32"
 			(exclude_from_sim no)
 			(in_bom yes)
@@ -3320,147 +3455,6 @@
 						)
 					)
 					(number "7"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
-		(symbol "Regulator_Linear:MCP1700-3302E_TO92"
-			(pin_names
-				(offset 0.254)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(property "Reference" "U"
-				(at -3.81 -3.175 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Value" "MCP1700-3302E_TO92"
-				(at 0 -3.175 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left)
-				)
-			)
-			(property "Footprint" "Package_TO_SOT_THT:TO-92_Inline"
-				(at 0 -5.08 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-						(italic yes)
-					)
-					(hide yes)
-				)
-			)
-			(property "Datasheet" "http://ww1.microchip.com/downloads/en/DeviceDoc/20001826D.pdf"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Description" "250mA Low Quiscent Current LDO, 3.3V output, TO-92"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_keywords" "regulator linear ldo"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_fp_filters" "TO?92*"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "MCP1700-3302E_TO92_0_1"
-				(rectangle
-					(start -5.08 5.08)
-					(end 5.08 -1.905)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type background)
-					)
-				)
-			)
-			(symbol "MCP1700-3302E_TO92_1_1"
-				(pin power_in line
-					(at -7.62 0 0)
-					(length 2.54)
-					(name "VI"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at 0 7.62 270)
-					(length 2.54)
-					(name "GND"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_out line
-					(at 7.62 0 180)
-					(length 2.54)
-					(name "VO"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "3"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -4397,12 +4391,6 @@
 		(uuid "82fa735d-2814-4a6a-8a6c-4a21e64aafae")
 	)
 	(junction
-		(at 204.47 34.29)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "8f98f18b-3fe6-4410-8942-fd8d687a6501")
-	)
-	(junction
 		(at 96.52 163.83)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -4419,6 +4407,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "a370b588-70f4-482f-b0b7-638560621e3f")
+	)
+	(junction
+		(at 204.47 34.29)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "d8101564-a192-49bc-bc6b-e969c00f7e4e")
 	)
 	(junction
 		(at 219.71 34.29)
@@ -4439,13 +4433,19 @@
 		(uuid "e3efcdf9-f5fd-45e8-8c2c-dccad965f637")
 	)
 	(junction
+		(at 67.31 168.91)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "f244a7ba-34b2-4572-94fb-c328038fbdb3")
+	)
+	(junction
 		(at 115.57 34.29)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "f7e61b38-0a39-4441-a145-e393c6bcf66a")
 	)
 	(junction
-		(at 107.95 105.41)
+		(at 116.84 105.41)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "fda0e013-cd36-4251-a6a6-356fb205a617")
@@ -4536,7 +4536,7 @@
 	)
 	(wire
 		(pts
-			(xy 119.38 105.41) (xy 119.38 102.87)
+			(xy 128.27 105.41) (xy 128.27 102.87)
 		)
 		(stroke
 			(width 0)
@@ -4593,6 +4593,26 @@
 			(type default)
 		)
 		(uuid "20887648-ad8e-41bc-8159-acf9369170ae")
+	)
+	(wire
+		(pts
+			(xy 67.31 168.91) (xy 67.31 172.72)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2238c0a5-63ba-4068-a196-ce5f578dbd17")
+	)
+	(wire
+		(pts
+			(xy 99.06 82.55) (xy 62.23 82.55)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "236b0f16-2c12-4650-a568-a9df67abd983")
 	)
 	(wire
 		(pts
@@ -4926,6 +4946,16 @@
 	)
 	(wire
 		(pts
+			(xy 204.47 34.29) (xy 219.71 34.29)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6673f91a-e43f-4daa-9847-a14bc4bd77bc")
+	)
+	(wire
+		(pts
 			(xy 146.05 31.75) (xy 152.4 31.75)
 		)
 		(stroke
@@ -4943,6 +4973,16 @@
 			(type default)
 		)
 		(uuid "6a7fbf65-86aa-4911-8039-99a25134a600")
+	)
+	(wire
+		(pts
+			(xy 99.06 82.55) (xy 99.06 106.68)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6ada6f12-8243-4b7b-b2d9-64d4a9392729")
 	)
 	(wire
 		(pts
@@ -4996,7 +5036,7 @@
 	)
 	(wire
 		(pts
-			(xy 118.11 105.41) (xy 119.38 105.41)
+			(xy 127 105.41) (xy 128.27 105.41)
 		)
 		(stroke
 			(width 0)
@@ -5026,13 +5066,23 @@
 	)
 	(wire
 		(pts
-			(xy 62.23 80.01) (xy 107.95 80.01)
+			(xy 62.23 80.01) (xy 116.84 80.01)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
 		(uuid "87e2f3c4-de0c-446a-b2e7-cadd0e6d1821")
+	)
+	(wire
+		(pts
+			(xy 204.47 33.02) (xy 204.47 34.29)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8a313814-7260-419f-8635-03c19fa8baf1")
 	)
 	(wire
 		(pts
@@ -5053,16 +5103,6 @@
 			(type default)
 		)
 		(uuid "94c7b852-6d78-4b25-96e9-3bc7b7ac8fb5")
-	)
-	(wire
-		(pts
-			(xy 204.47 34.29) (xy 219.71 34.29)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "99c58a60-44e8-4085-8e8b-039594f9fc32")
 	)
 	(wire
 		(pts
@@ -5276,6 +5316,16 @@
 	)
 	(wire
 		(pts
+			(xy 67.31 168.91) (xy 72.39 168.91)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d58ae340-c447-43ac-ba00-baae0e54801c")
+	)
+	(wire
+		(pts
 			(xy 241.3 114.3) (xy 247.65 114.3)
 		)
 		(stroke
@@ -5286,7 +5336,7 @@
 	)
 	(wire
 		(pts
-			(xy 107.95 80.01) (xy 107.95 105.41)
+			(xy 116.84 80.01) (xy 116.84 105.41)
 		)
 		(stroke
 			(width 0)
@@ -5326,7 +5376,7 @@
 	)
 	(wire
 		(pts
-			(xy 107.95 105.41) (xy 107.95 106.68)
+			(xy 116.84 105.41) (xy 116.84 106.68)
 		)
 		(stroke
 			(width 0)
@@ -5426,7 +5476,7 @@
 	)
 	(wire
 		(pts
-			(xy 66.04 168.91) (xy 72.39 168.91)
+			(xy 66.04 168.91) (xy 67.31 168.91)
 		)
 		(stroke
 			(width 0)
@@ -6509,6 +6559,78 @@
 		)
 	)
 	(symbol
+		(lib_id "PCM_Voltage_Regulator_AKL:MCP1700T-3302E-TT")
+		(at 204.47 26.67 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "42b401f5-4713-4108-8258-2ca9d4ec19a1")
+		(property "Reference" "U4"
+			(at 210.82 31.75 0)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "MCP1700T-3302E/TT"
+			(at 212.09 21.59 0)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "PCM_Package_TO_SOT_SMD_AKL:SOT-23"
+			(at 204.47 26.67 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "https://ww1.microchip.com/downloads/en/DeviceDoc/MCP1700-Low-Quiescent-Current-LDO-20001826E.pdf"
+			(at 204.47 26.67 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "SOT-23 3.3V 250mA Low dropout 3-terminal voltage regulator, Alternate KiCad Library"
+			(at 204.47 26.67 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "dfa2e593-d021-4616-a3b5-ee2ef704638e")
+		)
+		(pin "3"
+			(uuid "50152877-10ef-435b-9fc0-f391f92312ea")
+		)
+		(pin "2"
+			(uuid "bd1892ee-e5ce-4762-8bea-68ff93b76012")
+		)
+		(instances
+			(project ""
+				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
+					(reference "U4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:R")
 		(at 105.41 152.4 180)
 		(unit 1)
@@ -6572,77 +6694,6 @@
 			(project ""
 				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
 					(reference "R1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Regulator_Linear:MCP1700-3302E_TO92")
-		(at 204.47 26.67 0)
-		(mirror x)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "4f6a4742-cec4-4176-9783-f69bcb3f8c20")
-		(property "Reference" "U4"
-			(at 204.47 21.59 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "MCP1700"
-			(at 204.47 19.05 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "MCP1700T_3302E_TT 3:SOT-23_MC_MCH"
-			(at 204.47 21.59 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-					(italic yes)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "http://ww1.microchip.com/downloads/en/DeviceDoc/20001826D.pdf"
-			(at 204.47 26.67 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 204.47 26.67 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "51039574-0250-478f-9b38-ca9e80412a60")
-		)
-		(pin "2"
-			(uuid "04c83a4c-9e9d-4142-b5f2-3ba9c9d496f0")
-		)
-		(pin "3"
-			(uuid "bb838fec-d147-473d-8cc7-d1bd8c3913a1")
-		)
-		(instances
-			(project ""
-				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
-					(reference "U4")
 					(unit 1)
 				)
 			)
@@ -7047,7 +7098,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 107.95 110.49 180)
+		(at 116.84 110.49 180)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -7055,7 +7106,7 @@
 		(dnp no)
 		(uuid "627a7514-4add-47f2-8147-50fab0fc37cb")
 		(property "Reference" "R8"
-			(at 102.87 109.22 0)
+			(at 111.76 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7064,7 +7115,7 @@
 			)
 		)
 		(property "Value" "10k"
-			(at 102.87 111.76 0)
+			(at 111.76 111.76 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7073,7 +7124,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_1206_3216Metric_Pad1.30x1.75mm_HandSolder"
-			(at 109.728 110.49 90)
+			(at 118.618 110.49 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7082,7 +7133,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 107.95 110.49 0)
+			(at 116.84 110.49 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7091,7 +7142,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 107.95 110.49 0)
+			(at 116.84 110.49 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7114,17 +7165,17 @@
 		)
 	)
 	(symbol
-		(lib_id "power:+3.3V")
-		(at 119.38 102.87 0)
+		(lib_id "power:GND")
+		(at 99.06 114.3 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "66cc9be9-ee1b-4896-9bfb-d5fdc1f31656")
-		(property "Reference" "#PWR02"
-			(at 119.38 106.68 0)
+		(uuid "6422677f-56ec-4cc8-acb4-862caa674a0b")
+		(property "Reference" "#PWR015"
+			(at 99.06 120.65 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7132,8 +7183,8 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "+3.3V"
-			(at 119.38 97.79 0)
+		(property "Value" "GND"
+			(at 99.06 119.38 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7141,7 +7192,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 119.38 102.87 0)
+			(at 99.06 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7150,7 +7201,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 119.38 102.87 0)
+			(at 99.06 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7159,7 +7210,72 @@
 			)
 		)
 		(property "Description" ""
-			(at 119.38 102.87 0)
+			(at 99.06 114.3 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "58c052d0-a68b-4563-bef7-f8615031e46f")
+		)
+		(instances
+			(project "Normal_Button_v3"
+				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
+					(reference "#PWR015")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+3.3V")
+		(at 128.27 102.87 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "66cc9be9-ee1b-4896-9bfb-d5fdc1f31656")
+		(property "Reference" "#PWR02"
+			(at 128.27 106.68 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+3.3V"
+			(at 128.27 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 128.27 102.87 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 128.27 102.87 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 128.27 102.87 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8224,7 +8340,7 @@
 	)
 	(symbol
 		(lib_id "Switch:SW_Push")
-		(at 113.03 105.41 0)
+		(at 121.92 105.41 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -8232,7 +8348,7 @@
 		(dnp no)
 		(uuid "95cb64c7-3018-4e84-ae77-5a9c872f6cdc")
 		(property "Reference" "SW1"
-			(at 113.03 97.79 0)
+			(at 121.92 97.79 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8240,7 +8356,7 @@
 			)
 		)
 		(property "Value" "main"
-			(at 113.03 100.33 0)
+			(at 121.92 100.33 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8248,7 +8364,7 @@
 			)
 		)
 		(property "Footprint" "Button_Switch_THT:SW_PUSH-12mm"
-			(at 113.03 100.33 0)
+			(at 121.92 100.33 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8257,7 +8373,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 113.03 100.33 0)
+			(at 121.92 100.33 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8266,7 +8382,7 @@
 			)
 		)
 		(property "Description" "Push button switch, generic, two pins"
-			(at 111.76 128.27 0)
+			(at 120.65 128.27 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8291,7 +8407,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 107.95 114.3 0)
+		(at 116.84 114.3 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -8300,7 +8416,7 @@
 		(fields_autoplaced yes)
 		(uuid "96e99a5e-897a-4606-98a8-7fee1ec28b21")
 		(property "Reference" "#PWR0102"
-			(at 107.95 120.65 0)
+			(at 116.84 120.65 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8309,7 +8425,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 107.95 119.38 0)
+			(at 116.84 119.38 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8317,7 +8433,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 107.95 114.3 0)
+			(at 116.84 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8326,7 +8442,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 107.95 114.3 0)
+			(at 116.84 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8335,7 +8451,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 107.95 114.3 0)
+			(at 116.84 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8885,6 +9001,71 @@
 		)
 	)
 	(symbol
+		(lib_id "power:GND")
+		(at 67.31 180.34 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "ac76fad9-e23b-4a2b-8f35-ae50bcc12abd")
+		(property "Reference" "#PWR017"
+			(at 67.31 186.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 67.31 185.42 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 67.31 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 67.31 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 67.31 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "71133ef9-efcc-4e9f-b031-05e8eb7524cf")
+		)
+		(instances
+			(project "Normal_Button_v3"
+				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
+					(reference "#PWR017")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:LED")
 		(at 105.41 160.02 90)
 		(unit 1)
@@ -9082,6 +9263,74 @@
 			(project "Normal_Button_v3"
 				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
 					(reference "SW4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 67.31 176.53 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "ba59d3ed-4e20-48b8-8b73-2c0347ee5295")
+		(property "Reference" "R19"
+			(at 62.23 175.26 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "100k"
+			(at 62.23 177.8 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric_Pad1.30x1.75mm_HandSolder"
+			(at 69.088 176.53 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 67.31 176.53 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 67.31 176.53 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "203db972-3ac1-46df-b4a4-d0ef1b215059")
+		)
+		(pin "2"
+			(uuid "f8a20d22-1554-413e-a75c-b771a5dda440")
+		)
+		(instances
+			(project "Normal_Button_v3"
+				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
+					(reference "R19")
 					(unit 1)
 				)
 			)
@@ -9675,6 +9924,74 @@
 			(project "Normal_Button_v3"
 				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
 					(reference "R7")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 99.06 110.49 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "c9b86375-92dd-4215-931c-8e069660013a")
+		(property "Reference" "R18"
+			(at 93.98 109.22 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "10k"
+			(at 93.98 111.76 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric_Pad1.30x1.75mm_HandSolder"
+			(at 100.838 110.49 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 99.06 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 99.06 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "e8b25756-70fc-4b5f-8098-ef7e2987fcfd")
+		)
+		(pin "2"
+			(uuid "232e0c62-8aaf-4498-a7ad-bd09bdd024ab")
+		)
+		(instances
+			(project "Normal_Button_v3"
+				(path "/f49bf5b5-755e-4fdf-b7e4-d77d153a13a5"
+					(reference "R18")
 					(unit 1)
 				)
 			)

@@ -52,24 +52,82 @@ DEVICE_TYPE_NAMES = {
     DEV_MOTION: 'motion_sensor'
 }
 
-# Extended mapping for gateway subtypes (net vs radio) and button/remote/lightstrip platforms (ESP32 vs ESP8266)
-# Lightstrip model IDs:
-#   Model 1: ESP32, RGB, GRB, WS2812B
-#   Model 2: ESP32, RGBW, GRB, SK6812
-#   Model 3: ESP8266, RGB, GRB, WS2812B
-#   Model 4: ESP8266, RGBW, GRB, SK6812
+# Base device type configurations (single source of truth)
+BASE_DEVICE_CONFIGS = {
+    'gateway_net': {
+        'device_code': DEV_GATEWAY,
+        'label': 'Gateway Net Node (WiFi)',
+        'group': 'Gateways'
+    },
+    'gateway_radio': {
+        'device_code': DEV_GATEWAY,
+        'label': 'Gateway Radio Node (ESP-NOW)',
+        'group': 'Gateways'
+    },
+    'button_esp32': {
+        'device_code': DEV_BUTTON,
+        'label': 'Button ESP32',
+        'group': 'Buttons'
+    },
+    'button_esp8266': {
+        'device_code': DEV_BUTTON,
+        'label': 'Button ESP8266',
+        'group': 'Buttons'
+    },
+    'remote_esp32': {
+        'device_code': DEV_REMOTE,
+        'label': 'Remote ESP32',
+        'group': 'Remotes'
+    },
+    'motion_sensor_esp32': {
+        'device_code': DEV_MOTION,
+        'label': 'Motion Sensor ESP32',
+        'group': 'Motion Sensors'
+    }
+}
+
+# Lightstrip model configurations - odd=ESP32, even=ESP8266
+LIGHTSTRIP_MODELS = {
+    1: {'platform': 'ESP32', 'type': 'RGB', 'chip': 'WS2812B'},
+    2: {'platform': 'ESP8266', 'type': 'RGB', 'chip': 'WS2812B'},
+    3: {'platform': 'ESP32', 'type': 'RGBW', 'chip': 'SK6812'},
+    4: {'platform': 'ESP8266', 'type': 'RGBW', 'chip': 'SK6812'},
+    5: {'platform': 'ESP32', 'type': 'RGB+PWMW', 'chip': 'WS2812B'},
+    6: {'platform': 'ESP8266', 'type': 'RGB+PWM', 'chip': 'WS2812B'}
+}
+
+# Auto-generate lightstrip device configs from models
+for model_id, model_info in LIGHTSTRIP_MODELS.items():
+    key = f'lightstrip_model{model_id}'
+    label = f"Lightstrip Model {model_id} ({model_info['platform']}, {model_info['type']}, {model_info['chip']})"
+    BASE_DEVICE_CONFIGS[key] = {
+        'device_code': DEV_LIGHT,
+        'label': label,
+        'group': 'Lightstrips'
+    }
+
+# Auto-generate derived dictionaries from base configs
 EXTENDED_DEVICE_TYPES = {
-    'gateway_net': (DEV_GATEWAY, 'gateway_net'),
-    'gateway_radio': (DEV_GATEWAY, 'gateway_radio'),
-    'button_esp32': (DEV_BUTTON, 'button_esp32'),
-    'button_esp8266': (DEV_BUTTON, 'button_esp8266'),
-    'remote_esp32': (DEV_REMOTE, 'remote_esp32'),
-    # 'remote_esp8266': (DEV_REMOTE, 'remote_esp8266'),
-    'motion_sensor_esp32': (DEV_MOTION, 'motion_sensor_esp32'),
-    'lightstrip_model1': (DEV_LIGHT, 'lightstrip_model1'),  # ESP32, RGB, WS2812B
-    'lightstrip_model2': (DEV_LIGHT, 'lightstrip_model2'),  # ESP32, RGBW, SK6812
-    'lightstrip_model3': (DEV_LIGHT, 'lightstrip_model3'),  # ESP8266, RGB, WS2812B
-    'lightstrip_model4': (DEV_LIGHT, 'lightstrip_model4'),  # ESP8266, RGBW, SK6812
+    key: (config['device_code'], key) 
+    for key, config in BASE_DEVICE_CONFIGS.items()
+}
+
+DEVICE_TYPE_LABELS = {
+    key: config['label'] 
+    for key, config in BASE_DEVICE_CONFIGS.items()
+}
+
+DEVICE_TYPE_GROUPS = {}
+for key, config in BASE_DEVICE_CONFIGS.items():
+    group = config['group']
+    if group not in DEVICE_TYPE_GROUPS:
+        DEVICE_TYPE_GROUPS[group] = []
+    DEVICE_TYPE_GROUPS[group].append(key)
+
+# For backwards compatibility and convenience in templates
+LIGHTSTRIP_MODEL_NAMES = {
+    model_id: f"{info['platform']}, {info['type']}, {info['chip']}" 
+    for model_id, info in LIGHTSTRIP_MODELS.items()
 }
 
 
@@ -156,7 +214,11 @@ def save_local_firmwares(firmwares):
 def ota_page():
     """Render OTA management page."""
     dev_mode = config_manager.get_dev_mode()
-    return render_template('ota.html', dev_mode=dev_mode)
+    return render_template('ota.html', 
+                         dev_mode=dev_mode,
+                         device_type_groups=DEVICE_TYPE_GROUPS,
+                         device_type_labels=DEVICE_TYPE_LABELS,
+                         lightstrip_model_names=LIGHTSTRIP_MODEL_NAMES)
 
 
 @ota_bp.route('/api/ota/check', methods=['GET'])
@@ -542,9 +604,11 @@ def start_ota(device_mac):
                     if device_model_id and device_model_id != firmware_model_id:
                         model_names = {
                             1: 'ESP32, RGB, WS2812B',
-                            2: 'ESP32, RGBW, SK6812',
-                            3: 'ESP8266, RGB, WS2812B',
-                            4: 'ESP8266, RGBW, SK6812'
+                            2: 'ESP8266, RGB, WS2812B',
+                            3: 'ESP32, RGBW, SK6812',
+                            4: 'ESP8266, RGBW, SK6812',
+                            5: 'ESP32, RGB+PWMW, WS2812B',
+                            6: 'ESP8266, RGB+PWMW, WS2812B'
                         }
                         return jsonify({
                             'success': False,
@@ -672,8 +736,7 @@ def get_devices_with_versions():
                 'name': gw.get('name', f"Gateway {gw.get('mac_address', '')[-8:]}"),
                 'type': 'gateway_net',
                 'device_type': DEV_GATEWAY,
-                'version': gw.get('version_net', '0.0.0'),
-                'online': True
+                'version': gw.get('version_net', '0.0.0')
             })
             
             # Add Radio Node entry (Radio MAC) - only if radio_mac exists
@@ -684,8 +747,7 @@ def get_devices_with_versions():
                     'name': gw.get('name', f"Gateway {gw.get('mac_address', '')[-8:]}"),
                     'type': 'gateway_radio',
                     'device_type': DEV_GATEWAY,
-                    'version': gw.get('version_radio', '0.0.0'),
-                    'online': True
+                    'version': gw.get('version_radio', '0.0.0')
                 })
         
         # Get all lightstrips
@@ -698,8 +760,7 @@ def get_devices_with_versions():
                 'device_type': DEV_LIGHT,
                 'version': light.get('version', '0.0.0'),
                 'platform': light.get('platform', 'unknown'),
-                'model_id': light.get('model_id'),
-                'online': True
+                'model_id': light.get('model_id')
             })
         
         # Get all buttons/remotes
@@ -725,8 +786,7 @@ def get_devices_with_versions():
                 'type': type_name,
                 'device_type': btn_type,
                 'version': btn.get('version', '0.0.0'),
-                'platform': platform,
-                'online': True
+                'platform': platform
             })
         
         # Get all motion sensors
@@ -738,8 +798,7 @@ def get_devices_with_versions():
                 'type': 'motion_sensor',
                 'device_type': DEV_MOTION,
                 'version': sensor.get('version', '0.0.0'),
-                'platform': sensor.get('platform', 'esp32'),
-                'online': True
+                'platform': sensor.get('platform', 'esp32')
             })
         
         return jsonify({

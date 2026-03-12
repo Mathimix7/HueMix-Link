@@ -1039,6 +1039,20 @@ class NetworkServer:
         """
         rssi = hello_data.get('rssi', 0)
         
+        # Check if this device has a pending OTA validation
+        session = ota_manager.get_session(sensor_mac)
+        if session and session.state == OTAState.VALIDATING:
+            expected_version = f"{session.version[0]}.{session.version[1]}.{session.version[2]}"
+            current_version = hello_data.get('version', '0.0.0')
+            
+            if current_version == expected_version:
+                logger.info(f"✅ OTA validation SUCCESS: {sensor_mac} now running {current_version}")
+                ota_manager.update_session_state(sensor_mac, OTAState.COMPLETE, "Firmware validated successfully")
+            else:
+                error_msg = f"Version mismatch: expected {expected_version}, got {current_version}"
+                logger.error(f"❌ OTA validation FAILED: {sensor_mac} - {error_msg}")
+                ota_manager.update_session_state(sensor_mac, OTAState.FAILED, error_msg)
+        
         # Find gateway radio MAC by sender IP
         gateway_radio_mac = None
         with self._gateway_lock:
@@ -2173,7 +2187,7 @@ class NetworkServer:
             
             # Set chunk delay based on target type
             if is_gateway and not is_radio_node:
-                chunk_delay = 0.008  # Net node direct
+                chunk_delay = 0.010  # Net node direct
             else:
                 chunk_delay = 0.016  # Other devices via ESP-NOW
             

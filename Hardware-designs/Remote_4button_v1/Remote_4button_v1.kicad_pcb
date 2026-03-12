@@ -178,7 +178,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/90dedf6c-79f6-48ab-8df6-d2cde2cd75d4")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 -0.5225)
@@ -377,7 +377,7 @@
 		(property ki_fp_filters "C_*")
 		(path "/3a7952b4-fe6e-4176-aaaa-857a128f996e")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.261252 0.735)
@@ -576,7 +576,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/69837d56-84e6-46cc-96d5-a42f67a4af5f")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 0.5225)
@@ -780,7 +780,7 @@
 		(property ki_fp_filters "USB*C*Receptacle*")
 		(path "/8c95e747-869b-49df-909d-9effedb0bc4f")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -4.67 -0.25)
@@ -1034,7 +1034,7 @@
 		(property ki_fp_filters "C_*")
 		(path "/2ce43277-444e-49dc-847b-4774de26aeb1")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.261252 0.735)
@@ -1235,7 +1235,7 @@
 		(property ki_fp_filters "SON4_PTS526 SM15 SMTR2 LFS_CNK SON4_PTS526 SM15 SMTR2 LFS_CNK-M SON4_PTS526 SM15 SMTR2 LFS_CNK-L")
 		(path "/aabb4327-5ebb-4312-b571-bcab6b69f221")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start 2.8321 -2.8321)
@@ -1810,7 +1810,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/82a5c17d-7ebe-4588-9e84-71db88c252e1")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 -0.5225)
@@ -2011,7 +2011,7 @@
 		(property ki_fp_filters "TSOT?23*")
 		(path "/8832d543-0ab7-4a2f-ad0b-3da2013e86ab")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.88 1.56)
@@ -2286,7 +2286,7 @@
 		(property ki_fp_filters "Connector*:*_1x??_*")
 		(path "/e7efbfa0-607f-4283-955f-3191d266a41b")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr exclude_from_pos_files)
 		(fp_line
 			(start -1.03 -0.4)
@@ -2538,7 +2538,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/2c0f98e4-33ed-4477-abd6-e2de6436c028")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 0.5225)
@@ -2738,7 +2738,7 @@
 		(property ki_fp_filters "C_*")
 		(path "/a4e3cf72-e389-4f37-bf27-d66ef3d128ea")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.261252 0.735)
@@ -2938,7 +2938,7 @@
 		(property ki_fp_filters "Jumper* TestPoint*2Pads* TestPoint*Bridge*")
 		(path "/af9a8faf-9d6a-4105-8aab-7b3519bd9a38")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr through_hole)
 		(fp_line
 			(start 1.38 1.27)
@@ -3155,7 +3155,7 @@
 				)
 			)
 		)
-		(property "Value" "270k"
+		(property "Value" "300"
 			(at 0 1.43 90)
 			(layer "F.Fab")
 			(uuid "0255316a-0925-428e-92e9-450c6b0507f7")
@@ -3193,7 +3193,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/159329cb-305a-4ca2-9fa6-1ad61a9418ec")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 0.5225)
@@ -3392,7 +3392,7 @@
 		(property ki_fp_filters "CP_*")
 		(path "/c9c98314-82ae-4822-bcf4-999276dcb72c")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start 3 -1.71)
@@ -3612,7 +3612,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/2cd1bcf0-58f2-4480-b4da-dafead2f6a27")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 -0.5225)
@@ -3756,458 +3756,6 @@
 			)
 		)
 	)
-	(footprint "MCP1700T_3302E_TT 3:SOT-23_MC_MCH"
-		(locked yes)
-		(layer "F.Cu")
-		(uuid "92a487c5-f5b6-42b0-9b0c-d441a82d5c77")
-		(at 102.56 69.1)
-		(tags "MCP1700T-3302E/TT ")
-		(property "Reference" "U4"
-			(at 2.28 0.03 90)
-			(unlocked yes)
-			(layer "F.SilkS")
-			(uuid "c2c94ed7-720d-4ab7-940a-13a229847911")
-			(effects
-				(font
-					(size 0.6 0.6)
-					(thickness 0.1)
-				)
-			)
-		)
-		(property "Value" "MCP1700"
-			(at 0 0 0)
-			(unlocked yes)
-			(layer "F.Fab")
-			(uuid "f576e6d2-6ee8-4fa2-99b1-9a997db4583e")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "Datasheet" "http://ww1.microchip.com/downloads/en/DeviceDoc/20001826D.pdf"
-			(at 0 0 0)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "32f0b54e-5071-4cef-ba35-7211cfc7f669")
-			(effects
-				(font
-					(size 1.27 1.27)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 0 0 0)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "69fafa67-a410-41ac-a265-4e45550688c1")
-			(effects
-				(font
-					(size 1.27 1.27)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property ki_fp_filters "TO?92*")
-		(path "/4f6a4742-cec4-4176-9783-f69bcb3f8c20")
-		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
-		(attr smd)
-		(fp_line
-			(start -1.652 -0.827)
-			(end -1.652 0.827)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.SilkS")
-			(uuid "3af55807-17d7-4c1b-baa3-c0f09bc2a65e")
-		)
-		(fp_line
-			(start -0.63754 -0.827)
-			(end -1.652 -0.827)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.SilkS")
-			(uuid "30abc34b-685f-4ee9-bc47-f1032d59ab1d")
-		)
-		(fp_line
-			(start -0.312461 0.827)
-			(end 0.312461 0.827)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.SilkS")
-			(uuid "b9668a9f-7ebb-40b8-8a15-3a0f2838d4c9")
-		)
-		(fp_line
-			(start 1.652 -0.827)
-			(end 0.63754 -0.827)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.SilkS")
-			(uuid "8dd8a91c-81fb-41bb-92a6-94f5a8e71f79")
-		)
-		(fp_line
-			(start 1.652 0.827)
-			(end 1.652 -0.827)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.SilkS")
-			(uuid "ec348241-1ded-4804-9f82-124646c9ab90")
-		)
-		(fp_line
-			(start -1.779 -0.954)
-			(end -0.5588 -0.954)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "04205f3b-fc98-4a8e-922d-d9f2e42741ab")
-		)
-		(fp_line
-			(start -1.779 0.954)
-			(end -1.779 -0.954)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "456fc97c-60e9-4359-b238-b8462e3ed065")
-		)
-		(fp_line
-			(start -1.779 0.954)
-			(end -1.5088 0.954)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "ffdd7b93-da1d-4b03-bafa-330f6eba8bbb")
-		)
-		(fp_line
-			(start -1.5088 0.954)
-			(end -1.5088 1.9296)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "714746c8-d535-48a0-8c50-4a16845c9e40")
-		)
-		(fp_line
-			(start -1.5088 1.9296)
-			(end 1.5088 1.9296)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "eeb0d7a0-6968-489b-b913-329a4c78bd14")
-		)
-		(fp_line
-			(start -0.5588 -1.9296)
-			(end 0.5588 -1.9296)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "f7b44e6e-917f-47a3-876e-792511668d71")
-		)
-		(fp_line
-			(start -0.5588 -0.954)
-			(end -0.5588 -1.9296)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "0b64326f-2eac-4f98-a124-c9276b701856")
-		)
-		(fp_line
-			(start 0.5588 -0.954)
-			(end 0.5588 -1.9296)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "099af797-5c90-4f47-9555-bda73521b58f")
-		)
-		(fp_line
-			(start 1.5088 0.954)
-			(end 1.5088 1.9296)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "5cefd57f-a672-4892-b6aa-815abb54537d")
-		)
-		(fp_line
-			(start 1.779 -0.954)
-			(end 0.5588 -0.954)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "c8c07be4-2155-4e23-b5d8-03c3767c7f77")
-		)
-		(fp_line
-			(start 1.779 -0.954)
-			(end 1.779 0.954)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "4709a23d-26bb-4f74-b11f-cf89484d0be5")
-		)
-		(fp_line
-			(start 1.779 0.954)
-			(end 1.5088 0.954)
-			(stroke
-				(width 0.1524)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "4376a108-0f4a-40c5-ab72-4969911adf17")
-		)
-		(fp_line
-			(start -1.524999 -0.7)
-			(end -1.524999 0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "64c0d348-71d9-44e9-aac9-6258b3c4dfbb")
-		)
-		(fp_line
-			(start -1.524999 0.7)
-			(end 1.524999 0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "571b1483-5176-4d29-86c0-ecef843d34e0")
-		)
-		(fp_line
-			(start -1.2294 0.7)
-			(end -1.2294 1.32)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "2993fa86-e2b4-451d-a66f-19fd7cbdc2a9")
-		)
-		(fp_line
-			(start -1.2294 1.32)
-			(end -0.6706 1.32)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "f080287b-069a-45b3-935c-5b5692eb1542")
-		)
-		(fp_line
-			(start -0.6706 0.7)
-			(end -1.2294 0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "b70622c8-06cf-497d-a764-5225064e1a90")
-		)
-		(fp_line
-			(start -0.6706 1.32)
-			(end -0.6706 0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "6375f5b4-bb28-4e36-a7f2-68962b083286")
-		)
-		(fp_line
-			(start -0.2794 -1.32)
-			(end -0.2794 -0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "b400817a-6dc2-436f-9071-0970a1e09f36")
-		)
-		(fp_line
-			(start -0.2794 -0.7)
-			(end 0.2794 -0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "56b3961e-177a-4319-a59e-2fd2b433207c")
-		)
-		(fp_line
-			(start 0.2794 -1.32)
-			(end -0.2794 -1.32)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "42fe1973-41d2-4b15-af77-99421302f76c")
-		)
-		(fp_line
-			(start 0.2794 -0.7)
-			(end 0.2794 -1.32)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "2b17fd7f-d4ee-445e-bac5-0e9d9350f408")
-		)
-		(fp_line
-			(start 0.6706 0.7)
-			(end 0.6706 1.32)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "32c07788-b163-402c-9019-bb750c0205bb")
-		)
-		(fp_line
-			(start 0.6706 1.32)
-			(end 1.2294 1.32)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "fd545131-91e7-4294-9db1-d5a47ba3ecb0")
-		)
-		(fp_line
-			(start 1.2294 0.7)
-			(end 0.6706 0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "6a882b6e-a305-47ba-aef8-cb1ef0838d85")
-		)
-		(fp_line
-			(start 1.2294 1.32)
-			(end 1.2294 0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "2489186f-cc40-4136-b91c-0b21b7c9e69c")
-		)
-		(fp_line
-			(start 1.524999 -0.7)
-			(end -1.524999 -0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "6ec43539-af7a-4aeb-9b91-3ce9d7a6a878")
-		)
-		(fp_line
-			(start 1.524999 0.7)
-			(end 1.524999 -0.7)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "37392bc8-6c10-4dee-b06c-1fb44b50e067")
-		)
-		(fp_circle
-			(center -1.270999 0.446)
-			(end -1.143999 0.446)
-			(stroke
-				(width 0.0254)
-				(type solid)
-			)
-			(fill no)
-			(layer "F.Fab")
-			(uuid "30f22f78-f317-4da0-8af3-ca94b1aad762")
-		)
-		(fp_text user "${REFERENCE}"
-			(at 0 0 0)
-			(unlocked yes)
-			(layer "F.Fab")
-			(uuid "9de27707-3b43-4119-a657-5dd07eb500aa")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(pad "1" smd rect
-			(at -0.950001 1.0152)
-			(size 0.6096 1.3208)
-			(layers "F.Cu" "F.Mask" "F.Paste")
-			(net 1 "GND")
-			(pinfunction "GND")
-			(pintype "power_in")
-			(uuid "06fb34ba-0325-4429-845c-3bc3d5894e08")
-		)
-		(pad "2" smd rect
-			(at 0.950001 1.0152)
-			(size 0.6096 1.3208)
-			(layers "F.Cu" "F.Mask" "F.Paste")
-			(net 2 "+3.3V")
-			(pinfunction "VI")
-			(pintype "power_in")
-			(uuid "2323e162-05de-4c59-94b1-69fae91ec68d")
-		)
-		(pad "3" smd rect
-			(at 0 -1.0152)
-			(size 0.6096 1.3208)
-			(layers "F.Cu" "F.Mask" "F.Paste")
-			(net 4 "+BATT")
-			(pinfunction "VO")
-			(pintype "power_out")
-			(uuid "00832957-6746-449f-b59c-4433f4818197")
-		)
-		(embedded_fonts no)
-		(model "${KIPRJMOD}/components/MCP1700T_3302E_TT 3/SOT-23_MC_MCH.step"
-			(offset
-				(xyz 0 0 0)
-			)
-			(scale
-				(xyz 1 1 1)
-			)
-			(rotate
-				(xyz 0 0 0)
-			)
-		)
-	)
 	(footprint "RF_Module:ESP32-WROOM-32D"
 		(locked yes)
 		(layer "F.Cu")
@@ -4267,7 +3815,7 @@
 		(property ki_fp_filters "ESP32?WROOM?32*")
 		(path "/0fa09003-4ee3-45f1-a576-d0a0d56e46ef")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -9.12 -15.86)
@@ -5419,7 +4967,7 @@
 		(property ki_fp_filters "Connector*:*_1x??_*")
 		(path "/0c981653-f952-4d5d-902c-960fcc137ff0")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr through_hole)
 		(fp_line
 			(start -1.38 -1.38)
@@ -5695,7 +5243,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/bb097e8f-17ca-4ea5-8c2f-d11412713dff")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 0.5225)
@@ -5839,6 +5387,327 @@
 			)
 		)
 	)
+	(footprint "PCM_Package_TO_SOT_SMD_AKL:SOT-23"
+		(layer "F.Cu")
+		(uuid "be2ea6a8-6cc7-4ad6-954f-d8dd32809dc9")
+		(at 102.6 69 90)
+		(descr "SOT-23, Standard, Alternate KiCad Library")
+		(tags "SOT-23")
+		(property "Reference" "U3"
+			(at -0.05 2.3 270)
+			(layer "F.SilkS")
+			(uuid "b6257569-2ae1-42d8-8c00-06295089f018")
+			(effects
+				(font
+					(size 0.6 0.6)
+					(thickness 0.1)
+					(bold yes)
+				)
+			)
+		)
+		(property "Value" "MCP1700T-1202E-TT"
+			(at 0 2.5 90)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "a533d985-2abf-4ceb-81b0-4bee0480e38c")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" "https://ww1.microchip.com/downloads/en/DeviceDoc/MCP1700-Low-Quiescent-Current-LDO-20001826E.pdf"
+			(at 0 0 90)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "83832dd1-c04b-4feb-8bf5-af88f13a5d7c")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "SOT-23 1.2V 200mA Low dropout 3-terminal voltage regulator, Alternate KiCad Library"
+			(at 0 0 90)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "a9ccc3a3-b211-4719-9f4e-83bcabdf6ab9")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(path "/7655396b-e41a-4b31-9f14-faa29dfcdb42")
+		(sheetname "/")
+		(sheetfile "Remote_4button_v1.kicad_sch")
+		(attr smd)
+		(fp_line
+			(start 1.8 -1.8)
+			(end -1.8 -1.8)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "8153b0e7-11d4-4f8e-9a03-7aefe16a1a51")
+		)
+		(fp_line
+			(start -1.8 -1.8)
+			(end -1.8 1.8)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "e1f86b15-8a32-41cb-bfba-465a25a66d9f")
+		)
+		(fp_line
+			(start 1.8 1.8)
+			(end 1.8 -1.8)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "36d18362-5ecd-4dfb-b518-aa6dbe664a39")
+		)
+		(fp_line
+			(start -1.8 1.8)
+			(end 1.8 1.8)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "6bd7eae1-8431-4156-97dc-364870385849")
+		)
+		(fp_line
+			(start 1.7 -1.75)
+			(end 1.7 1.75)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "df5bb3ba-fbdd-4fcb-8244-e52cc4a792f4")
+		)
+		(fp_line
+			(start -1.7 -1.75)
+			(end 1.7 -1.75)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "5de687e7-f18e-48f9-8957-2e480006564c")
+		)
+		(fp_line
+			(start 1.7 1.75)
+			(end -1.7 1.75)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "57ef9488-e30f-47eb-a35a-e1fefb8af59e")
+		)
+		(fp_line
+			(start -1.7 1.75)
+			(end -1.7 -1.75)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "0b19e342-9b98-4f4a-ad5a-535553268036")
+		)
+		(fp_line
+			(start 0.7 -1.52)
+			(end 0.7 1.52)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "e2906d85-22f5-419d-a5c0-bf4d294bd3a7")
+		)
+		(fp_line
+			(start -0.7 -1.52)
+			(end 0.7 -1.52)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "f71f5689-f5f8-4b5f-b93f-3d3450e71288")
+		)
+		(fp_line
+			(start -0.7 -1.52)
+			(end -0.7 1.5)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "9c0f2dd7-3728-4578-b884-f8512b8fc2f1")
+		)
+		(fp_line
+			(start -0.7 -1.2)
+			(end -1.3 -1.2)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "aadef847-5f5b-49d7-8eb1-d51ff6c394d8")
+		)
+		(fp_line
+			(start -1.3 -1.2)
+			(end -1.3 -0.7)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "89a9c912-6e9a-4707-ab6a-d15786512070")
+		)
+		(fp_line
+			(start -1.3 -0.7)
+			(end -0.7 -0.7)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "9001e5f1-80ff-4eb9-98d3-29e2b99a0e11")
+		)
+		(fp_line
+			(start 1.3 -0.25)
+			(end 0.7 -0.25)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "e2aa4f80-e64a-4bc5-8b21-042ef4247303")
+		)
+		(fp_line
+			(start 1.3 0.25)
+			(end 1.3 -0.25)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "50b74e57-3c64-4013-9ceb-c697ddd1395e")
+		)
+		(fp_line
+			(start 0.7 0.25)
+			(end 1.3 0.25)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "f6e3c0fe-f46b-466f-b29a-aa558ee0da3e")
+		)
+		(fp_line
+			(start -0.7 0.7)
+			(end -1.3 0.7)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "fca0e08e-9ad4-4180-ad98-c91b2d3a1666")
+		)
+		(fp_line
+			(start -1.3 0.7)
+			(end -1.3 1.2)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "8e57215d-bcd8-49c4-8ab9-f833e50175c7")
+		)
+		(fp_line
+			(start -1.3 1.2)
+			(end -0.7 1.2)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "98659e30-1006-4180-97d0-819a4e159a1f")
+		)
+		(fp_line
+			(start -0.7 1.52)
+			(end 0.7 1.52)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "7c635339-1ffc-4bb3-92c5-cd71a45337d4")
+		)
+		(fp_text user "${REFERENCE}"
+			(at 0 0 0)
+			(layer "F.Fab")
+			(uuid "c9237efc-3235-4a96-a7c1-f812baa5610f")
+			(effects
+				(font
+					(size 0.5 0.5)
+					(thickness 0.075)
+				)
+			)
+		)
+		(pad "1" smd roundrect
+			(at -1 -0.95 90)
+			(size 0.9 0.8)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.25)
+			(net 1 "GND")
+			(pintype "power_in")
+			(uuid "a33af843-e116-43be-b682-b6b020427cb7")
+		)
+		(pad "2" smd roundrect
+			(at -1 0.95 90)
+			(size 0.9 0.8)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.25)
+			(net 2 "+3.3V")
+			(pinfunction "OUT")
+			(pintype "power_out")
+			(uuid "d69aea75-e982-48db-ab18-d810fb7f86fa")
+		)
+		(pad "3" smd roundrect
+			(at 1 0 90)
+			(size 0.9 0.8)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.25)
+			(net 4 "+BATT")
+			(pinfunction "IN")
+			(pintype "power_in")
+			(uuid "cede4c14-de74-4fd8-a31c-2b88f8eb8898")
+		)
+		(embedded_fonts no)
+		(model "${KICAD6_3DMODEL_DIR}/Package_TO_SOT_SMD.3dshapes/SOT-23.wrl"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
+	)
 	(footprint "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical"
 		(layer "F.Cu")
 		(uuid "c6280504-7e1b-4575-a20c-33d76057f050")
@@ -5895,7 +5764,7 @@
 		(property ki_fp_filters "Connector*:*_1x??_*")
 		(path "/8a85cf0a-a2aa-4cbf-9e69-960216c3f781")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr through_hole)
 		(fp_line
 			(start -1.38 -1.38)
@@ -6215,7 +6084,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/6d49066d-da03-4c61-8a8c-2bace388cca5")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 -0.5225)
@@ -6414,7 +6283,7 @@
 		(property ki_fp_filters "CP_*")
 		(path "/567ce995-f16a-4106-a28a-25a3588ce31d")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -3.94 1.71)
@@ -6633,7 +6502,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/bc31accd-16ca-41d5-b618-399cba49e420")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 0.5225)
@@ -6838,7 +6707,7 @@
 		(property ki_fp_filters "SON4_PTS526 SM15 SMTR2 LFS_CNK SON4_PTS526 SM15 SMTR2 LFS_CNK-M SON4_PTS526 SM15 SMTR2 LFS_CNK-L")
 		(path "/c01c8e4e-ec2c-46cd-b384-9a2824df3ae1")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -2.8321 -2.8321)
@@ -7422,7 +7291,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/1a1a9c17-048b-4ca9-9884-4adb6f153a3c")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 -0.5225)
@@ -7626,7 +7495,7 @@
 		(property ki_fp_filters "LED* LED_SMD:* LED_THT:*")
 		(path "/8c2edaa2-88d4-4699-b01a-d5301b89e653")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -2.285 1.135)
@@ -7852,7 +7721,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/ba726e90-8b72-4c8c-8cac-3c80ae601f52")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 0.5225)
@@ -8058,7 +7927,7 @@
 		(property ki_fp_filters "SON4_PTS526 SM15 SMTR2 LFS_CNK SON4_PTS526 SM15 SMTR2 LFS_CNK-M SON4_PTS526 SM15 SMTR2 LFS_CNK-L")
 		(path "/76441320-2041-4cf9-9e10-d87c69e17f7c")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -2.8321 -2.8321)
@@ -8642,7 +8511,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/dce77b9f-ef7f-4c82-88d1-c151ab14b681")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 -0.5225)
@@ -8848,7 +8717,7 @@
 		(property ki_fp_filters "SON4_PTS526 SM15 SMTR2 LFS_CNK SON4_PTS526 SM15 SMTR2 LFS_CNK-M SON4_PTS526 SM15 SMTR2 LFS_CNK-L")
 		(path "/fb7f8dc2-a804-4070-8f47-a70d3d3414aa")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -2.8321 -2.8321)
@@ -9432,7 +9301,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/6e3c4252-cdb7-40d7-9f64-2d695861f85d")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 0.5225)
@@ -9636,7 +9505,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/e0f96dfc-cd46-4194-802c-f7af7da9c852")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -0.254724 -0.5225)
@@ -9842,7 +9711,7 @@
 		(property ki_fp_filters "LED* LED_SMD:* LED_THT:*")
 		(path "/34303649-62b9-4c65-97f8-6fd4ad88450a")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start 2 0.475)
@@ -10088,7 +9957,7 @@
 		(property ki_fp_filters "SON4_PTS526 SM15 SMTR2 LFS_CNK SON4_PTS526 SM15 SMTR2 LFS_CNK-M SON4_PTS526 SM15 SMTR2 LFS_CNK-L")
 		(path "/43ba6769-fb8a-4147-ab43-cf44b1e061cc")
 		(sheetname "/")
-		(sheetfile "esp_now_button_3.1.kicad_sch")
+		(sheetfile "Remote_4button_v1.kicad_sch")
 		(attr smd)
 		(fp_line
 			(start -2.8321 -2.8321)
@@ -14253,6 +14122,7 @@
 	(zone
 		(net 1)
 		(net_name "GND")
+		(locked yes)
 		(layers "F.Cu" "B.Cu")
 		(uuid "ad833412-93b9-4262-8e66-18d6b848fd4c")
 		(hatch edge 0.5)

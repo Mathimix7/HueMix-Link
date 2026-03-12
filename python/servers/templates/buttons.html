@@ -775,6 +775,18 @@ function renderDevices() {
     const tbody = document.getElementById('devices-table-body');
     tbody.innerHTML = '';
 
+    if (devices.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="5" class="px-6 py-12 text-center text-gray-500">
+                    <p class="text-lg">No buttons found</p>
+                    <p class="text-sm mt-1">Buttons will appear here automatically once detected.</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
     devices.forEach(device => {
         const row = document.createElement('tr');
         row.className = 'hover:bg-gray-50';

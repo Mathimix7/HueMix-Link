@@ -246,7 +246,12 @@ function renderMesh() {
     const gateways = meshData.nodes.filter(n => n.type === 'gateway');
     
     if (gateways.length === 0) {
-        container.innerHTML = '<div class="text-center py-12 text-gray-400"><i class="fas fa-network-wired text-4xl mb-3"></i><p>No gateways found</p></div>';
+        container.innerHTML = `
+            <div class="text-center py-6 text-gray-500">
+                <p class="text-lg">No devices found</p>
+                <p class="text-sm mt-1">Devices will appear here automatically once detected.</p>
+            </div>
+        `;
         return;
     }
     

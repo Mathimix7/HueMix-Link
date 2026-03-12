@@ -14,8 +14,9 @@ DELETE=0
 NO_RESTART=0
 ASSUME_YES=0
 LOCAL=1
-EXT_PORT=5000
+EXT_PORT=80
 OLD_HOSTNAME_FILE="$APP_DIR/.prev-hostname"
+HTTPS=1
 
 # Colors for nicer output
 bold=$(echo -en "\e[1m")
@@ -31,7 +32,12 @@ reset=$(echo -en "\e[0m")
 
 # Message helpers with visual markers and distinct colors
 log()  { printf '%b\n' "${blue}● ${reset}${white}$*${reset}" >&2; }
-die()  { printf '%b\n' "${bold}${red}ERROR:${reset} ${red}$*${reset}" >&2; exit 1; }
+die()  { 
+  printf '%b\n' "${bold}${red}ERROR:${reset} ${red}$*${reset}" >&2
+  # Remove VERSION file if it exists to prevent false "already installed" on next run
+  [ -f "$APP_DIR/VERSION" ] && rm -f "$APP_DIR/VERSION" 2>/dev/null || true
+  exit 1
+}
 success() { printf '%b\n' "${green}${reset}${white}$*${reset}" >&2; }
 warn()    { printf '%b\n' "${yellow}${reset}${white}$*${reset}" >&2; }
 debug()   { printf '%b\n' "${gray}$*${reset}" >&2; }
@@ -69,7 +75,8 @@ ${blue}${bold}Usage:${reset} $0 [${magenta}install${reset}|${magenta}uninstall${
   ${gray}--no-restart${reset}    Do not stop or restart the service during update
   ${gray}--show-version${reset}  Show installed and source version information and exit
   ${gray}--no-local${reset}      Do not create huemixlink.local host entry
-  ${gray}--port <port>${reset}   External port to expose website (default: ${EXT_PORT})
+  ${gray}--no-https${reset}      Disable HTTPS (only serve HTTP on specified port)
+  ${gray}--port <port>${reset}   External HTTP port (default: ${EXT_PORT})
   ${gray}-h|--help${reset}       Show this help message
 EOF
 }
@@ -83,6 +90,7 @@ parse_args() {
       --force) FORCE=1; shift ;;
       --delete) DELETE=1; shift ;;
       --no-restart) NO_RESTART=1; shift ;;
+      --no-https) HTTPS=0; shift ;;
       --port) shift; EXT_PORT="$1"; shift ;;
       --show-version) SHOW_VERSION=1; shift ;;
       --no-local) LOCAL=0; shift ;;
@@ -140,7 +148,39 @@ detect_python() {
   done
   # Validate venv module
   if ! "$PYTHON_BIN" -c "import venv" >/dev/null 2>&1; then
-    die "$PYTHON_BIN does not support venv module. Install a compatible Python (3.8+)."
+    warn "$PYTHON_BIN venv module not found. Attempting to install..."
+    
+    # Determine the venv package name based on Python version
+    PYTHON_VERSION=$("$PYTHON_BIN" -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "python3")
+    VENV_PACKAGE="${PYTHON_VERSION}-venv"
+    
+    log "Installing ${VENV_PACKAGE}..."
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "DRY-RUN: would run apt install -y ${VENV_PACKAGE}"
+    else
+      if command -v apt >/dev/null 2>&1; then
+        apt update -y -qq || warn "Failed to update package list"
+        if apt install -y "$VENV_PACKAGE"; then
+          success "Successfully installed ${VENV_PACKAGE}"
+        else
+          die "Failed to install ${VENV_PACKAGE}. Please install it manually: sudo apt install ${VENV_PACKAGE}"
+        fi
+      elif command -v yum >/dev/null 2>&1; then
+        # For RHEL/CentOS/Fedora systems
+        if yum install -y "$PYTHON_BIN-devel"; then
+          success "Successfully installed ${PYTHON_BIN}-devel"
+        else
+          die "Failed to install ${PYTHON_BIN}-devel. Please install it manually: sudo yum install ${PYTHON_BIN}-devel"
+        fi
+      else
+        die "Package manager not found. Please manually install venv support: apt install ${VENV_PACKAGE}"
+      fi
+    fi
+    
+    # Re-validate venv module after installation
+    if ! "$PYTHON_BIN" -c "import venv" >/dev/null 2>&1; then
+      die "$PYTHON_BIN still does not support venv module after installation attempt. Please check your Python installation."
+    fi
   fi
 }
 
@@ -273,6 +313,43 @@ WantedBy=multi-user.target
 EOF
 }
 
+setup_https_cert() {
+  [ "$HTTPS" -eq 0 ] && return
+  [ "$DRY_RUN" -eq 1 ] && { log "DRY-RUN: would setup HTTPS certificate"; return; }
+
+  CERT_DIR="/etc/haproxy/certs"
+  
+  log "Setting up self-signed HTTPS certificate..."
+  
+  # Detect server IP address
+  SERVER_IP=$(hostname -I | awk '{print $1}')
+  if [ -z "$SERVER_IP" ]; then
+    SERVER_IP="192.168.1.100"  # fallback
+    warn "Could not detect IP address, using ${SERVER_IP}"
+  fi
+  
+  run mkdir -p "$CERT_DIR"
+  
+  if [ ! -f "$CERT_DIR/huemix.pem" ]; then
+    log "Generating self-signed certificate for ${SERVER_IP} and huemixlink.local..."
+    
+    # Generate self-signed certificate valid for 10 years with multiple SANs
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+      -keyout "$CERT_DIR/huemix.key" \
+      -out "$CERT_DIR/huemix.crt" \
+      -subj "/C=US/ST=State/L=City/O=HueMix-Link/CN=${SERVER_IP}" \
+      -addext "subjectAltName=IP:${SERVER_IP},DNS:huemixlink.local,DNS:localhost,IP:127.0.0.1" 2>/dev/null
+    
+    # Combine certificate and key for HAProxy
+    cat "$CERT_DIR/huemix.crt" "$CERT_DIR/huemix.key" > "$CERT_DIR/huemix.pem"
+    chmod 600 "$CERT_DIR/huemix.pem"
+    
+    success "Self-signed certificate generated for ${SERVER_IP} and huemixlink.local"
+  else
+    log "Certificate already exists"
+  fi
+}
+
 setup_proxy() {
   TARGET_PORT=5001
   HAPROXY_CFG="/etc/haproxy/haproxy.cfg"
@@ -292,7 +369,30 @@ setup_proxy() {
   # Remove old block if present (reinstall-safe)
   run sed -i "/$TAG_BEGIN/,/$TAG_END/d" "$HAPROXY_CFG"
 
-  cat >> "$HAPROXY_CFG" <<EOF
+  if [ "$HTTPS" -eq 1 ]; then
+    CERT_FILE="/etc/haproxy/certs/huemix.pem"
+    
+    log "Configuring HAProxy with HTTP and HTTPS..."
+    
+    cat >> "$HAPROXY_CFG" <<EOF
+
+$TAG_BEGIN
+frontend huemixlink_front
+    bind *:${EXT_PORT}
+    bind *:443 ssl crt ${CERT_FILE}
+    mode http
+    default_backend huemixlink_back
+
+backend huemixlink_back
+    mode http
+    server huemixlink 127.0.0.1:${TARGET_PORT} check
+$TAG_END
+EOF
+    success "HAProxy configured with HTTP and HTTPS"
+  else
+    log "Configuring HAProxy with HTTP..."
+    
+    cat >> "$HAPROXY_CFG" <<EOF
 
 $TAG_BEGIN
 frontend huemixlink_front
@@ -305,11 +405,11 @@ backend huemixlink_back
     server huemixlink 127.0.0.1:${TARGET_PORT} check
 $TAG_END
 EOF
+    success "HAProxy configured: http://<server_ip>:${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
+  fi
 
   run systemctl enable haproxy >/dev/null 2>&1
   run systemctl --quiet restart haproxy 2>&1 | grep -v "backend huemixlink_back has no server available" || true
-
-  success "HAProxy configured: http://<server_ip>:${EXT_PORT} -> 127.0.0.1:${TARGET_PORT}"
 }
 
 service_update_finish() {
@@ -455,19 +555,52 @@ main_install() {
       fi
     fi
   fi
+  
+  [ -f "$APP_DIR/VERSION" ] && rm -f "$APP_DIR/VERSION"
 
   create_service_user
   copy_files
   create_venv_and_deps
   setup_permissions
   install_systemd_unit
+  setup_https_cert
   setup_proxy
 
   if [ "$LOCAL" -eq 1 ]; then
     setup_local_domain
   fi
   service_update_finish
-  log "Installation complete. Check status with: systemctl status ${SERVICE_NAME}"
+  
+  success "Installation complete!"
+  log "Check status with: systemctl status ${SERVICE_NAME}"
+  echo ""
+  
+  if [ "$HTTPS" -eq 1 ]; then
+    # Get server IP
+    SERVER_IP=$(hostname -I | awk '{print $1}')
+    
+    log "Access your site via HTTP or HTTPS:"
+    echo ""
+    log "  HTTP:"
+    if [ "$LOCAL" -eq 1 ]; then
+      log "    http://huemixlink.local:${EXT_PORT}"
+    fi
+    log "    http://${SERVER_IP}:${EXT_PORT}"
+    echo ""
+    log "  HTTPS (for Web Serial API):"
+    if [ "$LOCAL" -eq 1 ]; then
+      log "    https://huemixlink.local"
+    fi
+    log "    https://${SERVER_IP}"
+    echo ""
+  elif [ "$LOCAL" -eq 1 ]; then
+    log "Access at: http://huemixlink.local:${EXT_PORT}"
+    echo ""
+  else
+    SERVER_IP=$(hostname -I | awk '{print $1}')
+    log "Access at: http://${SERVER_IP}:${EXT_PORT}"
+    echo ""
+  fi
 }
 
 # Entry

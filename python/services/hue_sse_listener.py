@@ -8,6 +8,7 @@ import urllib3
 from typing import Optional
 from services import data_manager
 from services.hue_state_manager import hue_state_manager
+from services.hue_config_sync import sync_device_configs_with_hue
 from constants import FILE_BRIDGE
 
 # Disable SSL warnings for Hue Bridge self-signed certificate
@@ -304,15 +305,7 @@ class HueSSEListener:
             logger.info(f"Scene deletion detected: {scene_id}")
             
             hue_state_manager.remove_scene(scene_id)
-            
-            all_scenes = hue_state_manager.get_all_scenes()
-            valid_scene_ids = set(all_scenes)
-
-            from servers.blueprints.buttons import cleanup_deleted_scenes
-            updated_count = cleanup_deleted_scenes(valid_scene_ids)
-            
-            if updated_count > 0:
-                logger.info(f"Updated {updated_count} button configuration(s) after scene deletion")
+            sync_device_configs_with_hue(self._hue_controller)
         
         except Exception as e:
             logger.error(f"Error handling scene deletion {scene_id}: {e}", exc_info=True)
@@ -342,6 +335,7 @@ class HueSSEListener:
         try:
             logger.info(f"Room deletion detected: {room_id}")
             hue_state_manager.remove_room(room_id)
+            sync_device_configs_with_hue(self._hue_controller)
         
         except Exception as e:
             logger.error(f"Error handling room deletion {room_id}: {e}", exc_info=True)
@@ -361,6 +355,7 @@ class HueSSEListener:
                 'name': scene_name,
                 'room_id': room_id
             })
+            sync_device_configs_with_hue(self._hue_controller)
             logger.info(f"Registered new scene {scene_id} ({scene_name}) for room {room_id}")
         
         except Exception as e:
@@ -380,13 +375,36 @@ class HueSSEListener:
                 if service.get('rtype') == 'grouped_light':
                     grouped_light_id = service.get('rid')
                     break
+
+            # SSE room-add payload can be partial; fetch full room data when needed.
+            if self._hue_controller:
+                try:
+                    full_room = self._hue_controller.get_room(room_id)
+                    room_name = full_room.get('metadata', {}).get('name', room_name)
+                    if not grouped_light_id:
+                        for service in full_room.get('services', []):
+                            if service.get('rtype') == 'grouped_light':
+                                grouped_light_id = service.get('rid')
+                                break
+                except Exception:
+                    logger.debug(f"Failed to fetch full room details for {room_id}", exc_info=True)
+
+            is_on = None
+            if grouped_light_id and self._hue_controller:
+                try:
+                    grouped_light = self._hue_controller.get_grouped_light(grouped_light_id)
+                    is_on = grouped_light.get('on', {}).get('on')
+                except Exception:
+                    logger.debug(f"Failed to fetch grouped_light state for room {room_id}", exc_info=True)
             
             # Update room in state manager
             hue_state_manager.update_room(
                 room_id=room_id,
                 name=room_name,
+                is_on=is_on,
                 grouped_light_id=grouped_light_id
             )
+            sync_device_configs_with_hue(self._hue_controller)
             logger.info(f"Registered new room {room_id} ({room_name})")
         
         except Exception as e:

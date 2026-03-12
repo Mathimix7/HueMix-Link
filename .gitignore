@@ -80,6 +80,7 @@ Hardware-designs/**/*.kicad_prl
 Hardware-designs/**/.kicad_prl
 Hardware-designs/**/production/**/backups/
 Hardware-designs/**/panel/
+Hardware-designs/**/#auto_saved_files#
 
 # KiCad local/editor swap files
 Hardware-designs/**/*.lck

@@ -101,10 +101,28 @@ uint8_t config_reset_tap_count = 0;
 esp_now_peer_info_t peerInfo;
 esp_adc_cal_characteristics_t adc_chars;
 
-// Count how many buttons are currently held
+// Check if a physical button index is active based on button_count
+// 1 button:  only button 3 (pin 26)
+// 2 buttons: buttons 0,1 (pins 32, 33)
+// 3 buttons: buttons 0,1,3 (pins 32, 33, 26)
+// 4 buttons: all buttons (pins 32, 33, 27, 26)
+bool isButtonActive(int physicalIndex) {
+  if (button_count == 1) {
+    return physicalIndex == 3; // Only pin 26
+  } else if (button_count == 2) {
+    return physicalIndex <= 1; // Pins 32, 33
+  } else if (button_count == 3) {
+    return physicalIndex == 0 || physicalIndex == 1 || physicalIndex == 3; // Pins 32, 33, 26
+  } else {
+    return true; // All buttons active
+  }
+}
+
+// Count how many buttons are currently held (only active buttons)
 int countHeldButtons() {
   int count = 0;
   for(int i = 0; i < 4; i++) {
+    if (!isButtonActive(i)) continue;  // Only check active buttons
     if (digitalRead(buttonPins[i]) == HIGH) {
       count++;
     }
@@ -228,23 +246,6 @@ void saveGateways() {
 void saveButtonCount() {
   prefs.putUChar("btn_cnt", button_count);
   Serial.printf("[CONFIG] Button count saved: %d\n", button_count);
-}
-
-// Check if a physical button index is active based on button_count
-// 1 button:  only button 3 (pin 26)
-// 2 buttons: buttons 0,1 (pins 32, 33)
-// 3 buttons: buttons 0,1,3 (pins 32, 33, 26)
-// 4 buttons: all buttons (pins 32, 33, 27, 26)
-bool isButtonActive(int physicalIndex) {
-  if (button_count == 1) {
-    return physicalIndex == 3; // Only pin 26
-  } else if (button_count == 2) {
-    return physicalIndex <= 1; // Pins 32, 33
-  } else if (button_count == 3) {
-    return physicalIndex == 0 || physicalIndex == 1 || physicalIndex == 3; // Pins 32, 33, 26
-  } else {
-    return true; // All buttons active
-  }
 }
 
 void addGateway(const uint8_t *mac) {
@@ -893,8 +894,9 @@ void loop() {
     ota_mode = false;
   }
 
-  // Update all buttons
+  // Update all buttons (only active ones based on button_count)
   for(int i = 0; i < 4; i++) {
+    if (!isButtonActive(i)) continue;
     buttons[i].update();
   }
 
@@ -1128,15 +1130,6 @@ void loop() {
       Serial.println("[RESET] First tap counted on release after wakeup");
     }
     
-    // Check if any buttons are held (would indicate config mode, not OTA)
-    bool any_button_held = false;
-    for(int i = 0; i < 4; i++) {
-      if (digitalRead(buttonPins[i]) == HIGH) {
-        any_button_held = true;
-        break;
-      }
-    }
-    
     // Second tap release - set pending OTA (wait to see if 3rd tap comes)
     if (reset_tap_count == 2 && !ota_mode && !pending_ota) {
       Serial.println("[OTA] Double-tap detected! Waiting to confirm (no 3rd tap)...");
@@ -1232,9 +1225,10 @@ void loop() {
 
   // If been idle long enough, go to sleep (but not in OTA mode or while LED is active)
   if (!ota_mode && !ledActive && millis() - lastActivityTime > SLEEP_TIMEOUT) {
-    // Make sure all buttons are released
+    // Make sure all active buttons are released
     bool allReleased = true;
     for(int i = 0; i < 4; i++) {
+      if (!isButtonActive(i)) continue;  // Only check active buttons
       if (buttons[i].read() == HIGH) {
         allReleased = false;
         break;

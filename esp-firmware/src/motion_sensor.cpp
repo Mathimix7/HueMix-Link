@@ -98,6 +98,8 @@ esp_adc_cal_characteristics_t adc_chars_ldr;
 void triggerLed(int duration) {
   if (breathingActive) return;
   digitalWrite(PIN_LED, LED_ACTIVE_HIGH);
+  delay(duration);
+  digitalWrite(PIN_LED, !LED_ACTIVE_HIGH);
   lastActivityTime = millis();
 }
 
@@ -298,7 +300,6 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
     Serial.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n", 
       received_bytes, expected_firmware_size, 
       (received_bytes * 100.0) / expected_firmware_size);
-    triggerLed(20);
   }
 }
 
@@ -406,7 +407,10 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
 }
 
 // --- BATTERY MONITORING ---
-void getBatteryVoltage() {  
+void getBatteryVoltage() {
+  // Ensure attenuation is set for this pin before reading
+  analogSetPinAttenuation(PIN_BATTERY, ADC_2_5db);
+  
   uint32_t raw = 0;
   for(int i = 0; i < 10; i++) {
     raw += analogRead(PIN_BATTERY);
@@ -416,10 +420,15 @@ void getBatteryVoltage() {
   
   uint32_t voltage = esp_adc_cal_raw_to_voltage(raw, &adc_chars_battery);
   battery_mv = (voltage * 1300) / 300;
+  
+  Serial.printf("[BATTERY] Raw ADC: %lu, ADC voltage: %lu mV, Calculated battery: %u mV\n", raw, voltage, battery_mv);
 }
 
 // --- LDR LIGHT SENSOR ---
-void getLightLevel() {  
+void getLightLevel() {
+  // Ensure attenuation is set for this pin before reading
+  analogSetPinAttenuation(PIN_LDR, ADC_11db);
+  
   // Power on LDR sensor
   digitalWrite(PIN_LDR_POWER, HIGH);
   delay(10);  // Allow sensor to stabilize
@@ -753,10 +762,16 @@ int getWakeupPin() {
 
 // --- SETUP ---
 void setup() {
+  // Initialize Serial FIRST so we can see debug output
+  Serial.begin(115200);
+  Serial.println("\n--- MOTION SENSOR WAKE ---");
+  
   pinMode(PIN_PIR, INPUT);
   pinMode(PIN_RESET, INPUT);
   pinMode(PIN_LED, OUTPUT);
   digitalWrite(PIN_LED, !LED_ACTIVE_HIGH);
+  analogRead(PIN_BATTERY);  // Dummy read to initialize ADC
+  analogRead(PIN_LDR);      // Dummy read to initialize ADC
   
   // LDR power control - keep OFF to save battery
   pinMode(PIN_LDR_POWER, OUTPUT);
@@ -764,17 +779,16 @@ void setup() {
   
   // Initialize ADC (12-bit resolution = 0-4095)
   analogSetWidth(12);
+  
+  // Set pin attenuations BEFORE characterization and reading
   analogSetPinAttenuation(PIN_BATTERY, ADC_2_5db);
-  analogSetPinAttenuation(PIN_LDR, ADC_11db);
-    
-  // Characterize both ADC channels with their respective attenuations
   esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_2_5, ADC_WIDTH_BIT_12, 1100, &adc_chars_battery);
+
+  analogSetPinAttenuation(PIN_LDR, ADC_11db);
   esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars_ldr);
   
   getBatteryVoltage();
-  
-  Serial.begin(115200);
-  Serial.println("\n--- MOTION SENSOR WAKE ---");
+  Serial.println("[SETUP] ADC initialization complete");
   
   prefs.begin("huemixlink", false);
   HOME_ID = prefs.getUInt("hid", 0);

@@ -2115,7 +2115,7 @@ class NetworkServer:
         # Start chunk transfer in background thread
         threading.Thread(
             target=self._send_ota_chunks,
-            args=(src_mac,),
+            args=(src_mac, sender_ip),
             daemon=True,
             name=f"OTA-Transfer-{src_mac[-8:]}"
         ).start()
@@ -2159,11 +2159,12 @@ class NetworkServer:
         # Update OTA session to ABORTED state
         ota_manager.update_session_state(device_mac=src_mac, new_state=OTAState.ABORTED, failure_reason=f"Device abort (code={reason_code})")
     
-    def _send_ota_chunks(self, device_mac: str):
+    def _send_ota_chunks(self, device_mac: str, preferred_gateway_ip: Optional[str] = None):
         """Send firmware chunks to device.
         
         Args:
             device_mac: Target device MAC
+            preferred_gateway_ip: Gateway IP that delivered OTA_READY (best path)
         """
         session = ota_manager.get_session(device_mac)
         if not session:
@@ -2183,8 +2184,9 @@ class NetworkServer:
             total_chunks = (len(firmware_data) + OTA_CHUNK_DATA_SIZE - 1) // OTA_CHUNK_DATA_SIZE
             session.total_chunks = total_chunks
             
-            # Lock to first successful gateway for entire transfer
-            locked_gateway_ip = None
+            # Lock to one gateway IP for entire transfer.
+            # Prefer the gateway that delivered OTA_READY to avoid route mismatch.
+            locked_gateway_ip = preferred_gateway_ip
             
             # Determine if target is gateway and if it's radio node (via UART passthrough)
             is_gateway = False
@@ -2257,7 +2259,25 @@ class NetworkServer:
                     else:
                         # Send via gateway mesh routing
                         if locked_gateway_ip is None:
-                            _, gateway_mac = device_manager.get_light_gateway(device_mac)
+                            gateway_mac = None
+
+                            # Lightstrip preferred gateway
+                            _, light_gateway_mac = device_manager.get_light_gateway(device_mac)
+                            if light_gateway_mac:
+                                gateway_mac = light_gateway_mac
+
+                            # Button/remote preferred gateway
+                            if not gateway_mac:
+                                button = device_manager.get_button_by_mac(device_mac)
+                                if button:
+                                    gateway_mac = button.get('last_seen_gateway')
+
+                            # Motion sensor preferred gateway
+                            if not gateway_mac:
+                                sensor = device_manager.get_motion_sensor_by_mac(device_mac)
+                                if sensor:
+                                    gateway_mac = sensor.get('last_seen_gateway')
+
                             if gateway_mac:
                                 with self._gateway_lock:
                                     for radio_mac, info in self._gateway_table.items():

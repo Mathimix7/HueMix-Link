@@ -559,7 +559,7 @@ def start_pairing():
                     "error": "Types must be an array"
                 }), 400
             
-            valid_types = ['gateway', 'button', 'light']
+            valid_types = ['gateway', 'button', 'light', 'motion']
             for t in device_types:
                 if t not in valid_types:
                     return jsonify({

@@ -37,7 +37,7 @@
                 <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-green-700 to-green-500 bg-clip-text text-transparent mb-1">
                     Device Pairing
                 </h1>
-                <p class="text-gray-600">Add buttons, lightstrips, and gateways to your network</p>
+                <p class="text-gray-600">Add buttons, remotes, lightstrips, motion sensors, and gateways to your network</p>
             </div>
             <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
                 <i class="fas fa-arrow-left mr-2"></i>Back to Home
@@ -104,6 +104,7 @@
                         <option value="all">All Devices</option>
                         <option value="button">Buttons Only</option>
                         <option value="light">Lightstrips Only</option>
+                        <option value="motion">Motion Sensors Only</option>
                     </select>
                 </div>
 
@@ -342,8 +343,9 @@ async function updatePairingStatus() {
             // Update looking for
             const typeNames = {
                 'all': 'All Devices',
-                'button': 'Buttons Only',
-                'light': 'Lightstrips Only'
+                'button': 'Buttons/Remotes Only',
+                'light': 'Lightstrips Only',
+                'motion': 'Motion Sensors Only'
             };
             const types = data.allowed_types || ['all'];
             lookingFor.textContent = types.length === 1 ? (typeNames[types[0]] || types[0]) : 'All Devices';

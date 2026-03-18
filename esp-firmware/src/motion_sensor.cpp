@@ -458,16 +458,17 @@ void getLightLevel() {
 // --- PACKET SENDING ---
 void sendPacket(uint8_t packetType, uint8_t action) {
   HueMixLinkPacket pkt;
-  memset(&pkt, 0, sizeof(pkt));
+  memset(&pkt, 0, sizeof(HueMixLinkPacket));
   pkt.type = packetType;
-  WiFi.macAddress(pkt.sourceMAC);
-  memset(pkt.targetMAC, 0xFF, 6);
   pkt.msgID = 0;
-  
+  memset(pkt.targetMAC, 0, 6);
+  WiFi.macAddress(pkt.sourceMAC);
+
   if (packetType == PKT_MOTION_EVENT) {
     pkt.payload.motion.action = action;
     pkt.payload.motion.battery_mv = battery_mv;
     pkt.payload.motion.light_level = light_level;
+
     #ifdef FIRMWARE_VERSION
       const char* ver = FIRMWARE_VERSION;
       uint8_t major = 0, minor = 0, patch = 0;
@@ -480,19 +481,18 @@ void sendPacket(uint8_t packetType, uint8_t action) {
       pkt.payload.motion.version_minor = 0;
       pkt.payload.motion.version_patch = 0;
     #endif
-    
-    // Set platform
+
     #if defined(ESP8266)
       pkt.payload.motion.platform = 1;
     #else
       pkt.payload.motion.platform = 0;
     #endif
-    
+
     pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   } else if (packetType == PKT_HELLO) {
     pkt.payload.raw[0] = DEV_MOTION;
     pkt.payload.raw[1] = 0;  // Reserved for RSSI (gateway fills this in)
-    
+
     #ifdef FIRMWARE_VERSION
       const char* ver = FIRMWARE_VERSION;
       uint8_t major = 0, minor = 0, patch = 0;
@@ -505,24 +505,27 @@ void sendPacket(uint8_t packetType, uint8_t action) {
       pkt.payload.raw[3] = 0;
       pkt.payload.raw[4] = 0;
     #endif
-    
+
     #if defined(ESP8266)
       pkt.payload.raw[5] = 1;
     #else
       pkt.payload.raw[5] = 0;
     #endif
-    
-    // Use HOME_ID for signature if paired, 0 if unpaired
+
     pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   }
-  
+
   ackReceived = false;
   bool sent = false;
   int successfulGatewayIndex = -1;
-  
+
   // A. PAIRED MODE
   if (HOME_ID != 0 && gateways.count > 0) {
     for(int i = 0; i < gateways.count; i++) {
+      Serial.printf("[MOTION] Attempt %d/%d: %02X:%02X:%02X:%02X:%02X:%02X\n", i+1, gateways.count,
+        gateways.macs[i][0], gateways.macs[i][1], gateways.macs[i][2],
+        gateways.macs[i][3], gateways.macs[i][4], gateways.macs[i][5]);
+
       if (!esp_now_is_peer_exist(gateways.macs[i])) {
         memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
         peerInfo.channel = 0;
@@ -531,9 +534,14 @@ void sendPacket(uint8_t packetType, uint8_t action) {
       }
       
       if (esp_now_send(gateways.macs[i], (uint8_t*)&pkt, sizeof(pkt)) == ESP_OK) {
-        sent = true;
-        successfulGatewayIndex = i;
-        break;
+        unsigned long w = millis();
+        while(millis() - w < 75 && !ackReceived) delay(1);
+        if (ackReceived) {
+          Serial.println("[MOTION]   ACK received!");
+          sent = true;
+          successfulGatewayIndex = i;
+          break;
+        }
       }
     }
     
@@ -547,6 +555,14 @@ void sendPacket(uint8_t packetType, uint8_t action) {
       memcpy(gateways.macs[0], tempMac, 6);
       saveGateways();
     }
+
+    if (action != ACT_SYNC) {
+      if (sent) {
+        triggerLed(100);
+      } else {
+        ledBlink(2, 100);
+      }
+    }
   }
   // B. UNPAIRED MODE
   else if (HOME_ID == 0) {
@@ -554,7 +570,16 @@ void sendPacket(uint8_t packetType, uint8_t action) {
     peerInfo.channel = 0;
     peerInfo.encrypt = false;
     if(!esp_now_is_peer_exist(broadcastAddress)) esp_now_add_peer(&peerInfo);
-    esp_now_send(broadcastAddress, (uint8_t*)&pkt, sizeof(pkt));
+
+    if (packetType == PKT_HELLO) {
+      // Use the same retry + short ACK wait strategy for pairing HELLO.
+      Serial.printf("[MOTION][HELLO] Broadcast");
+      if (esp_now_send(broadcastAddress, (uint8_t*)&pkt, sizeof(pkt)) == ESP_OK) {
+        unsigned long w = millis();
+        while(millis() - w < 500 && !ackReceived) delay(1);
+        if(!ackReceived) ledBlink(2, 200);
+      }
+    }
   }
 }
 
@@ -742,15 +767,20 @@ void goToSleepWithTimer() {
 }
 
 void goToSleepWithPIR() {
-  Serial.println("Going to sleep with PIR wakeup (EXT1)");
+  if (HOME_ID == 0) {
+    Serial.println("Going to sleep with RESET wakeup only (unpaired)");
+  } else {
+    Serial.println("Going to sleep with PIR wakeup (EXT1)");
+  }
   Serial.flush();
   
   pinMode(PIN_LED, INPUT);
   WiFi.mode(WIFI_OFF);
   btStop();
   
-  // Sleep with EXT1 wakeup on PIR + RESET (HIGH level)
-  esp_sleep_enable_ext1_wakeup(EXT1_WAKEUP_MASK, ESP_EXT1_WAKEUP_ANY_HIGH);
+  // Unpaired devices should not wake from PIR.
+  uint64_t wakeMask = (HOME_ID == 0) ? (1ULL << PIN_RESET) : EXT1_WAKEUP_MASK;
+  esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_HIGH);
   esp_deep_sleep_start();
 }
 
@@ -857,21 +887,22 @@ void setup() {
   Serial.printf("Battery: %d mV\n", battery_mv);
   Serial.printf("Gateways: %d\n", gateways.count);
   Serial.printf("Cooldown: %u seconds\n", cooldown_seconds);
-  
-  // If software reset after OTA, send HELLO immediately then sleep
-  if (wakeupFromReset) {
-    Serial.println("[OTA] Sending HELLO with new firmware version");
-    sendPacket(PKT_HELLO, 0);
-    delay(200);  // Wait for transmission
-    ledBlink(5, 100);  // Visual confirmation
-    Serial.println("[OTA] HELLO sent, returning to sleep");
-    delay(100);
-    goToSleepWithPIR();
-  }
 }
 
-// --- MAIN LOOP ---
 void loop() {
+  if (wakeupFromReset) {
+    wakeupFromReset = false;
+    if (digitalRead(PIN_RESET) == LOW && !ota_mode) {
+      unsigned long now = millis();
+      reset_tap_count = 1;
+      last_reset_press = now;
+      pending_single_press = true;
+      pending_single_press_time = now;
+      lastActivityTime = now;
+      Serial.println("[RESET] Wake-from-reset tap latched, waiting for possible second tap...");
+    }
+  }
+
   // Handle PIR motion event sending (from wakeup)
   if (wakeupFromPIR) {
     wakeupFromPIR = false;
@@ -879,7 +910,7 @@ void loop() {
     // Read light level from LDR sensor
     getLightLevel();
     Serial.printf("Light level: %d\n", light_level);
-    
+     
     if (HOME_ID == 0) {
       // Unpaired - send HELLO packet
       sendPacket(PKT_HELLO, 0);
@@ -889,9 +920,7 @@ void loop() {
       sendPacket(PKT_MOTION_EVENT, ACT_MOTION_DETECTED);
       Serial.println("Motion detected (paired)");
     }
-    
-    triggerLed(100);
-    
+        
     // Wait for transmission to complete
     delay(TX_SETTLE_TIME);
     
@@ -1037,10 +1066,9 @@ void loop() {
   reset_button_was_high = (digitalRead(PIN_RESET) == HIGH);
   
   // Check if pending single press should be activated (no second tap came)
-  if (pending_single_press && millis() - pending_single_press_time >= SINGLE_PRESS_DELAY) {
+  if (HOME_ID == 0 && pending_single_press && millis() - pending_single_press_time >= SINGLE_PRESS_DELAY) {
     Serial.println("[RESET] No second tap detected, sending pairing request");
     pending_single_press = false;
-    ledBlink(2, 100);
     sendPacket(PKT_HELLO, 0);
     lastActivityTime = millis();
     delay(200); // Wait for potential pairing response

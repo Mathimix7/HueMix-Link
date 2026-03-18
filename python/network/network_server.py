@@ -1406,8 +1406,26 @@ class NetworkServer:
                 logger.error(f"Failed to send to gateway {target_mac}: {e}")
                 return False
         
-        # Target is a device - use smart routing with fallback
-        _, gateway_mac = device_manager.get_light_gateway(target_mac)
+        # Target is a device - use smart routing with fallback.
+        # Prefer the last successful/seen gateway based on device type.
+        gateway_mac = None
+
+        # Lightstrip routing preference
+        _, light_gateway_mac = device_manager.get_light_gateway(target_mac)
+        if light_gateway_mac:
+            gateway_mac = light_gateway_mac
+
+        # Button/remote routing preference
+        if not gateway_mac:
+            button = device_manager.get_button_by_mac(target_mac)
+            if button:
+                gateway_mac = button.get('last_seen_gateway')
+
+        # Motion sensor routing preference
+        if not gateway_mac:
+            sensor = device_manager.get_motion_sensor_by_mac(target_mac)
+            if sensor:
+                gateway_mac = sensor.get('last_seen_gateway')
         
         # Get all available gateways for fallback
         with self._gateway_lock:

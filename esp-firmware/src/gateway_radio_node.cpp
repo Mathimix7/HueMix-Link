@@ -25,6 +25,18 @@ bool netNodeHasWiFi = false;  // Tracks if net node has WiFi connectivity
 #define PIN_RX         16
 #define PIN_TX         17
 
+#ifndef IS_SERIAL_GATEWAY
+  #define IS_SERIAL_GATEWAY 0
+#endif
+
+#if IS_SERIAL_GATEWAY
+  #define SERIAL_COM Serial
+  #define SERIAL_DEBUG Serial2
+#else
+  #define SERIAL_COM Serial2
+  #define SERIAL_DEBUG Serial
+#endif
+
 // --- STATUS LED STATE MACHINE ---
 enum StatusLEDState { STATUS_LED_IDLE, STATUS_LED_ON, STATUS_LED_BRIEF_OFF };
 StatusLEDState statusLEDState = STATUS_LED_IDLE;
@@ -141,29 +153,29 @@ void sendSerialHandshake() {
     h.version_patch = 0;
   #endif
   
-  Serial2.write((uint8_t*)&h, sizeof(h));
+  SERIAL_COM.write((uint8_t*)&h, sizeof(h));
 }
 
 void saveGateways() {
   prefs.putBytes("gw", &activeGateways, sizeof(activeGateways));
-  Serial.printf("[RADIO] Saved %d gateways to NVS\n", activeGateways.count);
+  SERIAL_DEBUG.printf("[RADIO] Saved %d gateways to NVS\n", activeGateways.count);
 }
 
 void loadGateways() {
   size_t len = prefs.getBytes("gw", &activeGateways, sizeof(activeGateways));
   if (len == sizeof(activeGateways) && activeGateways.count > 0) {
-    Serial.printf("[RADIO] Loaded %d gateways from NVS\n", activeGateways.count);
+    SERIAL_DEBUG.printf("[RADIO] Loaded %d gateways from NVS\n", activeGateways.count);
   } else {
     // No saved gateways, initialize with self
     activeGateways.count = 1;
     esp_read_mac(activeGateways.macs[0], ESP_MAC_WIFI_STA);
-    Serial.println("[RADIO] No saved gateways, initialized with self");
+    SERIAL_DEBUG.println("[RADIO] No saved gateways, initialized with self");
   }
 }
 
 // --- OTA FUNCTIONS ---
 void abortOta(const char* reason) {
-  Serial.printf("[OTA] ABORT: %s\n", reason);
+  SERIAL_DEBUG.printf("[OTA] ABORT: %s\n", reason);
   
   // Notify server about the abort via UART to net node
   HueMixLinkPacket abortPkt;
@@ -180,12 +192,12 @@ void abortOta(const char* reason) {
   abortPkt.signature = calculateHash(abortPkt.payload.raw, 185, HOME_ID);
   
   // Send abort notification to net node via UART
-  Serial2.write(SERIAL_START);
-  Serial2.write((uint8_t*)&abortPkt, sizeof(HueMixLinkPacket));
-  Serial2.write(SERIAL_END);
-  Serial2.flush();  // Wait for transmission to complete
+  SERIAL_COM.write(SERIAL_START);
+  SERIAL_COM.write((uint8_t*)&abortPkt, sizeof(HueMixLinkPacket));
+  SERIAL_COM.write(SERIAL_END);
+  SERIAL_COM.flush();  // Wait for transmission to complete
   
-  Serial.printf("[OTA] Sent abort notification via UART\n");
+  SERIAL_DEBUG.printf("[OTA] Sent abort notification via UART\n");
   
   // Clean up local state
   if (update_handle) {
@@ -217,7 +229,7 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
       esp_now_add_peer(&peer);
     }
     esp_now_send(pkt->targetMAC, (uint8_t*)pkt, sizeof(HueMixLinkPacket));
-    Serial.println("[OTA] NOTIFY forwarded via ESP-NOW");
+    SERIAL_DEBUG.println("[OTA] NOTIFY forwarded via ESP-NOW");
     return;
   }
   
@@ -225,18 +237,18 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   if (HOME_ID != 0) {
     uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
     if (pkt->signature != expected_sig) {
-      Serial.printf("[RADIO] SECURITY: Invalid OTA signature. Expected 0x%08X, got 0x%08X\n", expected_sig, pkt->signature);
-      Serial.println("[RADIO] Rejected unauthorized OTA packet");
+      SERIAL_DEBUG.printf("[RADIO] SECURITY: Invalid OTA signature. Expected 0x%08X, got 0x%08X\n", expected_sig, pkt->signature);
+      SERIAL_DEBUG.println("[RADIO] Rejected unauthorized OTA packet");
       return;
     }
   }
   
   if (otaState != OTA_IDLE) {
-    Serial.println("[OTA] Busy with another update");
+    SERIAL_DEBUG.println("[OTA] Busy with another update");
     return;
   }
   
-  Serial.println("[OTA] NOTIFY received for radio node (self)");
+  SERIAL_DEBUG.println("[OTA] NOTIFY received for radio node (self)");
   
   expected_firmware_size = pkt->payload.otaNotify.firmware_size;
   memcpy(expected_sha256, pkt->payload.otaNotify.sha256_hash, 32);
@@ -244,17 +256,17 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   // Initialize update partition
   update_partition = esp_ota_get_next_update_partition(NULL);
   if (!update_partition) {
-    Serial.println("[OTA] No update partition available");
+    SERIAL_DEBUG.println("[OTA] No update partition available");
     abortOta("No partition");
     return;
   }
   
-  Serial.printf("[OTA] Starting update: %u bytes\n", expected_firmware_size);
-  Serial.printf("[OTA] Target partition: %s at 0x%x\n", update_partition->label, update_partition->address);
+  SERIAL_DEBUG.printf("[OTA] Starting update: %u bytes\n", expected_firmware_size);
+  SERIAL_DEBUG.printf("[OTA] Target partition: %s at 0x%x\n", update_partition->label, update_partition->address);
   
   esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
   if (err != ESP_OK) {
-    Serial.printf("[OTA] Begin failed: %d\n", err);
+    SERIAL_DEBUG.printf("[OTA] Begin failed: %d\n", err);
     abortOta("Begin failed");
     return;
   }
@@ -280,11 +292,11 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   ready.payload.otaReady.battery_mv = 0; // Not battery powered
   ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
   
-  Serial2.write(SERIAL_START);
-  Serial2.write((uint8_t*)&ready, sizeof(HueMixLinkPacket));
-  Serial2.write(SERIAL_END);
-  Serial2.flush();  // Wait for transmission to complete
-  Serial.println("[OTA] Sent READY via UART");
+  SERIAL_COM.write(SERIAL_START);
+  SERIAL_COM.write((uint8_t*)&ready, sizeof(HueMixLinkPacket));
+  SERIAL_COM.write(SERIAL_END);
+  SERIAL_COM.flush();  // Wait for transmission to complete
+  SERIAL_DEBUG.println("[OTA] Sent READY via UART");
 }
 
 void handleOtaChunk(HueMixLinkPacket* pkt) {
@@ -312,7 +324,7 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
   if (HOME_ID != 0) {
     uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
     if (pkt->signature != expected_sig) {
-      Serial.printf("[RADIO] SECURITY: Invalid OTA CHUNK signature\n");
+      SERIAL_DEBUG.printf("[RADIO] SECURITY: Invalid OTA CHUNK signature\n");
       return;
     }
   }
@@ -325,12 +337,12 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
   // Check chunk order: accept current or future chunks, ignore duplicates
   if (chunk_idx < expected_chunk_index) {
     // This is a duplicate chunk we already received - ignore it silently
-    Serial.printf("[OTA] Ignoring duplicate chunk %d (already at %d)\n", chunk_idx, expected_chunk_index);
+    SERIAL_DEBUG.printf("[OTA] Ignoring duplicate chunk %d (already at %d)\n", chunk_idx, expected_chunk_index);
     return;
   }
   
   if (chunk_idx != expected_chunk_index) {
-    Serial.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
+    SERIAL_DEBUG.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
     return;
   }
 
@@ -356,7 +368,7 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
   expected_chunk_index++;
   
   if (chunk_idx % 50 == 0) {
-    Serial.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n", 
+    SERIAL_DEBUG.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n", 
       received_bytes, expected_firmware_size, 
       (received_bytes * 100.0) / expected_firmware_size);
   }
@@ -376,12 +388,12 @@ void sendOtaChunkAck(uint16_t last_chunk_index) {
   pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   
   // Send via UART to net node
-  Serial2.write(SERIAL_START);
-  Serial2.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
-  Serial2.write(SERIAL_END);
-  Serial2.flush();
+  SERIAL_COM.write(SERIAL_START);
+  SERIAL_COM.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
+  SERIAL_COM.write(SERIAL_END);
+  SERIAL_COM.flush();
   
-  Serial.printf("[OTA] Sent checkpoint ACK via UART: last_chunk=%d\n", last_chunk_index);
+  SERIAL_DEBUG.printf("[OTA] Sent checkpoint ACK via UART: last_chunk=%d\n", last_chunk_index);
 }
 
 void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
@@ -406,7 +418,7 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
   if (HOME_ID != 0) {
     uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
     if (pkt->signature != expected_sig) {
-      Serial.println("[RADIO] SECURITY: Invalid OTA CHECKPOINT_REQ signature");
+      SERIAL_DEBUG.println("[RADIO] SECURITY: Invalid OTA CHECKPOINT_REQ signature");
       return;
     }
   }
@@ -416,7 +428,7 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
   }
 
   if (otaAccumulatorIndex >= 0) {
-    Serial.printf("[OTA] Flushing %d bytes at checkpoint\n", otaAccumulatorIndex);
+    SERIAL_DEBUG.printf("[OTA] Flushing %d bytes at checkpoint\n", otaAccumulatorIndex);
     esp_err_t err = esp_ota_write(update_handle, otaAccumulator, otaAccumulatorIndex);
     if (err != ESP_OK) {
       abortOta("Flash write failed at checkpoint");
@@ -451,20 +463,20 @@ void handleOtaComplete(HueMixLinkPacket* pkt) {
   if (HOME_ID != 0) {
     uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
     if (pkt->signature != expected_sig) {
-      Serial.println("[RADIO] SECURITY: Invalid OTA COMPLETE signature");
+      SERIAL_DEBUG.println("[RADIO] SECURITY: Invalid OTA COMPLETE signature");
       return;
     }
   }
   
-  Serial.printf("[OTA] COMPLETE packet received (state=%d)\n", otaState);
+  SERIAL_DEBUG.printf("[OTA] COMPLETE packet received (state=%d)\n", otaState);
   
   if (otaState != OTA_RECEIVING) {
-    Serial.printf("[OTA] COMPLETE rejected: wrong state (got %d)\n", otaState);
+    SERIAL_DEBUG.printf("[OTA] COMPLETE rejected: wrong state (got %d)\n", otaState);
     return;
   }
 
   if (otaAccumulatorIndex > 0) {
-    Serial.printf("[OTA] Flushing final %d bytes\n", otaAccumulatorIndex);
+    SERIAL_DEBUG.printf("[OTA] Flushing final %d bytes\n", otaAccumulatorIndex);
     esp_err_t err = esp_ota_write(update_handle, otaAccumulator, otaAccumulatorIndex);
     if (err != ESP_OK) {
       abortOta("Final flush failed");
@@ -478,7 +490,7 @@ void handleOtaComplete(HueMixLinkPacket* pkt) {
     sendOtaChunkAck(expected_chunk_index - 1);
   }
   
-  Serial.println("[OTA] COMPLETE received, validating...");
+  SERIAL_DEBUG.println("[OTA] COMPLETE received, validating...");
   otaState = OTA_VALIDATING;
   
   // Finalize SHA256
@@ -488,23 +500,23 @@ void handleOtaComplete(HueMixLinkPacket* pkt) {
   
   // Compare SHA256
   if (memcmp(calculated_sha256, expected_sha256, 32) != 0) {
-    Serial.println("[OTA] SHA256 MISMATCH!");
-    Serial.print("[OTA] Expected: ");
-    for(int i=0; i<32; i++) Serial.printf("%02X", expected_sha256[i]);
-    Serial.println();
-    Serial.print("[OTA] Calculated: ");
-    for(int i=0; i<32; i++) Serial.printf("%02X", calculated_sha256[i]);
-    Serial.println();
+    SERIAL_DEBUG.println("[OTA] SHA256 MISMATCH!");
+    SERIAL_DEBUG.print("[OTA] Expected: ");
+    for(int i=0; i<32; i++) SERIAL_DEBUG.printf("%02X", expected_sha256[i]);
+    SERIAL_DEBUG.println();
+    SERIAL_DEBUG.print("[OTA] Calculated: ");
+    for(int i=0; i<32; i++) SERIAL_DEBUG.printf("%02X", calculated_sha256[i]);
+    SERIAL_DEBUG.println();
     abortOta("SHA256 mismatch");
     return;
   }
   
-  Serial.println("[OTA] SHA256 verified!");
+  SERIAL_DEBUG.println("[OTA] SHA256 verified!");
   
   // Finalize OTA
   esp_err_t err = esp_ota_end(update_handle);
   if (err != ESP_OK) {
-    Serial.printf("[OTA] End failed: %d\n", err);
+    SERIAL_DEBUG.printf("[OTA] End failed: %d\n", err);
     abortOta("End failed");
     return;
   }
@@ -513,12 +525,12 @@ void handleOtaComplete(HueMixLinkPacket* pkt) {
   // Set boot partition
   err = esp_ota_set_boot_partition(update_partition);
   if (err != ESP_OK) {
-    Serial.printf("[OTA] Set boot partition failed: %d\n", err);
+    SERIAL_DEBUG.printf("[OTA] Set boot partition failed: %d\n", err);
     abortOta("Set boot failed");
     return;
   }
   
-  Serial.println("[OTA] UPDATE SUCCESSFUL! Rebooting in 2 seconds...");
+  SERIAL_DEBUG.println("[OTA] UPDATE SUCCESSFUL! Rebooting in 2 seconds...");
   otaState = OTA_COMPLETE;
   
   // Stop breathing effect before flashing LED
@@ -555,12 +567,12 @@ void handleOtaAbort(HueMixLinkPacket* pkt) {
   if (HOME_ID != 0) {
     uint32_t expected_sig = calculateHash(pkt->payload.raw, 185, HOME_ID);
     if (pkt->signature != expected_sig) {
-      Serial.println("[RADIO] SECURITY: Invalid OTA ABORT signature");
+      SERIAL_DEBUG.println("[RADIO] SECURITY: Invalid OTA ABORT signature");
       return;
     }
   }
   
-  Serial.println("[OTA] ABORT received from server");
+  SERIAL_DEBUG.println("[OTA] ABORT received from server");
   abortOta("Server abort");
 }
 
@@ -568,7 +580,7 @@ void handleOtaAbort(HueMixLinkPacket* pkt) {
 void handleSerialPacket(uint8_t* data) {
   memcpy(&radioTx, data, sizeof(HueMixLinkPacket));
   
-  Serial.printf("[RADIO] Serial RX Type 0x%02X\n", radioTx.type);
+  SERIAL_DEBUG.printf("[RADIO] Serial RX Type 0x%02X\n", radioTx.type);
 
   // Handle OTA packets
   if (radioTx.type == PKT_OTA_NOTIFY) {
@@ -588,13 +600,34 @@ void handleSerialPacket(uint8_t* data) {
     return;
   }
 
+  #if IS_SERIAL_GATEWAY
+    if (radioTx.type == PKT_PING) {
+      HueMixLinkPacket pingRsp;
+      memset(&pingRsp, 0, sizeof(HueMixLinkPacket));
+      pingRsp.type = PKT_PING;
+      esp_read_mac(pingRsp.sourceMAC, ESP_MAC_WIFI_STA);
+      memcpy(pingRsp.targetMAC, radioTx.sourceMAC, 6);
+      pingRsp.msgID = radioTx.msgID;
+
+      uint32_t uptime_seconds = millis() / 1000;
+      memcpy(&pingRsp.payload.raw[0], &uptime_seconds, sizeof(uptime_seconds));
+      pingRsp.signature = calculateHash(pingRsp.payload.raw, 185, HOME_ID);
+
+      SERIAL_COM.write(SERIAL_START);
+      SERIAL_COM.write((uint8_t*)&pingRsp, sizeof(HueMixLinkPacket));
+      SERIAL_COM.write(SERIAL_END);
+      SERIAL_COM.flush();
+      return;
+    }
+  #endif
+  
   if (radioTx.type == PKT_SYS_CMD) {
     // Security: Verify signature for SYS_CMD
     if (HOME_ID != 0) {
       uint32_t expected_sig = calculateHash(radioTx.payload.raw, 185, HOME_ID);
       if (radioTx.signature != expected_sig) {
-        Serial.printf("[RADIO] SECURITY: Invalid SYS_CMD signature. Expected 0x%08X, got 0x%08X\n", expected_sig, radioTx.signature);
-        Serial.println("[RADIO] Rejected unauthorized SYS_CMD");
+        SERIAL_DEBUG.printf("[RADIO] SECURITY: Invalid SYS_CMD signature. Expected 0x%08X, got 0x%08X\n", expected_sig, radioTx.signature);
+        SERIAL_DEBUG.println("[RADIO] Rejected unauthorized SYS_CMD");
         return;
       }
     }
@@ -604,7 +637,7 @@ void handleSerialPacket(uint8_t* data) {
     else if (radioTx.payload.sys.cmd == 3) {
       // WiFi status update from net node
       netNodeHasWiFi = (radioTx.payload.raw[1] == 1);
-      Serial.printf("[RADIO] Net node WiFi status: %s\n", netNodeHasWiFi ? "CONNECTED" : "DISCONNECTED");
+      SERIAL_DEBUG.printf("[RADIO] Net node WiFi status: %s\n", netNodeHasWiFi ? "CONNECTED" : "DISCONNECTED");
       return;  // Don't forward this command via ESP-NOW
     }
     else {
@@ -621,7 +654,7 @@ void handleSerialPacket(uint8_t* data) {
   } else if (radioTx.type == PKT_GW_LIST_UPD) {
     activeGateways = radioTx.payload.gwList;
     saveGateways();
-    Serial.printf("[RADIO] Updated Gateways List (%d nodes)\n", activeGateways.count);
+    SERIAL_DEBUG.printf("[RADIO] Updated Gateways List (%d nodes)\n", activeGateways.count);
     
     // Check if this update is targeted to a specific device (not broadcast)
     bool isBroadcast = true;
@@ -676,7 +709,7 @@ void parseSerialByte(uint8_t b) {
       } 
       else if (b == SERIAL_REQ_HANDSHAKE && (millis() - last_serial_activity) > SERIAL_IDLE_THRESHOLD) { 
         handshake_request_received = true;  // Mark that we got a request
-        Serial.println("[RADIO] Received handshake request from net node");
+        SERIAL_DEBUG.println("[RADIO] Received handshake request from net node");
         sendSerialHandshake(); 
         last_serial_activity = millis();
       }
@@ -686,7 +719,7 @@ void parseSerialByte(uint8_t b) {
       rxRawBuffer[rxIndex++] = b;
       // Prevent buffer overflow
       if (rxIndex > sizeof(HueMixLinkPacket)) {
-        Serial.printf("[RADIO] Buffer overflow - resync\n");
+        SERIAL_DEBUG.printf("[RADIO] Buffer overflow - resync\n");
         rxState = S_IDLE;
         rxIndex = 0;
         // Check if current byte is SERIAL_START for next packet
@@ -705,12 +738,12 @@ void parseSerialByte(uint8_t b) {
         rxState = S_IDLE;
       } else if (b == SERIAL_START) {
         // Possible packet corruption, but current byte could be start of next packet
-        Serial.printf("[RADIO] Footer Err (got 0x%02X), resyncing to next packet\n", b);
+        SERIAL_DEBUG.printf("[RADIO] Footer Err (got 0x%02X), resyncing to next packet\n", b);
         rxState = S_READING;
         rxIndex = 0;
       } else {
         // Footer mismatch - garbage byte, resync
-        Serial.printf("[RADIO] Footer Err (got 0x%02X), discarding packet\n", b);
+        SERIAL_DEBUG.printf("[RADIO] Footer Err (got 0x%02X), discarding packet\n", b);
         rxState = S_IDLE;
       }
       break;
@@ -732,8 +765,8 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 
     rpt.signature = calculateHash(rpt.payload.raw, 185, HOME_ID);
 
-    Serial2.write(SERIAL_START); Serial2.write((uint8_t*)&rpt, sizeof(rpt)); Serial2.write(SERIAL_END);
-    Serial2.flush();
+    SERIAL_COM.write(SERIAL_START); SERIAL_COM.write((uint8_t*)&rpt, sizeof(rpt)); SERIAL_COM.write(SERIAL_END);
+    SERIAL_COM.flush();
     waitingForDelivery = false;
     
     triggerStatusLED();
@@ -764,10 +797,17 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
 
 void setup() {
   pinMode(PIN_LED_STATUS, OUTPUT);
-  Serial.begin(115200); 
-  Serial2.setRxBufferSize(8192);
-  Serial2.setTxBufferSize(8192);
-  Serial2.begin(460800, SERIAL_8N1, PIN_RX, PIN_TX); 
+
+  #if IS_SERIAL_GATEWAY
+    SERIAL_COM.begin(460800);
+    SERIAL_DEBUG.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX);
+  #else
+    SERIAL_DEBUG.begin(115200);
+    SERIAL_COM.setRxBufferSize(8192);
+    SERIAL_COM.setTxBufferSize(8192);
+    SERIAL_COM.begin(460800, SERIAL_8N1, PIN_RX, PIN_TX);
+  #endif
+
   WiFi.mode(WIFI_STA); 
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   if (esp_now_init() != ESP_OK) ESP.restart();
@@ -803,31 +843,31 @@ void setup() {
     memcpy(activeGateways.macs[activeGateways.count], myMac, 6);
     activeGateways.count++;
     saveGateways();
-    Serial.println("[RADIO] Added self to gateway list");
+    SERIAL_DEBUG.println("[RADIO] Added self to gateway list");
   }
   
-  Serial.println("--- RADIO NODE READY ---");
+  SERIAL_DEBUG.println("--- RADIO NODE READY ---");
 }
 
 void loop() {
   if (!handshake_request_received && (millis() - startup_time) > STARTUP_HANDSHAKE_TIMEOUT) {
-    Serial.println("[RADIO] No handshake request from net node, requesting...");
-    Serial2.write(SERIAL_REQ_HANDSHAKE);
-    Serial2.flush();
+    SERIAL_DEBUG.println("[RADIO] No handshake request from net node, requesting...");
+    SERIAL_COM.write(SERIAL_REQ_HANDSHAKE);
+    SERIAL_COM.flush();
     handshake_request_received = true;
   }
 
   // OTA timeout check
   if (otaState == OTA_RECEIVING && millis() - last_ota_activity > 30000) {
-    Serial.println("[OTA] Timeout - no activity for 30s");
+    SERIAL_DEBUG.println("[OTA] Timeout - no activity for 30s");
     abortOta("Timeout");
   }
 
   if (pktReady) {
-    Serial2.write(SERIAL_START);
-    Serial2.write((uint8_t*)&bufferPkt, sizeof(bufferPkt));
-    Serial2.write(SERIAL_END);
-    Serial2.flush();
+    SERIAL_COM.write(SERIAL_START);
+    SERIAL_COM.write((uint8_t*)&bufferPkt, sizeof(bufferPkt));
+    SERIAL_COM.write(SERIAL_END);
+    SERIAL_COM.flush();
     
     if (bufferPkt.type == PKT_BTN_EVENT || bufferPkt.type == PKT_MOTION_EVENT) {
       // Only send ACK if net node has WiFi connectivity
@@ -850,7 +890,7 @@ void loop() {
         if(!esp_now_is_peer_exist(bufferPkt.sourceMAC)) esp_now_add_peer(&peer);
         esp_now_send(bufferPkt.sourceMAC, (uint8_t*)&ack, sizeof(ack));
       } else {
-        Serial.println("[RADIO] Button ACK suppressed - Net node has no WiFi");
+        SERIAL_DEBUG.println("[RADIO] Button ACK suppressed - Net node has no WiFi");
       }
     }
     pktReady = false;
@@ -867,8 +907,8 @@ void loop() {
   }
 
   if (!waitingForDelivery) {
-    while (Serial2.available() > 0) {
-      parseSerialByte(Serial2.read());
+    while (SERIAL_COM.available() > 0) {
+      parseSerialByte(SERIAL_COM.read());
       if (waitingForDelivery) break;
     }
   }

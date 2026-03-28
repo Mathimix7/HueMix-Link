@@ -81,6 +81,77 @@
         </div>
     </div>
 
+    <!-- Serial Gateway Configuration Section -->
+    <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-200">
+            <i class="fas fa-server text-blue-600 mr-2"></i>Serial Gateway Configuration
+        </h2>
+        
+        <div class="space-y-4">
+            <!-- Enable Serial Gateway -->
+            <div class="flex items-center justify-between py-3">
+                <div class="flex-1">
+                    <h3 class="font-medium text-gray-900">Enable USB Serial Gateway</h3>
+                    <p class="text-sm text-gray-600 mt-1">Allow radio node to connect via USB serial cable</p>
+                </div>
+                <div class="ml-4">
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="serial-gateway-enabled" class="sr-only peer" onchange="onSerialGatewayEnabledChange()">
+                        <div class="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Serial Port -->
+            <div id="serial-port-container" class="hidden py-3 border-t border-gray-100">
+                <div class="flex items-center justify-between">
+                    <div class="flex-1">
+                        <h3 class="font-medium text-gray-900">Serial Port</h3>
+                        <p class="text-sm text-gray-600 mt-1">Select the USB serial port detected by the backend</p>
+                    </div>
+                    <div class="ml-4 flex items-center gap-2">
+                        <select id="serial-gateway-port"
+                                class="w-56 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            <option value="">Loading serial ports...</option>
+                        </select>
+                        <button type="button" onclick="loadSerialGatewayPorts()"
+                                class="px-3 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors">
+                            <i class="fas fa-rotate-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Baudrate -->
+            <div id="serial-baudrate-container" class="hidden py-3 border-t border-gray-100">
+                <div class="flex items-center justify-between">
+                    <div class="flex-1">
+                        <h3 class="font-medium text-gray-900">Baudrate</h3>
+                        <p class="text-sm text-gray-600 mt-1">Communication speed (default: 460800 for HueMix)</p>
+                    </div>
+                    <div class="ml-4">
+                        <select id="serial-gateway-baudrate"
+                                class="w-48 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            <option value="9600">9600</option>
+                            <option value="115200">115200</option>
+                            <option value="460800" selected>460800 (HueMix default)</option>
+                            <option value="921600">921600</option>
+                            <option value="1000000">1000000</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Save Button -->
+            <div class="pt-4 border-t border-gray-100">
+                <button onclick="saveSerialGatewaySettings()" 
+                        class="w-full sm:w-auto px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
+                    <i class="fas fa-save mr-2"></i>Save Serial Gateway Settings
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Backup & Restore Section -->
     <div class="bg-white rounded-xl shadow-md p-6">
         <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-200">
@@ -173,8 +244,61 @@
     // Load initial data
     document.addEventListener('DOMContentLoaded', function() {
         loadSettings();
+        loadSerialGatewayPorts();
+        loadSerialGatewaySettings();
         loadBackupList();
     });
+
+    function loadSerialGatewayPorts(preferredPort = null) {
+        const select = document.getElementById('serial-gateway-port');
+        const currentValue = preferredPort !== null ? preferredPort : (select.value || '');
+
+        fetch('/admin/api/serial-ports')
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to load serial ports');
+                }
+
+                const ports = Array.isArray(data.ports) ? data.ports : [];
+                const configuredPort = data.configured_port || '';
+                const selectedPort = currentValue || configuredPort;
+
+                select.innerHTML = '';
+
+                if (!ports.length) {
+                    const option = document.createElement('option');
+                    option.value = '';
+                    option.textContent = 'No serial ports detected';
+                    select.appendChild(option);
+                    return;
+                }
+
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = 'Select a serial port';
+                select.appendChild(placeholder);
+
+                ports.forEach(port => {
+                    const option = document.createElement('option');
+                    const device = port.device || '';
+                    option.value = device;
+
+                    const baseLabel = `${device}${port.description ? ` - ${port.description}` : ''}`;
+                    option.textContent = port.available ? baseLabel : `${baseLabel}`;
+
+                    select.appendChild(option);
+                });
+
+                if (selectedPort) {
+                    select.value = selectedPort;
+                }
+            })
+            .catch(err => {
+                console.error('Error loading serial ports:', err);
+                select.innerHTML = '<option value="">Failed to load ports</option>';
+            });
+    }
 
     function loadSettings() {
         fetch('/api/config')
@@ -199,6 +323,75 @@
             .catch(err => {
                 console.error('Error loading dev mode:', err);
             });
+    }
+
+    function loadSerialGatewaySettings() {
+        fetch('/admin/api/serial-gateway')
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.serial_gateway) {
+                    const cfg = data.serial_gateway;
+                    document.getElementById('serial-gateway-enabled').checked = cfg.enabled || false;
+                    document.getElementById('serial-gateway-baudrate').value = cfg.baudrate || 460800;
+                    loadSerialGatewayPorts(cfg.port || '');
+                    
+                    // Update UI visibility
+                    updateSerialGatewayUI();
+                }
+            })
+            .catch(err => {
+                console.error('Error loading serial gateway settings:', err);
+            });
+    }
+
+    function onSerialGatewayEnabledChange() {
+        if (document.getElementById('serial-gateway-enabled').checked) {
+            loadSerialGatewayPorts();
+        }
+        updateSerialGatewayUI();
+    }
+
+    function updateSerialGatewayUI() {
+        const enabled = document.getElementById('serial-gateway-enabled').checked;
+        document.getElementById('serial-port-container').classList.toggle('hidden', !enabled);
+        // document.getElementById('serial-baudrate-container').classList.toggle('hidden', !enabled);
+    }
+
+    function saveSerialGatewaySettings() {
+        const enabled = document.getElementById('serial-gateway-enabled').checked;
+        const port = document.getElementById('serial-gateway-port').value.trim();
+        const baudrate = parseInt(document.getElementById('serial-gateway-baudrate').value);
+
+        // Validate
+        if (enabled && !port) {
+            showToast('Serial port is required when enabling USB serial gateway', 'error');
+            return;
+        }
+
+        showToast('Saving serial gateway settings...', 'info');
+
+        fetch('/admin/api/serial-gateway', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                enabled: enabled,
+                port: port,
+                baudrate: baudrate
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                loadSerialGatewayPorts(data.serial_gateway?.port || null);
+                showToast(data.message || 'Serial gateway settings applied.', 'success');
+            } else {
+                showToast('Error: ' + (data.error || 'Failed to save settings'), 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error saving serial gateway settings:', err);
+            showToast('Error saving settings', 'error');
+        });
     }
 
     function saveAndRestartSettings() {

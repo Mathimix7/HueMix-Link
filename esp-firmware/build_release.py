@@ -41,6 +41,9 @@ config.read(INI_FILE)
 def get_output_name(env_name, firmware_version, lightstrip_model):
     platform_str = get_platform(env_name)
 
+    if env_name == "esp32_radio_python":
+        return f"huemixlink-{platform_str}-radio-python-v{firmware_version}.bin"
+
     if "lightstrip" in env_name:
         if not lightstrip_model:
             raise ValueError(f"No LIGHTSTRIP_MODEL defined for {env_name}")

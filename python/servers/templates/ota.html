@@ -533,7 +533,7 @@ function renderDevicesTable() {
                                     class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-1.5 rounded transition">
                                 Update
                             </button>
-                        ` : (device.platform || device.model_id) ? `
+                        ` : (device.platform || device.model_id || device.type.startsWith('gateway_')) ? `
                             <span class="text-gray-400">Up to date</span>
                         ` : `
                             <span class="text-yellow-600 text-xs">Platform unknown</span>
@@ -552,6 +552,7 @@ function getTypeColor(type) {
         'gateway': 'purple',
         'gateway_net': 'purple',
         'gateway_radio': 'purple',
+        'gateway_radio_python': 'purple',
         'lightstrip': 'yellow',
         'button': 'pink',
         'remote': 'pink',
@@ -565,6 +566,7 @@ function getTypeIcon(type) {
         'gateway': '<i class="fas fa-server"></i>',
         'gateway_net': '<i class="fas fa-server"></i>',
         'gateway_radio': '<i class="fas fa-server"></i>',
+        'gateway_radio_python': '<i class="fas fa-server"></i>',
         'lightstrip': '<i class="fas fa-lightbulb"></i>',
         'button': '<i class="fas fa-microchip"></i>',
         'remote': '<i class="fas fa-microchip"></i>',
@@ -578,6 +580,7 @@ function formatDeviceType(type) {
         'gateway': 'Gateway',
         'gateway_net': 'Gateway Net',
         'gateway_radio': 'Gateway Radio',
+        'gateway_radio_python': 'Gateway Radio (Serial)',
         'lightstrip': 'Lightstrip',
         'button': 'Button',
         'remote': 'Remote',

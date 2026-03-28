@@ -45,6 +45,8 @@ def get_output_name(env_name, firmware_version, lightstrip_model):
         if not lightstrip_model:
             raise ValueError(f"No LIGHTSTRIP_MODEL defined for {env_name}")
         return f"huemixlink-{platform_str}-lightstrip-{lightstrip_model}-v{firmware_version}.bin"
+    elif "door" in env_name:
+        return f"huemixlink-{platform_str}-door_sensor-v{firmware_version}.bin"
     elif "motion" in env_name:
         return f"huemixlink-{platform_str}-motion_sensor-v{firmware_version}.bin"
     elif "node" in env_name or "remote" in env_name:

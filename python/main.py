@@ -7,7 +7,7 @@ from services.home_id_manager import home_id_manager
 from services.automation_service import automation_service
 from network.network_server import network_server
 from network.pairing_manager import pairing_manager
-from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY, DEFAULT_WEB_PORT, FILE_MOTION_SENSORS
+from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY, DEFAULT_WEB_PORT, FILE_MOTION_SENSORS, FILE_DOOR_SENSORS
 from waitress import serve
 from services.hue_config_sync import sync_device_configs_with_hue
 
@@ -24,6 +24,7 @@ if __name__ == '__main__':
             FILE_BRIDGE: {},
             FILE_PAIRING_HISTORY: [],
             FILE_MOTION_SENSORS: [],
+            FILE_DOOR_SENSORS: [],
         }
 
         for fname, default_content in defaults.items():
@@ -60,7 +61,7 @@ if __name__ == '__main__':
         automation_service.start()
         
         # Reconcile local automation configs with current Hue rooms/scenes.
-        logger.info("Synchronizing button/motion configurations with Hue...")
+        logger.info("Synchronizing button/motion/door configurations with Hue...")
         try:
             sync_device_configs_with_hue()
         except Exception as e:

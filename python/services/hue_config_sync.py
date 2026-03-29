@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, Optional
 
-from constants import FILE_BUTTONS, FILE_MOTION_SENSORS
+from constants import FILE_BUTTONS, FILE_MOTION_SENSORS, FILE_DOOR_SENSORS
 from services import data_manager
 from services.hue_service import hue_service
 
@@ -42,11 +42,12 @@ def _filter_scene_ids(scene_ids, valid_scene_ids: set, scene_to_room: Dict[str, 
 
 
 def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
-    """Reconcile stored button/motion configs with current Hue room/scene topology."""
+    """Reconcile stored button/motion/door configs with current Hue room/scene topology."""
     hue = hue_controller or hue_service.get_controller()
     stats = {
         "buttons_updated": 0,
         "motions_updated": 0,
+        "doors_updated": 0,
         "remapped_rooms": 0,
         "removed_scene_refs": 0,
         "disabled_configs": 0,
@@ -76,12 +77,14 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
 
     valid_scene_ids = set()
     scene_to_room: Dict[str, Optional[str]] = {}
+    scene_id_to_name: Dict[str, str] = {}
     for scene in scenes:
         sid = scene.get("id")
         if not sid:
             continue
         valid_scene_ids.add(sid)
         scene_to_room[sid] = scene.get("group", {}).get("rid")
+        scene_id_to_name[sid] = scene.get("metadata", {}).get("name", "")
 
     buttons = data_manager.read_json(FILE_BUTTONS, default=[])
     buttons_changed = False
@@ -238,6 +241,100 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
 
     if motions_changed:
         data_manager.write_json(FILE_MOTION_SENSORS, motions)
+
+    doors = data_manager.read_json(FILE_DOOR_SENSORS, default=[])
+    doors_changed = False
+
+    for sensor in doors:
+        config = sensor.get("config")
+        if not isinstance(config, dict):
+            continue
+
+        sensor_changed = False
+
+        resolved_room_id = _resolve_room_id(
+            config.get("room_id"),
+            config.get("room_name"),
+            valid_room_ids,
+            room_name_to_id,
+        )
+        if resolved_room_id != config.get("room_id"):
+            if resolved_room_id and config.get("room_id"):
+                stats["remapped_rooms"] += 1
+            config["room_id"] = resolved_room_id
+            sensor_changed = True
+
+        if resolved_room_id:
+            room_name = room_id_to_name.get(resolved_room_id)
+            if room_name and config.get("room_name") != room_name:
+                config["room_name"] = room_name
+                sensor_changed = True
+
+        slots = config.get("time_slots", [])
+        if isinstance(slots, list):
+            for slot in slots:
+                if not isinstance(slot, dict):
+                    continue
+
+                if slot.get("open_action") == "scene":
+                    open_scene_id = slot.get("open_scene_id")
+                    scene_invalid = (
+                        not open_scene_id
+                        or open_scene_id not in valid_scene_ids
+                        or (
+                            resolved_room_id
+                            and scene_to_room.get(open_scene_id) not in (None, resolved_room_id)
+                        )
+                    )
+                    if scene_invalid:
+                        slot["open_scene_id"] = ""
+                        slot["open_scene_name"] = ""
+                        slot["open_action"] = "nothing"
+                        if open_scene_id:
+                            stats["removed_scene_refs"] += 1
+                        sensor_changed = True
+                    else:
+                        current_name = slot.get("open_scene_name") or ""
+                        expected_name = scene_id_to_name.get(open_scene_id, "")
+                        if expected_name and current_name != expected_name:
+                            slot["open_scene_name"] = expected_name
+                            sensor_changed = True
+
+                if slot.get("close_action") == "scene":
+                    close_scene_id = slot.get("close_scene_id")
+                    scene_invalid = (
+                        not close_scene_id
+                        or close_scene_id not in valid_scene_ids
+                        or (
+                            resolved_room_id
+                            and scene_to_room.get(close_scene_id) not in (None, resolved_room_id)
+                        )
+                    )
+                    if scene_invalid:
+                        slot["close_scene_id"] = ""
+                        slot["close_scene_name"] = ""
+                        slot["close_action"] = "nothing"
+                        if close_scene_id:
+                            stats["removed_scene_refs"] += 1
+                        sensor_changed = True
+                    else:
+                        current_name = slot.get("close_scene_name") or ""
+                        expected_name = scene_id_to_name.get(close_scene_id, "")
+                        if expected_name and current_name != expected_name:
+                            slot["close_scene_name"] = expected_name
+                            sensor_changed = True
+
+        if not resolved_room_id and sensor.get("configured"):
+            sensor["configured"] = False
+            stats["disabled_configs"] += 1
+            sensor_changed = True
+
+        if sensor_changed:
+            stats["doors_updated"] += 1
+            doors_changed = True
+
+    if doors_changed:
+        data_manager.write_json(FILE_DOOR_SENSORS, doors)
 
     if any(stats.values()):
         logger.info("Hue config sync completed: %s", stats)

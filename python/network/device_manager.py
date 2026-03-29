@@ -7,7 +7,11 @@ import logging
 from typing import Optional, List, Dict
 from datetime import datetime
 from services.data_manager import data_manager
-from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS, DEV_REMOTE, DEV_BUTTON
+from constants import (
+    FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS, FILE_DOOR_SENSORS,
+    DEV_REMOTE, DEV_BUTTON,
+    ACT_DOOR_OPENED, ACT_DOOR_CLOSED
+)
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -329,35 +333,49 @@ class DeviceManager:
         
         data_manager.update_json(FILE_BUTTONS, update_func)
     
-    def _calculate_battery_percent(self, voltage_mv: int) -> Optional[int]:
-        """Calculate battery percentage from voltage using Li-Ion curve.
-        
-        ESP32 requires minimum 3.3V for WiFi operation, so we use:
-        - 4.2V (4200mV) = 100%
-        - 3.3V (3300mV) = 0%
-        
+    def _calculate_battery_percent(self, voltage_mv: int, battery_type: str = 'li_ion') -> Optional[int]:
+        """Calculate battery percentage from voltage using chemistry-specific curves.
+
         Args:
             voltage_mv: Battery voltage in millivolts
-            
+            battery_type: Battery chemistry ('li_ion' or 'cr123a')
+
         Returns:
             Battery percentage (0-100)
         """
         if voltage_mv == 0:
             return None
 
-        curve = [
-            (3000, 0),
-            (3300, 5),
-            (3400, 10),
-            (3500, 20),
-            (3600, 35),
-            (3700, 50),
-            (3800, 70),
-            (3900, 80),
-            (4000, 90),
-            (4100, 95),
-            (4200, 100),
-        ]
+        normalized_type = (battery_type or 'li_ion').strip().lower()
+        if normalized_type == 'cr123a':
+            # CR123A primary lithium discharge profile (under load approximation).
+            curve = [
+                (2200, 0),
+                (2400, 5),
+                (2500, 10),
+                (2600, 20),
+                (2700, 35),
+                (2800, 50),
+                (2900, 65),
+                (3000, 80),
+                (3050, 92),
+                (3100, 100),
+            ]
+        else:
+            # Li-Ion discharge profile.
+            curve = [
+                (3000, 0),
+                (3300, 5),
+                (3400, 10),
+                (3500, 20),
+                (3600, 35),
+                (3700, 50),
+                (3800, 70),
+                (3900, 80),
+                (4000, 90),
+                (4100, 95),
+                (4200, 100),
+            ]
 
         # Clamp extremes
         if voltage_mv <= curve[0][0]:
@@ -547,5 +565,156 @@ class DeviceManager:
         
         data_manager.update_json(FILE_MOTION_SENSORS, update_func)
         return self.get_motion_sensor_by_mac(mac_address)
+
+    # ===== Door Sensor Management =====
+
+    def get_door_sensor_by_mac(self, mac_address: str) -> Optional[Dict]:
+        """Get door sensor by MAC address.
+
+        Args:
+            mac_address: Door sensor MAC address (with colons)
+
+        Returns:
+            Door sensor dict or None if not found
+        """
+        sensors = data_manager.read_json(FILE_DOOR_SENSORS, default=[])
+        for sensor in sensors:
+            if sensor.get('mac_address', '').upper() == mac_address.upper():
+                return sensor
+        return None
+
+    def get_all_door_sensors(self) -> List[Dict]:
+        """Get all registered door sensors.
+
+        Returns:
+            List of door sensor dicts
+        """
+        return data_manager.read_json(FILE_DOOR_SENSORS, default=[])
+
+    def update_door_sensor_tracking(self, sensor_mac: str, gateway_radio_mac: Optional[str], rssi: Optional[int],
+                                    battery_mv: Optional[int] = None, light_level: Optional[int] = None,
+                                    version: Optional[str] = None, platform: Optional[str] = None,
+                                    battery_type: Optional[str] = None,
+                                    action: Optional[int] = None):
+        """Update door sensor tracking and state information.
+
+        Args:
+            sensor_mac: Door sensor MAC address
+            gateway_radio_mac: Gateway that received the signal (optional)
+            rssi: Signal strength (optional)
+            battery_mv: Battery voltage in millivolts (optional)
+            light_level: LDR light level reading (optional)
+            version: Firmware version (optional)
+            platform: Platform type 'esp32' or 'esp8266' (optional)
+            battery_type: Battery chemistry ('li_ion' or 'cr123a') (optional)
+            action: Door action code (ACT_DOOR_OPENED/ACT_DOOR_CLOSED/ACT_SYNC)
+        """
+        def update_func(sensors):
+            now_iso = datetime.now().isoformat()
+
+            for sensor in sensors:
+                if sensor.get('mac_address', '').upper() == sensor_mac.upper():
+                    sensor['last_seen'] = now_iso
+
+                    if gateway_radio_mac:
+                        sensor['last_seen_gateway'] = gateway_radio_mac.upper()
+
+                    if rssi is not None:
+                        sensor['rssi'] = rssi
+
+                    # Update battery chemistry if provided
+                    if battery_type:
+                        sensor['battery_type'] = battery_type
+
+                    # Update battery if provided
+                    if battery_mv is not None:
+                        active_battery_type = battery_type or sensor.get('battery_type', 'li_ion')
+                        sensor['battery_mv'] = battery_mv
+                        sensor['battery_percent'] = self._calculate_battery_percent(battery_mv, active_battery_type)
+                        sensor['battery_last_updated'] = now_iso
+
+                    # Update light level if provided
+                    if light_level is not None:
+                        sensor['light_level'] = light_level
+                        sensor['light_last_updated'] = now_iso
+
+                    # Update version if provided
+                    if version:
+                        sensor['version'] = version
+
+                    # Update platform if provided
+                    if platform:
+                        sensor['platform'] = platform
+
+                    # Track the latest door state transition event
+                    if action is not None:
+                        sensor['last_action'] = action
+                        sensor['last_action_at'] = now_iso
+                        if action == ACT_DOOR_OPENED:
+                            sensor['state'] = 'open'
+                            sensor['last_opened'] = now_iso
+                        elif action == ACT_DOOR_CLOSED:
+                            sensor['state'] = 'closed'
+                            sensor['last_closed'] = now_iso
+
+                    break
+
+            return sensors
+
+        data_manager.update_json(FILE_DOOR_SENSORS, update_func)
+
+    def add_door_sensor(self, mac_address: str, name: str) -> Optional[Dict]:
+        """Add new door sensor to registry.
+
+        Args:
+            mac_address: Door sensor MAC address
+            name: Display name
+
+        Returns:
+            Created door sensor dict
+        """
+        def update_func(sensors):
+            # Check if already exists
+            for sensor in sensors:
+                if sensor.get('mac_address', '').upper() == mac_address.upper():
+                    return sensors  # Already exists
+
+            # Create new entry
+            new_sensor = {
+                'id': uuid.uuid4().hex,
+                'name': name,
+                'mac_address': mac_address.upper(),
+                'configured': False,
+                'config': {
+                    'room_id': None,
+                    'room_name': '',
+                    'enabled': True,
+                    'light_sensitivity': 5,
+                    'time_slots': [],
+                },
+                'state': 'unknown',
+                'last_seen_gateway': None,
+                'rssi': None,
+                'last_seen': None,
+                'last_opened': None,
+                'last_closed': None,
+                'last_action': None,
+                'last_action_at': None,
+                'version': '0.0.0',
+                'platform': None,
+                'battery_type': 'li_ion',
+                'battery_mv': None,
+                'battery_percent': None,
+                'battery_last_updated': None,
+                'light_level': None,
+                'light_last_updated': None
+            }
+            sensors.append(new_sensor)
+
+            return sensors
+
+        data_manager.update_json(FILE_DOOR_SENSORS, update_func)
+        return self.get_door_sensor_by_mac(mac_address)
+
 # Global singleton instance
 device_manager = DeviceManager()

@@ -60,6 +60,10 @@ enum PacketType {
 #define ACT_DOOR_OPENED      11
 #define ACT_DOOR_CLOSED      12
 
+// --- PLATFORM/BATTERY FLAGS (packed in payload platform byte) ---
+#define PLATFORM_FLAG_ESP8266         0x01
+#define PLATFORM_FLAG_BATTERY_CR123A  0x80
+
 // --- STRUCTURES ---
 #pragma pack(push, 1) 
 

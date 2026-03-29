@@ -37,7 +37,7 @@
                 <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-green-700 to-green-500 bg-clip-text text-transparent mb-1">
                     Device Pairing
                 </h1>
-                <p class="text-gray-600">Add buttons, remotes, lightstrips, motion sensors, and gateways to your network</p>
+                <p class="text-gray-600">Add buttons, remotes, lightstrips, motion sensors, door sensors, and gateways to your network</p>
             </div>
             <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
                 <i class="fas fa-arrow-left mr-2"></i>Back to Home
@@ -105,6 +105,7 @@
                         <option value="button">Buttons Only</option>
                         <option value="light">Lightstrips Only</option>
                         <option value="motion">Motion Sensors Only</option>
+                        <option value="door">Door Sensors Only</option>
                     </select>
                 </div>
 
@@ -345,7 +346,8 @@ async function updatePairingStatus() {
                 'all': 'All Devices',
                 'button': 'Buttons/Remotes Only',
                 'light': 'Lightstrips Only',
-                'motion': 'Motion Sensors Only'
+                'motion': 'Motion Sensors Only',
+                'door': 'Door Sensors Only'
             };
             const types = data.allowed_types || ['all'];
             lookingFor.textContent = types.length === 1 ? (typeNames[types[0]] || types[0]) : 'All Devices';
@@ -432,7 +434,8 @@ async function loadPairedDevices() {
                     2: '🔘', // Button
                     3: '💡', // Light
                     4: '🎛️',  // Remote
-                    5: '📡'  // Motion Sensor
+                    5: '📡',  // Motion Sensor
+                    6: '🚪'  // Door Sensor
                 };
                 const icon = typeIcons[device.type] || '❓';
                 
@@ -455,7 +458,8 @@ async function loadPairedDevices() {
                     2: '/buttons',   // Button
                     3: '/lightstrips', // Light
                     4: '/buttons',   // Remote
-                    5: '/motion-sensors' // Motion Sensor
+                    5: '/motion-sensors', // Motion Sensor
+                    6: '/door-sensors' // Door Sensor
                 };
                 const configUrl = configUrls[device.type] || '#';
                 
@@ -623,6 +627,10 @@ async function confirmRename() {
             endpoint = `/motion-sensors/api/devices/${renameDeviceId}/rename`;
             method = 'POST';
             body = { name: newName };
+        } else if (renameDeviceType === 6) { // Door Sensor
+            endpoint = `/door-sensors/api/devices/${renameDeviceId}/rename`;
+            method = 'POST';
+            body = { name: newName };
         } else {
             showToast('Error', `Unsupported device type: ${renameDeviceType}`, 'error');
             return;
@@ -688,6 +696,8 @@ async function confirmDelete() {
             endpoint = `/buttons/api/devices/${deleteDeviceId}`;
         } else if (deleteDeviceType === 5) { // Motion Sensor
             endpoint = `/motion-sensors/api/devices/${deleteDeviceId}`;
+        } else if (deleteDeviceType === 6) { // Door Sensor
+            endpoint = `/door-sensors/api/devices/${deleteDeviceId}`;
         } else {
             showToast('Error', `Unsupported device type: ${deleteDeviceType}`, 'error');
             closeDeleteModal();

@@ -7,7 +7,24 @@ import logging
 import threading
 import time
 from typing import Dict, List, Tuple, Optional
-from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN, REMOTE_ACTION_SCENE_CYCLE, FILE_MOTION_SENSORS, ACT_MOTION_DETECTED, ACT_SYNC
+from constants import (
+    ACT_CLICK,
+    ACT_HOLDING,
+    ACT_RELEASE,
+    ACT_MOTION_DETECTED,
+    ACT_DOOR_OPENED,
+    ACT_DOOR_CLOSED,
+    ACT_SYNC,
+    TIMEOUT_SCENE_CYCLE,
+    FILE_LIGHTSTRIPS,
+    FILE_MOTION_SENSORS,
+    FILE_DOOR_SENSORS,
+    REMOTE_ACTION_NORMAL,
+    REMOTE_ACTION_TOGGLE,
+    REMOTE_ACTION_BRIGHTNESS_UP,
+    REMOTE_ACTION_BRIGHTNESS_DOWN,
+    REMOTE_ACTION_SCENE_CYCLE,
+)
 from controllers.hue_controller import Hue
 from controllers.color_controller import color_controller
 from services.hue_state_manager import hue_state_manager
@@ -819,6 +836,108 @@ class AutomationEngine:
                             logger.debug(f"Scheduled after action for {sensor_mac} in {after_duration}s")
                         else:
                             logger.debug(f"Restarted after action timer for {sensor_mac} ({after_duration}s)")
+
+    # ===== Door Sensor Event Handling =====
+
+    def handle_door_event(self, sensor_mac: str, action: int, light_level: Optional[int] = None,
+                          battery_mv: Optional[int] = None):
+        """Handle door sensor event and execute configured slot action.
+
+        Args:
+            sensor_mac: Door sensor MAC address
+            action: ACT_DOOR_OPENED, ACT_DOOR_CLOSED, or ACT_SYNC
+            light_level: Ambient light level (0-10)
+            battery_mv: Battery voltage in millivolts
+        """
+        if action not in (ACT_DOOR_OPENED, ACT_DOOR_CLOSED):
+            return
+
+        sensors = data_manager.read_json(FILE_DOOR_SENSORS, default=[])
+        sensor = None
+        for item in sensors:
+            if item.get('mac_address', '').upper() == sensor_mac.upper():
+                sensor = item
+                break
+
+        if not sensor:
+            logger.debug(f"Door event ignored: sensor {sensor_mac} not configured")
+            return
+
+        config = sensor.get('config', {})
+        if not config.get('enabled', True):
+            logger.debug(f"Door sensor {sensor_mac} is disabled, ignoring event")
+            return
+
+        room_id = config.get('room_id')
+        if not room_id:
+            logger.debug(f"Door sensor {sensor_mac} has no room assigned")
+            return
+
+        light_sensitivity = config.get('light_sensitivity', 5)
+        try:
+            light_sensitivity = int(light_sensitivity)
+        except (TypeError, ValueError):
+            light_sensitivity = 5
+
+        light_sensitivity = max(0, min(10, light_sensitivity))
+        if light_level is not None and light_level > light_sensitivity:
+            logger.debug(
+                f"Door sensor {sensor_mac} light level too high "
+                f"({light_level} > {light_sensitivity}), ignoring event"
+            )
+            return
+
+        current_slot = self._get_current_time_slot(config.get('time_slots', []))
+        if not current_slot:
+            logger.debug(f"Door sensor {sensor_mac} has no matching time slot")
+            return
+
+        if action == ACT_DOOR_OPENED:
+            event_name = 'opened'
+            action_key = 'open_action'
+            scene_key = 'open_scene_id'
+        else:
+            event_name = 'closed'
+            action_key = 'close_action'
+            scene_key = 'close_scene_id'
+
+        door_action = current_slot.get(action_key, 'nothing')
+        if door_action == 'nothing':
+            logger.debug(f"Door sensor {sensor_mac} event {event_name}: slot action is 'nothing'")
+            return
+
+        if door_action == 'scene' and current_slot.get('do_not_disturb', False):
+            room_state = hue_state_manager.get_room_state(room_id)
+            if room_state and room_state.get('is_on', False):
+                logger.debug(
+                    f"Door sensor {sensor_mac} DND mode: lights already on, skipping scene activation"
+                )
+                return
+
+        try:
+            if door_action == 'scene':
+                scene_id = current_slot.get(scene_key)
+                if not scene_id:
+                    logger.warning(
+                        f"Door sensor {sensor_mac} event {event_name}: "
+                        f"missing scene id for action '{action_key}'"
+                    )
+                    return
+
+                logger.info(
+                    f"🚪 Door sensor {sensor_mac} {event_name}: "
+                    f"activating scene {scene_id} in room {room_id}"
+                )
+                self._activate_scene(room_id, scene_id, source='door')
+            elif door_action == 'off':
+                logger.info(f"🚪 Door sensor {sensor_mac} {event_name}: turning off room {room_id}")
+                self._turn_off_room(room_id)
+            else:
+                logger.warning(
+                    f"Door sensor {sensor_mac} event {event_name}: unsupported action '{door_action}'"
+                )
+        except Exception as e:
+            logger.error(f"Failed handling door event for {sensor_mac}: {e}")
 
     
     def _get_current_time_slot(self, time_slots: List[Dict]) -> Optional[Dict]:

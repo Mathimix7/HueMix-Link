@@ -8,5 +8,6 @@ from .bridge import bridge_bp
 from .overview import overview_bp
 from .admin import admin_bp
 from .ota import ota_bp
+from .door_sensors import door_sensors_bp
 
-__all__ = ['main_bp', 'buttons_bp', 'api_bp', 'gateways_bp', 'lightstrips_bp', 'bridge_bp', 'overview_bp', 'admin_bp', 'ota_bp']
+__all__ = ['main_bp', 'buttons_bp', 'api_bp', 'gateways_bp', 'lightstrips_bp', 'bridge_bp', 'overview_bp', 'admin_bp', 'ota_bp', 'door_sensors_bp']

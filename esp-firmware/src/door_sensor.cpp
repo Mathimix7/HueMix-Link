@@ -25,6 +25,8 @@
 #define PIN_BATTERY  35   // Battery voltage ADC
 #define PIN_LDR      34   // LDR light sensor (analog input)
 #define PIN_LDR_POWER 33  // LDR power control (HIGH to enable, LOW to save battery)
+#define PIN_I2C_CTRL 17   // I2C transistor control (keep LOW to disable)
+#define PIN_BAT_TYPE 23   // Battery type detect: HIGH=CR123A, LOW=Li-Ion
 
 #define LED_ACTIVE_HIGH HIGH
 #define DOOR_OPEN_LEVEL HIGH
@@ -56,6 +58,7 @@ uint16_t battery_mv = 0;
 uint8_t light_level = 0;
 
 RTC_DATA_ATTR uint8_t lastReedLevel = 0xFF;
+RTC_DATA_ATTR uint8_t lastReportedReedLevel = 0xFF;
 uint8_t pendingDoorAction = ACT_SYNC;
 
 // Wakeup tracking
@@ -492,11 +495,14 @@ void sendPacket(uint8_t packetType, uint8_t action) {
       pkt.payload.door.version_patch = 0;
     #endif
 
+    uint8_t platformFlags = 0;
     #if defined(ESP8266)
-      pkt.payload.door.platform = 1;
-    #else
-      pkt.payload.door.platform = 0;
+      platformFlags |= PLATFORM_FLAG_ESP8266;
     #endif
+    if (digitalRead(PIN_BAT_TYPE) == HIGH) {
+      platformFlags |= PLATFORM_FLAG_BATTERY_CR123A;
+    }
+    pkt.payload.door.platform = platformFlags;
 
     pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   } else if (packetType == PKT_HELLO) {
@@ -516,11 +522,14 @@ void sendPacket(uint8_t packetType, uint8_t action) {
       pkt.payload.raw[4] = 0;
     #endif
 
+    uint8_t platformFlags = 0;
     #if defined(ESP8266)
-      pkt.payload.raw[5] = 1;
-    #else
-      pkt.payload.raw[5] = 0;
+      platformFlags |= PLATFORM_FLAG_ESP8266;
     #endif
+    if (digitalRead(PIN_BAT_TYPE) == HIGH) {
+      platformFlags |= PLATFORM_FLAG_BATTERY_CR123A;
+    }
+    pkt.payload.raw[5] = platformFlags;
 
     pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   }
@@ -740,6 +749,8 @@ void goToSleepDoor() {
   Serial.flush();
 
   pinMode(PIN_LED, INPUT);
+  pinMode(PIN_I2C_CTRL, OUTPUT);
+  digitalWrite(PIN_I2C_CTRL, LOW);
   WiFi.mode(WIFI_OFF);
   btStop();
 
@@ -747,6 +758,27 @@ void goToSleepDoor() {
   // Keep EXT1 wake for reset button exactly as requested.
   esp_sleep_enable_ext1_wakeup((1ULL << PIN_RESET), ESP_EXT1_WAKEUP_ANY_HIGH);
   esp_deep_sleep_start();
+}
+  
+void sendDoorStateUpdate(uint8_t reedLevel, const char* reason) {
+  pendingDoorAction = actionFromReedLevel(reedLevel);
+  lastReedLevel = reedLevel;
+  lastReportedReedLevel = reedLevel;
+
+  if (HOME_ID == 0) {
+    // Unpaired - send HELLO packet on state changes so pairing can still happen.
+    sendPacket(PKT_HELLO, 0);
+    Serial.printf("[DOOR] State changed (%s) while unpaired -> HELLO sent\n", reason);
+  } else {
+    sendPacket(PKT_DOOR_EVENT, pendingDoorAction);
+    Serial.printf("[DOOR] State changed (%s): %s\n", reason,
+      pendingDoorAction == ACT_DOOR_OPENED ? "OPENED" : "CLOSED");
+  }
+
+  lastActivityTime = millis();
+
+  // Allow packet transmission before further state checks/sleep decisions.
+  delay(TX_SETTLE_TIME);
 }
 
 int getWakeupPin() {
@@ -764,6 +796,9 @@ void setup() {
   pinMode(PIN_REED, INPUT);
   pinMode(PIN_RESET, INPUT);
   pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_I2C_CTRL, OUTPUT);
+  pinMode(PIN_BAT_TYPE, INPUT_PULLDOWN);
+  digitalWrite(PIN_I2C_CTRL, LOW);
   digitalWrite(PIN_LED, !LED_ACTIVE_HIGH);
   analogRead(PIN_BATTERY);  // Dummy read to initialize ADC
   analogRead(PIN_LDR);      // Dummy read to initialize ADC
@@ -790,6 +825,9 @@ void setup() {
   prefs.getBytes("gw", &gateways, sizeof(gateways));
   if (lastReedLevel == 0xFF) {
     lastReedLevel = readReedLevelStable();
+  }
+  if (lastReportedReedLevel == 0xFF) {
+    lastReportedReedLevel = lastReedLevel;
   }
 
   WiFi.mode(WIFI_STA);
@@ -863,22 +901,8 @@ void loop() {
     Serial.printf("Light level: %d\n", light_level);
 
     uint8_t currentReedLevel = readReedLevelStable();
-    if (currentReedLevel != lastReedLevel) {
-      pendingDoorAction = actionFromReedLevel(currentReedLevel);
-      lastReedLevel = currentReedLevel;
-
-      if (HOME_ID == 0) {
-        // Unpaired - send HELLO packet on wakeup to allow pairing.
-        sendPacket(PKT_HELLO, 0);
-        Serial.println("Door transition (pair request)");
-      } else {
-        // Paired - send door opened/closed event.
-        sendPacket(PKT_DOOR_EVENT, pendingDoorAction);
-        Serial.printf("Door transition (paired): %s\n", pendingDoorAction == ACT_DOOR_OPENED ? "OPENED" : "CLOSED");
-      }
-
-      // Wait for transmission to complete
-      delay(TX_SETTLE_TIME);
+    if (currentReedLevel != lastReportedReedLevel) {
+      sendDoorStateUpdate(currentReedLevel, "EXT0 wake");
 
       // If pairing just happened, wait for gateway list and save
       if (homeSetupDone) {
@@ -893,7 +917,34 @@ void loop() {
         homeSetupDone = false;
       }
     } else {
-      Serial.println("[DOOR] Wakeup without stable state change (debounced)");
+      Serial.println("[DOOR] Wakeup without new reportable state change (debounced)");
+    }
+  }
+
+  static unsigned long lastReedPollMs = 0;
+  if (millis() - lastReedPollMs >= 120) {
+    lastReedPollMs = millis();
+
+    uint8_t currentReedLevel = readReedLevelStable();
+    if (currentReedLevel != lastReportedReedLevel) {
+      // Match wakeup behavior: refresh ambient light reading right before event send.
+      getLightLevel();
+      Serial.printf("Light level: %d\n", light_level);
+
+      sendDoorStateUpdate(currentReedLevel, "awake polling");
+
+      // Pairing flow can also happen during awake polling in unpaired mode.
+      if (homeSetupDone) {
+        Serial.println("Pairing detected, waiting for gateway list...");
+        delay(200);
+
+        prefs.putUInt("hid", HOME_ID);
+        ledBlink(5, 50);
+        Serial.println("Paired! Requesting Full Gateway List...");
+        sendPacket(PKT_DOOR_EVENT, ACT_SYNC);
+        delay(100);
+        homeSetupDone = false;
+      }
     }
   }
   
@@ -1043,6 +1094,7 @@ void loop() {
         HOME_ID = 0;
         gateways.count = 0;
         lastReedLevel = readReedLevelStable();
+        lastReportedReedLevel = lastReedLevel;
         Serial.println("Reset complete, restarting...");
         ESP.restart();
       }

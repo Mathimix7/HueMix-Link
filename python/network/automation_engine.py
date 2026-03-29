@@ -260,8 +260,7 @@ class AutomationEngine:
             
             if time_since_last > self.scene_timeout:
                 # Timeout expired - turn off room
-                room_state = hue_state_manager.get_room_state(room_id)
-                room_is_on = room_state.get('is_on', False) if room_state else False
+                room_is_on = self._is_room_currently_on(room_id)
                 
                 if room_is_on:
                     logger.info(f"Remote {remote_mac}: Timeout expired, turning off room {room_id}")
@@ -397,8 +396,7 @@ class AutomationEngine:
             room_id: Room ID to toggle
         """
         try:
-            room_state = hue_state_manager.get_room_state(room_id)
-            room_is_on = room_state.get('is_on', False) if room_state else False
+            room_is_on = self._is_room_currently_on(room_id)
             
             if room_is_on:
                 logger.info(f"Remote toggle: Turning off room {room_id}")
@@ -442,8 +440,7 @@ class AutomationEngine:
             
             if time_since_last > self.scene_timeout:
                 # Timeout expired - check if room is on using state manager
-                room_state = hue_state_manager.get_room_state(room_id)
-                room_is_on = room_state.get('is_on', False) if room_state else False
+                room_is_on = self._is_room_currently_on(room_id)
                 
                 if room_is_on:
                     # Turn off room
@@ -545,6 +542,54 @@ class AutomationEngine:
         hue_state_manager.set_room_scene(room_id, scene_id, old_scene_id, source=source)
         
         logger.info(f"Activated scene {scene_id} in room {room_id}")
+
+    def _resolve_grouped_light_id(self, room_id: str) -> Optional[str]:
+        """Resolve grouped_light ID for a room, hydrating state manager on cache miss."""
+        room_state = hue_state_manager.get_room_state(room_id)
+        if room_state:
+            grouped_light_id = room_state.get('grouped_light_id')
+            if grouped_light_id:
+                return grouped_light_id
+
+        try:
+            room = self.hue.get_room(room_id)
+        except Exception as e:
+            logger.error(f"Failed to fetch room {room_id} while resolving grouped_light: {e}")
+            return None
+
+        room_name = room.get('metadata', {}).get('name')
+        grouped_light_id = None
+        for service in room.get('services', []):
+            if service.get('rtype') == 'grouped_light':
+                grouped_light_id = service.get('rid')
+                break
+
+        if not grouped_light_id:
+            logger.error(f"No grouped_light found for room {room_id}")
+            return None
+
+        hue_state_manager.update_room(
+            room_id=room_id,
+            name=room_name,
+            grouped_light_id=grouped_light_id,
+        )
+        return grouped_light_id
+
+    def _is_room_currently_on(self, room_id: str) -> bool:
+        """Get room on/off state, falling back to live bridge query when cache is incomplete."""
+        room_state = hue_state_manager.get_room_state(room_id)
+        has_mapping = bool(room_state and room_state.get('grouped_light_id'))
+
+        if has_mapping and room_state.get('is_on') is not None:
+            return bool(room_state.get('is_on'))
+
+        try:
+            is_on = self.hue.is_room_on(room_id)
+            hue_state_manager.update_room(room_id=room_id, is_on=is_on)
+            return bool(is_on)
+        except Exception as e:
+            logger.warning(f"Failed to query live room state for {room_id}: {e}")
+            return bool(room_state.get('is_on', False)) if room_state else False
     
     def _turn_off_room(self, room_id: str):
         """Turn off all lights in a room.
@@ -554,18 +599,16 @@ class AutomationEngine:
         """
         # Turn off room via grouped_light
         room_state = hue_state_manager.get_room_state(room_id)
-        
-        if not room_state:
-            logger.error(f"Room {room_id} not found in state manager")
+        grouped_light_id = self._resolve_grouped_light_id(room_id)
+        if not grouped_light_id:
+            logger.error(f"Cannot turn off room {room_id}: grouped_light could not be resolved")
             return
-        
-        grouped_light_id = room_state.get('grouped_light_id')
-        if grouped_light_id:
-            payload = {'on': {'on': False}}
-            self.hue._put_resource('grouped_light', grouped_light_id, payload)
-        
+
+        payload = {'on': {'on': False}}
+        self.hue._put_resource('grouped_light', grouped_light_id, payload)
+
         # Update state manager
-        old_scene_id = room_state.get('current_scene_id')
+        old_scene_id = room_state.get('current_scene_id') if room_state else None
         hue_state_manager.set_room_scene(room_id, None, old_scene_id, source='button')
         
         logger.info(f"Turned off room {room_id}")
@@ -577,16 +620,13 @@ class AutomationEngine:
             room_id: Room ID
         """
         # Turn on room via grouped_light
-        room_state = hue_state_manager.get_room_state(room_id)
-        
-        if not room_state:
-            logger.error(f"Room {room_id} not found in state manager")
+        grouped_light_id = self._resolve_grouped_light_id(room_id)
+        if not grouped_light_id:
+            logger.error(f"Cannot turn on room {room_id}: grouped_light could not be resolved")
             return
-        
-        grouped_light_id = room_state.get('grouped_light_id')
-        if grouped_light_id:
-            payload = {'on': {'on': True}}
-            self.hue._put_resource('grouped_light', grouped_light_id, payload)
+
+        payload = {'on': {'on': True}}
+        self.hue._put_resource('grouped_light', grouped_light_id, payload)
         
         logger.info(f"Turned on room {room_id}")
     

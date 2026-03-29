@@ -920,12 +920,6 @@ class AutomationEngine:
             light_sensitivity = 5
 
         light_sensitivity = max(0, min(10, light_sensitivity))
-        if light_level is not None and light_level > light_sensitivity:
-            logger.debug(
-                f"Door sensor {sensor_mac} light level too high "
-                f"({light_level} > {light_sensitivity}), ignoring event"
-            )
-            return
 
         current_slot = self._get_current_time_slot(config.get('time_slots', []))
         if not current_slot:
@@ -944,6 +938,13 @@ class AutomationEngine:
         door_action = current_slot.get(action_key, 'nothing')
         if door_action == 'nothing':
             logger.debug(f"Door sensor {sensor_mac} event {event_name}: slot action is 'nothing'")
+            return
+
+        if door_action == 'scene' and light_level is not None and light_level > light_sensitivity:
+            logger.debug(
+                f"Door sensor {sensor_mac} light level too high "
+                f"({light_level} > {light_sensitivity}), ignoring scene action"
+            )
             return
 
         if door_action == 'scene' and current_slot.get('do_not_disturb', False):

@@ -55,6 +55,10 @@ class AutomationEngine:
         # Motion sensor state tracking: mac -> {after_timer, room_id, expected_scene_id, last_expected_clear_time}
         self._motion_states: Dict[str, Dict] = {}
         self._motion_lock = threading.RLock()
+
+        # Door sensor state tracking: mac -> {close_timer, close_timer_id}
+        self._door_states: Dict[str, Dict] = {}
+        self._door_lock = threading.RLock()
         
         # Room manual turn-off tracking: room_id -> timestamp (to prevent motion triggers after manual off)
         self._room_manual_off_times: Dict[str, float] = {}
@@ -104,6 +108,14 @@ class AutomationEngine:
         # Unsubscribe from state changes
         hue_state_manager.unsubscribe_scene_changes(self._on_hue_scene_changed)
         hue_state_manager.unsubscribe_room_changes(self._on_hue_room_changed)
+
+        # Cancel pending delayed door close actions
+        with self._door_lock:
+            for state in self._door_states.values():
+                timer = state.get('close_timer')
+                if timer and timer.is_alive():
+                    timer.cancel()
+            self._door_states.clear()
         
         logger.info("AutomationEngine stopped")
     
@@ -913,6 +925,11 @@ class AutomationEngine:
             logger.debug(f"Door sensor {sensor_mac} has no room assigned")
             return
 
+        if action == ACT_DOOR_OPENED:
+            self._cancel_pending_door_close_timer(sensor_mac, reason='door opened')
+        else:
+            self._cancel_pending_door_close_timer(sensor_mac, reason='new close event received')
+
         light_sensitivity = config.get('light_sensitivity', 5)
         try:
             light_sensitivity = int(light_sensitivity)
@@ -936,9 +953,17 @@ class AutomationEngine:
             scene_key = 'close_scene_id'
 
         door_action = current_slot.get(action_key, 'nothing')
+        close_delay_seconds = 0
+        if action == ACT_DOOR_CLOSED:
+            close_delay_seconds = self._normalize_close_delay_seconds(
+                current_slot.get('close_delay_seconds', 0)
+            )
+
         if door_action == 'nothing':
             logger.debug(f"Door sensor {sensor_mac} event {event_name}: slot action is 'nothing'")
             return
+
+        scene_id = current_slot.get(scene_key) if door_action == 'scene' else None
 
         if door_action == 'scene' and light_level is not None and light_level > light_sensitivity:
             logger.debug(
@@ -955,16 +980,134 @@ class AutomationEngine:
                 )
                 return
 
+        if door_action == 'scene' and not scene_id:
+            logger.warning(
+                f"Door sensor {sensor_mac} event {event_name}: "
+                f"missing scene id for action '{action_key}'"
+            )
+            return
+
+        if action == ACT_DOOR_CLOSED and close_delay_seconds > 0:
+            self._schedule_delayed_door_close_action(
+                sensor_mac,
+                room_id,
+                door_action,
+                scene_id,
+                close_delay_seconds,
+            )
+            return
+
+        self._execute_door_slot_action(sensor_mac, room_id, event_name, door_action, scene_id)
+
+    @staticmethod
+    def _normalize_close_delay_seconds(raw_delay: object) -> int:
+        """Normalize close delay to supported bounds."""
+        try:
+            delay_seconds = int(raw_delay)
+        except (TypeError, ValueError):
+            return 0
+
+        return max(0, min(86400, delay_seconds))
+
+    def _cancel_pending_door_close_timer(self, sensor_mac: str, reason: Optional[str] = None):
+        """Cancel any pending delayed close action for a door sensor."""
+        cancelled = False
+        with self._door_lock:
+            state = self._door_states.get(sensor_mac)
+            if not state:
+                return
+
+            timer = state.get('close_timer')
+            if timer and timer.is_alive():
+                timer.cancel()
+                cancelled = True
+
+            state['close_timer'] = None
+            state['close_timer_id'] = int(state.get('close_timer_id', 0)) + 1
+
+        if cancelled:
+            if reason:
+                logger.debug(f"Cancelled pending delayed close action for {sensor_mac}: {reason}")
+            else:
+                logger.debug(f"Cancelled pending delayed close action for {sensor_mac}")
+
+    def _schedule_delayed_door_close_action(
+        self,
+        sensor_mac: str,
+        room_id: str,
+        door_action: str,
+        scene_id: Optional[str],
+        delay_seconds: int,
+    ):
+        """Schedule door close action after configured delay."""
+        with self._door_lock:
+            state = self._door_states.setdefault(sensor_mac, {})
+
+            old_timer = state.get('close_timer')
+            if old_timer and old_timer.is_alive():
+                old_timer.cancel()
+
+            timer_id = int(state.get('close_timer_id', 0)) + 1
+            state['close_timer_id'] = timer_id
+
+            timer = threading.Timer(
+                delay_seconds,
+                self._execute_delayed_door_close_action,
+                args=(sensor_mac, timer_id, room_id, door_action, scene_id, delay_seconds),
+            )
+            timer.daemon = True
+            timer.start()
+            state['close_timer'] = timer
+
+        if door_action == 'scene' and scene_id:
+            action_desc = f"activate scene {scene_id}"
+        elif door_action == 'off':
+            action_desc = "turn off room"
+        else:
+            action_desc = door_action
+
+        logger.info(
+            f"🚪 Door sensor {sensor_mac} closed: scheduled action '{action_desc}' "
+            f"in room {room_id} after {delay_seconds}s"
+        )
+
+    def _execute_delayed_door_close_action(
+        self,
+        sensor_mac: str,
+        timer_id: int,
+        room_id: str,
+        door_action: str,
+        scene_id: Optional[str],
+        delay_seconds: int,
+    ):
+        """Execute a previously scheduled delayed close action."""
+        with self._door_lock:
+            state = self._door_states.get(sensor_mac)
+            if not state or state.get('close_timer_id') != timer_id:
+                logger.debug(f"Ignoring stale delayed close action for {sensor_mac}")
+                return
+
+        logger.info(
+            f"🚪 Door sensor {sensor_mac} closed: executing delayed action after {delay_seconds}s"
+        )
+        self._execute_door_slot_action(sensor_mac, room_id, 'closed (delayed)', door_action, scene_id)
+
+        with self._door_lock:
+            state = self._door_states.get(sensor_mac)
+            if state and state.get('close_timer_id') == timer_id:
+                state['close_timer'] = None
+
+    def _execute_door_slot_action(
+        self,
+        sensor_mac: str,
+        room_id: str,
+        event_name: str,
+        door_action: str,
+        scene_id: Optional[str],
+    ):
+        """Execute resolved door slot action immediately."""
         try:
             if door_action == 'scene':
-                scene_id = current_slot.get(scene_key)
-                if not scene_id:
-                    logger.warning(
-                        f"Door sensor {sensor_mac} event {event_name}: "
-                        f"missing scene id for action '{action_key}'"
-                    )
-                    return
-
                 logger.info(
                     f"🚪 Door sensor {sensor_mac} {event_name}: "
                     f"activating scene {scene_id} in room {room_id}"

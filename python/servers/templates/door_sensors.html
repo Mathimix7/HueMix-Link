@@ -220,7 +220,7 @@
                             </div>
                             <p class="mt-3 text-xs text-gray-600 text-center">
                                 <i class="fas fa-info-circle mr-1 text-blue-500"></i>
-                                Door actions run only when ambient light is below this level
+                                Door scene actions run only when ambient light is below this level
                             </p>
                         </div>
                     </div>
@@ -292,6 +292,21 @@
                             <select id="slot-close-scene-select" class="w-full border border-blue-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
                                 <option value="">-- Select a scene --</option>
                             </select>
+                        </div>
+                        <div id="slot-close-delay-container" class="hidden mt-3">
+                            <label for="slot-close-delay-seconds" class="block text-sm font-medium text-blue-800 mb-1">
+                                <i class="fas fa-hourglass-half mr-1"></i>Delay Before Close Action (seconds)
+                            </label>
+                            <input
+                                type="number"
+                                id="slot-close-delay-seconds"
+                                min="0"
+                                max="86400"
+                                step="1"
+                                value="0"
+                                class="w-full border border-blue-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                            >
+                            <p class="text-xs text-blue-700 mt-1">0 = immediate. If the door opens again, any pending close action is canceled.</p>
                         </div>
                     </div>
 
@@ -834,6 +849,28 @@ function formatDoorSlotAction(action, sceneName) {
     return 'Do Nothing';
 }
 
+function normalizeCloseDelaySeconds(value) {
+    const parsed = parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+        return 0;
+    }
+    return Math.max(0, Math.min(86400, parsed));
+}
+
+function formatDurationSeconds(totalSeconds) {
+    const seconds = normalizeCloseDelaySeconds(totalSeconds);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainderSeconds = seconds % 60;
+    const parts = [];
+
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (remainderSeconds > 0 || parts.length === 0) parts.push(`${remainderSeconds}s`);
+
+    return parts.join(' ');
+}
+
 function initializeLightSensitivityPicker() {
     const container = document.getElementById('light-sensitivity-picker');
     if (!container) return;
@@ -901,6 +938,8 @@ function renderTimeSlots() {
 
         const openAction = formatDoorSlotAction(slot.open_action, slot.open_scene_name);
         const closeAction = formatDoorSlotAction(slot.close_action, slot.close_scene_name);
+        const closeDelaySeconds = normalizeCloseDelaySeconds(slot.close_delay_seconds);
+        const closeDelaySuffix = closeDelaySeconds > 0 ? ` after ${formatDurationSeconds(closeDelaySeconds)}` : '';
         const dndBadge = slot.do_not_disturb
             ? '<span class="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded"><i class="fas fa-moon mr-1"></i>DND</span>'
             : '';
@@ -917,7 +956,7 @@ function renderTimeSlots() {
                         <i class="fas fa-door-open text-xs mr-1"></i>Door opens -> ${escapeHtml(openAction)}
                     </div>
                     <div class="text-sm text-gray-600">
-                        <i class="fas fa-door-closed text-xs mr-1"></i>Door closes -> ${escapeHtml(closeAction)}
+                        <i class="fas fa-door-closed text-xs mr-1"></i>Door closes -> ${escapeHtml(`${closeAction}${closeDelaySuffix}`)}
                     </div>
                 </div>
                 <button onclick="deleteTimeSlot(${index}); event.stopPropagation();" class="text-red-600 hover:text-red-800 p-1 inline-flex items-center">
@@ -961,6 +1000,7 @@ function updateTimeSlotActionVisibility() {
 
     const openContainer = document.getElementById('slot-open-scene-container');
     const closeContainer = document.getElementById('slot-close-scene-container');
+    const closeDelayContainer = document.getElementById('slot-close-delay-container');
 
     if (openAction === 'scene') {
         openContainer.classList.remove('hidden');
@@ -972,6 +1012,12 @@ function updateTimeSlotActionVisibility() {
         closeContainer.classList.remove('hidden');
     } else {
         closeContainer.classList.add('hidden');
+    }
+
+    if (closeAction === 'nothing') {
+        closeDelayContainer.classList.add('hidden');
+    } else {
+        closeDelayContainer.classList.remove('hidden');
     }
 }
 
@@ -990,6 +1036,7 @@ function addTimeSlot() {
     document.getElementById('slot-close-action').value = 'nothing';
     document.getElementById('slot-open-scene-select').value = '';
     document.getElementById('slot-close-scene-select').value = '';
+    document.getElementById('slot-close-delay-seconds').value = '0';
     document.getElementById('slot-dnd').checked = false;
 
     loadTimeSlotScenes().then(() => {
@@ -1009,6 +1056,7 @@ function editTimeSlot(index) {
         document.getElementById('slot-close-action').value = slot.close_action || 'nothing';
         document.getElementById('slot-open-scene-select').value = slot.open_scene_id || '';
         document.getElementById('slot-close-scene-select').value = slot.close_scene_id || '';
+        document.getElementById('slot-close-delay-seconds').value = String(normalizeCloseDelaySeconds(slot.close_delay_seconds));
         document.getElementById('slot-dnd').checked = slot.do_not_disturb || false;
         updateTimeSlotActionVisibility();
         document.getElementById('timeslot-modal').classList.remove('hidden');
@@ -1037,12 +1085,14 @@ function saveTimeSlot() {
     const startTime = document.getElementById('slot-start-time').value;
     const openAction = document.getElementById('slot-open-action').value;
     const closeAction = document.getElementById('slot-close-action').value;
+    const closeDelayInput = document.getElementById('slot-close-delay-seconds').value;
 
     const openSceneSelect = document.getElementById('slot-open-scene-select');
     const closeSceneSelect = document.getElementById('slot-close-scene-select');
 
     const openSceneId = openAction === 'scene' ? (openSceneSelect.value || '') : '';
     const closeSceneId = closeAction === 'scene' ? (closeSceneSelect.value || '') : '';
+    const parsedCloseDelay = closeDelayInput === '' ? 0 : parseInt(closeDelayInput, 10);
 
     if (!startTime) {
         showToast('Missing Time', 'Please set a slot start time', 'error');
@@ -1059,6 +1109,13 @@ function saveTimeSlot() {
         return;
     }
 
+    if (!Number.isInteger(parsedCloseDelay) || parsedCloseDelay < 0 || parsedCloseDelay > 86400) {
+        showToast('Invalid Delay', 'Close delay must be a whole number between 0 and 86400 seconds', 'warning');
+        return;
+    }
+
+    const closeDelaySeconds = closeAction === 'nothing' ? 0 : parsedCloseDelay;
+
     const timeSlot = {
         start_time: startTime,
         open_action: openAction,
@@ -1067,6 +1124,7 @@ function saveTimeSlot() {
         close_action: closeAction,
         close_scene_id: closeSceneId,
         close_scene_name: closeAction === 'scene' && closeSceneId ? closeSceneSelect.options[closeSceneSelect.selectedIndex].text : '',
+        close_delay_seconds: closeDelaySeconds,
         do_not_disturb: document.getElementById('slot-dnd').checked,
     };
 
@@ -1106,7 +1164,10 @@ async function openConfigModal(deviceId) {
     roomSelect.value = config.room_id || '';
 
     currentTimeSlots = Array.isArray(config.time_slots)
-        ? config.time_slots.map(slot => ({ ...slot }))
+        ? config.time_slots.map(slot => ({
+            ...slot,
+            close_delay_seconds: normalizeCloseDelaySeconds(slot.close_delay_seconds),
+        }))
         : [];
 
     const timeSlotsSection = document.getElementById('time-slots-section');

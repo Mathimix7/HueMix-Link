@@ -46,6 +46,16 @@ def _normalize_time_slots(raw_slots):
         open_scene_id = (slot.get('open_scene_id') or '').strip() if open_action == 'scene' else ''
         close_scene_id = (slot.get('close_scene_id') or '').strip() if close_action == 'scene' else ''
 
+        try:
+            close_delay_seconds = int(slot.get('close_delay_seconds', 0))
+        except (TypeError, ValueError):
+            raise ValueError(
+                f'time_slots[{index}] close_delay_seconds must be an integer between 0 and 86400'
+            )
+
+        if close_delay_seconds < 0 or close_delay_seconds > 86400:
+            raise ValueError(f'time_slots[{index}] close_delay_seconds must be between 0 and 86400')
+
         if open_action == 'scene' and not open_scene_id:
             raise ValueError(f'time_slots[{index}] open action requires a scene')
         if close_action == 'scene' and not close_scene_id:
@@ -59,6 +69,7 @@ def _normalize_time_slots(raw_slots):
             'close_action': close_action,
             'close_scene_id': close_scene_id,
             'close_scene_name': (slot.get('close_scene_name') or '').strip() if close_action == 'scene' else '',
+            'close_delay_seconds': close_delay_seconds if close_action != 'nothing' else 0,
             'do_not_disturb': bool(slot.get('do_not_disturb', False)),
         })
 

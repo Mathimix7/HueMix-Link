@@ -3821,12 +3821,13 @@
 					(hide yes)
 				)
 			)
-			(property "Description" ""
+			(property "Description" "High Efficiency Single Inductor Buck-Boost Converter with 4A Switch 14-VSON -40 to 85"
 				(at 0 0 0)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
+					(justify bottom)
 					(hide yes)
 				)
 			)
@@ -3931,16 +3932,6 @@
 				)
 			)
 			(property "AVAILABILITY" "Good"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-					(hide yes)
-				)
-			)
-			(property "DESCRIPTION" "High Efficiency Single Inductor Buck-Boost Converter with 4A Switch 14-VSON -40 to 85"
 				(at 0 0 0)
 				(effects
 					(font
@@ -4743,12 +4734,6 @@
 		(uuid "5a8d5be1-f234-46ec-80f1-60b4db8dd4fb")
 	)
 	(junction
-		(at 152.4 43.18)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "5adffa46-697b-491e-a866-367c11610ca8")
-	)
-	(junction
 		(at 129.54 170.18)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -4813,6 +4798,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "a6ec5e68-d40b-4207-a3a8-9cdd2fcf86c8")
+	)
+	(junction
+		(at 152.4 52.07)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "b7900c4d-1f8c-49e3-8b94-8d5d63eae243")
 	)
 	(junction
 		(at 44.45 29.21)
@@ -4968,6 +4959,16 @@
 	)
 	(wire
 		(pts
+			(xy 156.21 43.18) (xy 156.21 52.07)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "19d04104-4f2e-4745-865c-967a03fb8177")
+	)
+	(wire
+		(pts
 			(xy 270.51 146.05) (xy 260.35 146.05)
 		)
 		(stroke
@@ -5108,7 +5109,7 @@
 	)
 	(wire
 		(pts
-			(xy 152.4 50.8) (xy 152.4 49.53)
+			(xy 152.4 50.8) (xy 152.4 52.07)
 		)
 		(stroke
 			(width 0)
@@ -5848,6 +5849,16 @@
 	)
 	(wire
 		(pts
+			(xy 156.21 52.07) (xy 152.4 52.07)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "be3915a1-03f0-4596-8607-32c5ab36862f")
+	)
+	(wire
+		(pts
 			(xy 242.57 64.77) (xy 247.65 64.77)
 		)
 		(stroke
@@ -6088,16 +6099,6 @@
 	)
 	(wire
 		(pts
-			(xy 152.4 43.18) (xy 156.21 43.18)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e679e411-d330-408a-a830-016352f6ee31")
-	)
-	(wire
-		(pts
 			(xy 82.55 39.37) (xy 59.69 39.37)
 		)
 		(stroke
@@ -6215,6 +6216,16 @@
 			(type default)
 		)
 		(uuid "f69e1c66-ce16-4674-bcd6-3bd7edb86243")
+	)
+	(wire
+		(pts
+			(xy 152.4 52.07) (xy 152.4 53.34)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f9f4935b-9034-499e-b7e4-7e3d8f66105f")
 	)
 	(wire
 		(pts
@@ -6640,7 +6651,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "10k"
+		(property "Value" "270k"
 			(at 207.01 148.59 0)
 			(effects
 				(font
@@ -8692,7 +8703,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 152.4 49.53 0)
+		(at 152.4 53.34 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -8700,7 +8711,7 @@
 		(dnp no)
 		(uuid "6bcad69d-cf53-4f85-84a0-e65f3dd075e2")
 		(property "Reference" "#PWR05"
-			(at 152.4 55.88 0)
+			(at 152.4 59.69 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8709,7 +8720,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 152.4 55.88 0)
+			(at 152.4 59.69 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8717,7 +8728,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 152.4 49.53 0)
+			(at 152.4 53.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8726,7 +8737,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 152.4 49.53 0)
+			(at 152.4 53.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8735,7 +8746,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 152.4 49.53 0)
+			(at 152.4 53.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)

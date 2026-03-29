@@ -371,7 +371,7 @@ function renderDevicesTable() {
     otherDevices.forEach(device => {
         // For buttons, remotes, and motion sensors, match firmware based on platform
         let firmwareKey = device.type;
-        if ((device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor') && device.platform) {
+        if ((device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor' || device.type === 'door_sensor') && device.platform) {
             firmwareKey = `${device.type}_${device.platform}`;
         }
         // For lightstrips, match firmware based on model_id
@@ -493,7 +493,7 @@ function renderDevicesTable() {
     html += sortedOthers.map(device => {
         const firmwareKey = device.firmwareKey || device.type;
         const availableVersion = availableFirmwares[firmwareKey]?.version || '--';
-        const platformLabel = (device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor') && device.platform ? ` (${device.platform.toUpperCase()})` : '';
+        const platformLabel = (device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor' || device.type === 'door_sensor') && device.platform ? ` (${device.platform.toUpperCase()})` : '';
         
         // Model label for lightstrips
         const modelLabel = device.type === 'lightstrip' && device.model_id ? ` (Model ${device.model_id}: ${modelNames[device.model_id] || 'Unknown'})` : '';
@@ -555,7 +555,8 @@ function getTypeColor(type) {
         'lightstrip': 'yellow',
         'button': 'pink',
         'remote': 'pink',
-        'motion_sensor': 'teal'
+        'motion_sensor': 'teal',
+        'door_sensor': 'red'
     };
     return colors[type] || 'gray';
 }
@@ -568,7 +569,8 @@ function getTypeIcon(type) {
         'lightstrip': '<i class="fas fa-lightbulb"></i>',
         'button': '<i class="fas fa-microchip"></i>',
         'remote': '<i class="fas fa-microchip"></i>',
-        'motion_sensor': '<i class="fas fa-running"></i>'
+        'motion_sensor': '<i class="fas fa-running"></i>',
+        'door_sensor': '<i class="fas fa-door-open"></i>'
     };
     return icons[type] || '<i class="fas fa-question"></i>';
 }
@@ -581,7 +583,8 @@ function formatDeviceType(type) {
         'lightstrip': 'Lightstrip',
         'button': 'Button',
         'remote': 'Remote',
-        'motion_sensor': 'Motion Sensor'
+        'motion_sensor': 'Motion Sensor',
+        'door_sensor': 'Door Sensor'
     };
     return typeNames[type] || type.charAt(0).toUpperCase() + type.slice(1);
 }
@@ -717,8 +720,8 @@ function showProgressModal(deviceMac, deviceType) {
     document.getElementById('progressDevice').textContent = `Device: ${device?.name || deviceMac}`;
     document.getElementById('progressModal').classList.remove('hidden');
     
-    // Show instructions for buttons/remotes/motion sensors
-    if (deviceType === 'button' || deviceType === 'remote' || deviceType === 'motion_sensor') {
+    // Show instructions for devices that require reset-button OTA entry.
+    if (deviceType === 'button' || deviceType === 'remote' || deviceType === 'motion_sensor' || deviceType === 'door_sensor') {
         document.getElementById('progressInstructions').classList.remove('hidden');
         document.getElementById('instructionsText').textContent = 
             'Double-tap the reset button to begin update';
@@ -843,7 +846,7 @@ async function retryUpdate() {
     
     // Determine firmware type based on device type and platform
     let firmwareKey = device.type;
-    if ((device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor') && device.platform) {
+    if ((device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor' || device.type === 'door_sensor') && device.platform) {
         firmwareKey = `${device.type}_${device.platform}`;
     }
     
@@ -856,8 +859,8 @@ async function retryUpdate() {
     document.getElementById('progressPercent').textContent = '0%';
     document.getElementById('progressStatus').textContent = 'Initializing...';
     
-    // Show instructions again for buttons/remotes/motion sensors
-    if (device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor') {
+    // Show instructions again for devices that require reset-button OTA entry.
+    if (device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor' || device.type === 'door_sensor') {
         document.getElementById('progressInstructions').classList.remove('hidden');
         document.getElementById('instructionsText').textContent = 
             'Double-tap the reset button to begin update';

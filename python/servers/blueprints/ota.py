@@ -13,7 +13,7 @@ import json
 from werkzeug.utils import secure_filename
 from services.ota_manager import ota_manager
 from network.device_manager import device_manager
-from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, GITHUB_OWNER, GITHUB_REPO
+from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, GITHUB_OWNER, GITHUB_REPO
 from network.network_server import network_server
 from services.config_manager import config_manager
 from dotenv import load_dotenv
@@ -49,7 +49,8 @@ DEVICE_TYPE_NAMES = {
     DEV_BUTTON: 'button',
     DEV_LIGHT: 'lightstrip',
     DEV_REMOTE: 'remote',
-    DEV_MOTION: 'motion_sensor'
+    DEV_MOTION: 'motion_sensor',
+    DEV_DOOR: 'door_sensor'
 }
 
 # Base device type configurations (single source of truth)
@@ -83,6 +84,11 @@ BASE_DEVICE_CONFIGS = {
         'device_code': DEV_MOTION,
         'label': 'Motion Sensor ESP32',
         'group': 'Motion Sensors'
+    },
+    'door_sensor_esp32': {
+        'device_code': DEV_DOOR,
+        'label': 'Door Sensor ESP32',
+        'group': 'Door Sensors'
     }
 }
 
@@ -256,8 +262,8 @@ def check_updates():
                     name = asset.get('name', '')
                     download_url = asset.get('url', '')
                     
-                    # Match firmware files (including motion_sensor)
-                    match = re.match(r'huemixlink-(esp32|esp8266)-(net|radio|button|lightstrip|remote|motion_sensor)(?:-([0-9]+))?-v([\d\.]+)\.bin', name)
+                    # Match firmware files (including motion_sensor and door_sensor)
+                    match = re.match(r'huemixlink-(esp32|esp8266)-(net|radio|button|lightstrip|remote|motion_sensor|door_sensor)(?:-([0-9]+))?-v([\d\.]+)\.bin', name)
                     if match:
                         platform, fw_type, model, version = match.groups()
                         if fw_type == "lightstrip":
@@ -354,7 +360,9 @@ def upload_firmware():
             return jsonify({'success': False, 'error': f'Invalid device type: {device_type_str}'}), 400
         
         # Secure filename
-        filename = secure_filename(file.filename)
+        filename = secure_filename(file.filename or '')
+        if not filename:
+            return jsonify({'success': False, 'error': 'Invalid filename'}), 400
         
         # Validate .bin extension
         if not filename.endswith('.bin'):
@@ -539,8 +547,8 @@ def start_ota(device_mac):
     Returns:
         JSON with start status
     """
-    try:        
-        data = request.get_json()
+    try:
+        data = request.get_json(silent=True) or {}
         firmware_path = data.get('firmware_path')
         
         
@@ -583,9 +591,19 @@ def start_ota(device_mac):
             if sensor:
                 device = sensor
                 device_type = DEV_MOTION
+
+        # Check door sensors
+        if not device:
+            sensor = device_manager.get_door_sensor_by_mac(device_mac)
+            if sensor:
+                device = sensor
+                device_type = DEV_DOOR
         
         if not device:
             return jsonify({'success': False, 'error': 'Device not found'}), 404
+
+        if device_type is None:
+            return jsonify({'success': False, 'error': 'Unsupported device type'}), 400
         
         # Validate model_id for lightstrips
         if device_type == DEV_LIGHT:
@@ -797,6 +815,18 @@ def get_devices_with_versions():
                 'name': sensor.get('name', f"Motion Sensor {sensor.get('mac_address', '')[-8:]}"),
                 'type': 'motion_sensor',
                 'device_type': DEV_MOTION,
+                'version': sensor.get('version', '0.0.0'),
+                'platform': sensor.get('platform', 'esp32')
+            })
+
+        # Get all door sensors
+        door_sensors = device_manager.get_all_door_sensors()
+        for sensor in door_sensors:
+            devices.append({
+                'mac_address': sensor.get('mac_address'),
+                'name': sensor.get('name', f"Door Sensor {sensor.get('mac_address', '')[-8:]}"),
+                'type': 'door_sensor',
+                'device_type': DEV_DOOR,
                 'version': sensor.get('version', '0.0.0'),
                 'platform': sensor.get('platform', 'esp32')
             })

@@ -829,7 +829,7 @@ void loop() {
     Serial2.write(SERIAL_END);
     Serial2.flush();
     
-    if (bufferPkt.type == PKT_BTN_EVENT || bufferPkt.type == PKT_MOTION_EVENT) {
+    if (bufferPkt.type == PKT_BTN_EVENT || bufferPkt.type == PKT_MOTION_EVENT || bufferPkt.type == PKT_DOOR_EVENT) {
       // Only send ACK if net node has WiFi connectivity
       if (netNodeHasWiFi) {
         HueMixLinkPacket ack; 

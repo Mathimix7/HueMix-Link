@@ -12,7 +12,7 @@ from constants import (
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_MOTION_EVENT,
     PKT_PING_DEVICE, PKT_PING,
     PKT_OTA_NOTIFY, PKT_OTA_READY, PKT_OTA_CHUNK, PKT_OTA_CHUNK_ACK, PKT_OTA_COMPLETE, PKT_OTA_ABORT, PKT_OTA_CHECKPOINT_REQ,
-    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION,
+    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR,
     FNV_OFFSET_BASIS, FNV_PRIME, FNV_MASK, OTA_CHUNK_DATA_SIZE
 )
 from services.home_id_manager import home_id_manager
@@ -549,7 +549,7 @@ class PacketDecoder:
         payload_for_hash = bytearray(payload)
         if pkt_type == PKT_HELLO:
             dev_type = struct.unpack("<B", payload[0:1])[0]
-            if dev_type in (DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION):
+            if dev_type in (DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR):
                 payload_for_hash[1] = 0  # Zero out RSSI byte for signature validation
         elif pkt_type == PKT_PING_DEVICE:
             payload_for_hash[0] = 0  # Zero out RSSI byte for signature validation
@@ -647,6 +647,14 @@ class PacketDecoder:
             result['version'] = f"{major}.{minor}.{patch}"
             result['rssi'] = MACFormatter.parse_rssi(payload[1])
             result['platform'] = 'esp8266' if build == 1 else 'esp32'
+
+        elif dev_type == DEV_DOOR and len(payload) >= 6:
+            # Door sensor: type(1) + RSSI(1) + version(3) + platform_flags(1)
+            major, minor, patch, platform_byte = struct.unpack("<BBBB", payload[2:6])
+            result['version'] = f"{major}.{minor}.{patch}"
+            result['rssi'] = MACFormatter.parse_rssi(payload[1])
+            result['platform'] = 'esp8266' if (platform_byte & 0x01) == 0x01 else 'esp32'
+            result['battery_type'] = 'cr123a' if (platform_byte & 0x80) == 0x80 else 'li_ion'
         
         elif dev_type == DEV_LIGHT and len(payload) >= 9:
             # Light: type(1) + RSSI(1) + RGBW(1) + LED_COUNT(2) + version(3) + platform(1) + model_id(2)
@@ -785,6 +793,61 @@ class PacketDecoder:
                 platform_byte = struct.unpack("<B", payload[7:8])[0]
                 result['platform'] = 'esp8266' if platform_byte == 1 else 'esp32'
         
+        return result
+
+    def parse_door_event(self, payload: bytes) -> Optional[dict]:
+        """Parse door sensor event payload.
+
+        Args:
+            payload: Raw payload bytes
+
+        Returns:
+            Dictionary with event info:
+            {
+                'action': ACT_DOOR_OPENED/ACT_DOOR_CLOSED/ACT_SYNC,
+                'battery_mv': Battery voltage in millivolts (uint16),
+                'light_level': Light level from LDR sensor (0-10),
+                'version_major': Firmware major version,
+                'version_minor': Firmware minor version,
+                'version_patch': Firmware patch version,
+                'platform': 'esp32' or 'esp8266'
+            }
+        """
+        if len(payload) < 4:
+            return None
+
+        # Payload_Door structure (8 bytes):
+        # action(1) + battery_mv(2) + light_level(1) + version_major(1) + version_minor(1) + version_patch(1) + platform(1)
+        action = struct.unpack("<B", payload[0:1])[0]
+        battery_mv = struct.unpack("<H", payload[1:3])[0]  # uint16 little-endian
+        light_level = struct.unpack("<B", payload[3:4])[0]
+
+        result = {
+            'action': action,
+            'battery_mv': battery_mv,
+            'light_level': light_level
+        }
+
+        # Parse version fields - only include if all version bytes are present AND not all zeros
+        if len(payload) >= 7:
+            version_major = struct.unpack("<B", payload[4:5])[0]
+            version_minor = struct.unpack("<B", payload[5:6])[0]
+            version_patch = struct.unpack("<B", payload[6:7])[0]
+
+            # Only set version if it's not 0.0.0 (indicates valid firmware version)
+            if version_major > 0 or version_minor > 0 or version_patch > 0:
+                result['version_major'] = version_major
+                result['version_minor'] = version_minor
+                result['version_patch'] = version_patch
+                result['version'] = f"{version_major}.{version_minor}.{version_patch}"
+
+            # Parse platform+flags (bit0: platform, bit7: CR123A battery type)
+            if len(payload) >= 8:
+                platform_byte = struct.unpack("<B", payload[7:8])[0]
+                result['platform'] = 'esp8266' if (platform_byte & 0x01) == 0x01 else 'esp32'
+                result['battery_type'] = 'cr123a' if (platform_byte & 0x80) == 0x80 else 'li_ion'
+                result['is_cr123a'] = (platform_byte & 0x80) == 0x80
+
         return result
     
     def parse_delivery_report(self, payload: bytes) -> Optional[dict]:

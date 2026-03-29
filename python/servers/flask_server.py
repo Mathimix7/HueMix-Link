@@ -1,6 +1,6 @@
 """Flask server with blueprints."""
 from flask import Flask
-from servers.blueprints import main_bp, buttons_bp, api_bp, gateways_bp, lightstrips_bp, bridge_bp, overview_bp, admin_bp, ota_bp
+from servers.blueprints import main_bp, buttons_bp, api_bp, gateways_bp, lightstrips_bp, bridge_bp, overview_bp, admin_bp, ota_bp, door_sensors_bp
 from servers.blueprints.mesh import mesh_bp
 from servers.blueprints.motion_sensors import motion_sensors_bp
 
@@ -22,3 +22,4 @@ app.register_blueprint(mesh_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(ota_bp)
 app.register_blueprint(motion_sensors_bp)
+app.register_blueprint(door_sensors_bp)

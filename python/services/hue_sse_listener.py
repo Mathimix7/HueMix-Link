@@ -233,6 +233,10 @@ class HueSSEListener:
             item_type = item.get('type')
             item_id = item.get('id')
 
+            if not isinstance(item_id, str) or not item_id:
+                logger.debug(f"Skipping update with invalid id for type={item_type}: {item_id}")
+                return
+
             logger.debug(f"SSE event received: type={item_type}, id={item_id}")
 
             if item_type == 'light':
@@ -243,6 +247,9 @@ class HueSSEListener:
             
             elif item_type == 'scene':
                 self._handle_scene_update(item_id, item)
+
+            elif item_type == 'room':
+                self._handle_room_update(item_id, item)
             
             else:
                 # Ignore other types (button, device, etc.)
@@ -256,6 +263,10 @@ class HueSSEListener:
         try:
             item_type = item.get('type')
             item_id = item.get('id')
+
+            if not isinstance(item_id, str) or not item_id:
+                logger.debug(f"Skipping add with invalid id for type={item_type}: {item_id}")
+                return
 
             logger.info(f"Addition event: type={item_type}, id={item_id}")
 
@@ -282,6 +293,10 @@ class HueSSEListener:
         try:
             item_type = item.get('type')
             item_id = item.get('id')
+
+            if not isinstance(item_id, str) or not item_id:
+                logger.debug(f"Skipping delete with invalid id for type={item_type}: {item_id}")
+                return
             
             logger.debug(f"Deletion event: type={item_type}, id={item_id}")
 
@@ -355,56 +370,87 @@ class HueSSEListener:
                 'name': scene_name,
                 'room_id': room_id
             })
+
+            # If this scene references a room we have never seen, hydrate room metadata now.
+            if room_id and self._hue_controller and not hue_state_manager.get_room_state(room_id):
+                self._upsert_room_state(room_id, {}, event_type='scene_addition')
+
             sync_device_configs_with_hue(self._hue_controller)
             logger.info(f"Registered new scene {scene_id} ({scene_name}) for room {room_id}")
         
         except Exception as e:
             logger.error(f"Error handling scene addition {scene_id}: {e}", exc_info=True)
+
+    def _handle_room_update(self, room_id: str, data: dict):
+        """Handle room updates from SSE."""
+        try:
+            changed = self._upsert_room_state(room_id, data, event_type='update')
+            if changed:
+                sync_device_configs_with_hue(self._hue_controller)
+        except Exception as e:
+            logger.error(f"Error handling room update {room_id}: {e}", exc_info=True)
+
+    def _upsert_room_state(self, room_id: str, data: dict, event_type: str = 'update') -> bool:
+        """Create/update room state from SSE payload with bridge fallback for partial payloads."""
+        room_name = data.get('metadata', {}).get('name', 'Unknown')
+
+        grouped_light_id = None
+        for service in data.get('services', []):
+            if service.get('rtype') == 'grouped_light':
+                grouped_light_id = service.get('rid')
+                break
+
+        # SSE room payloads can be partial right after creation/update.
+        if self._hue_controller:
+            try:
+                full_room = self._hue_controller.get_room(room_id)
+                room_name = full_room.get('metadata', {}).get('name', room_name)
+                if not grouped_light_id:
+                    for service in full_room.get('services', []):
+                        if service.get('rtype') == 'grouped_light':
+                            grouped_light_id = service.get('rid')
+                            break
+            except Exception:
+                logger.debug(f"Failed to fetch full room details for {room_id}", exc_info=True)
+
+        is_on = None
+        if grouped_light_id and self._hue_controller:
+            try:
+                grouped_light = self._hue_controller.get_grouped_light(grouped_light_id)
+                is_on = grouped_light.get('on', {}).get('on')
+            except Exception:
+                logger.debug(f"Failed to fetch grouped_light state for room {room_id}", exc_info=True)
+
+        old_state = hue_state_manager.get_room_state(room_id) or {}
+        hue_state_manager.update_room(
+            room_id=room_id,
+            name=room_name,
+            is_on=is_on,
+            grouped_light_id=grouped_light_id
+        )
+        new_state = hue_state_manager.get_room_state(room_id) or {}
+
+        if not grouped_light_id:
+            logger.debug(
+                f"Room {room_id} ({room_name}) upsert from {event_type} still has no grouped_light_id"
+            )
+
+        return (
+            not old_state
+            or old_state.get('name') != new_state.get('name')
+            or old_state.get('grouped_light_id') != new_state.get('grouped_light_id')
+            or (is_on is not None and old_state.get('is_on') != new_state.get('is_on'))
+        )
     
     def _handle_room_addition(self, room_id: str, data: dict):
         """Handle new room added from SSE."""
         try:
             logger.info(f"Room addition detected: {room_id}")
-            
-            # Extract room metadata
-            room_name = data.get('metadata', {}).get('name', 'Unknown')
-            
-            # Get grouped_light_id for this room
-            grouped_light_id = None
-            for service in data.get('services', []):
-                if service.get('rtype') == 'grouped_light':
-                    grouped_light_id = service.get('rid')
-                    break
 
-            # SSE room-add payload can be partial; fetch full room data when needed.
-            if self._hue_controller:
-                try:
-                    full_room = self._hue_controller.get_room(room_id)
-                    room_name = full_room.get('metadata', {}).get('name', room_name)
-                    if not grouped_light_id:
-                        for service in full_room.get('services', []):
-                            if service.get('rtype') == 'grouped_light':
-                                grouped_light_id = service.get('rid')
-                                break
-                except Exception:
-                    logger.debug(f"Failed to fetch full room details for {room_id}", exc_info=True)
-
-            is_on = None
-            if grouped_light_id and self._hue_controller:
-                try:
-                    grouped_light = self._hue_controller.get_grouped_light(grouped_light_id)
-                    is_on = grouped_light.get('on', {}).get('on')
-                except Exception:
-                    logger.debug(f"Failed to fetch grouped_light state for room {room_id}", exc_info=True)
-            
-            # Update room in state manager
-            hue_state_manager.update_room(
-                room_id=room_id,
-                name=room_name,
-                is_on=is_on,
-                grouped_light_id=grouped_light_id
-            )
+            self._upsert_room_state(room_id, data, event_type='add')
             sync_device_configs_with_hue(self._hue_controller)
+            room_state = hue_state_manager.get_room_state(room_id) or {}
+            room_name = room_state.get('name', 'Unknown')
             logger.info(f"Registered new room {room_id} ({room_name})")
         
         except Exception as e:
@@ -464,6 +510,28 @@ class HueSSEListener:
         try:
             # Get the actual room ID from the grouped_light ID
             room_id = hue_state_manager.get_room_id_from_grouped_light(grouped_light_id)
+
+            # If mapping is missing (common right after room creation), discover and hydrate it.
+            if room_id is None and self._hue_controller:
+                try:
+                    for room in self._hue_controller.get_rooms():
+                        for service in room.get('services', []):
+                            if service.get('rtype') == 'grouped_light' and service.get('rid') == grouped_light_id:
+                                discovered_room_id = room.get('id')
+                                if discovered_room_id:
+                                    self._upsert_room_state(discovered_room_id, room, event_type='grouped_light_discovery')
+                                    room_id = discovered_room_id
+                                    logger.info(
+                                        f"Resolved grouped_light {grouped_light_id} to room {room_id} via bridge lookup"
+                                    )
+                                break
+                        if room_id is not None:
+                            break
+                except Exception:
+                    logger.debug(
+                        f"Failed to resolve grouped_light mapping for {grouped_light_id}",
+                        exc_info=True
+                    )
             
             if room_id is None:
                 return

@@ -20,6 +20,7 @@ PKT_BTN_EVENT = 0x11
 PKT_SCENE_REQ = 0x12
 PKT_DELIVERY_RPT = 0x13
 PKT_MOTION_EVENT = 0x14
+PKT_DOOR_EVENT = 0x15
 PKT_OTA_NOTIFY = 0x20
 PKT_OTA_READY = 0x21
 PKT_OTA_CHUNK = 0x22
@@ -36,12 +37,15 @@ DEV_BUTTON = 2
 DEV_LIGHT = 3
 DEV_REMOTE = 4
 DEV_MOTION = 5
+DEV_DOOR = 6
 
 # ===== Button Action Codes =====
 ACT_CLICK = 1
 ACT_HOLDING = 2
 ACT_RELEASE = 3
 ACT_MOTION_DETECTED = 10
+ACT_DOOR_OPENED = 11
+ACT_DOOR_CLOSED = 12
 ACT_SYNC = 9
 
 # ===== Remote Button Action Types =====
@@ -111,6 +115,7 @@ FILE_GATEWAYS = 'gateways.json'
 FILE_MOTION_SENSORS = 'motion_sensors.json'
 FILE_BUTTONS = 'buttons.json'
 FILE_LIGHTSTRIPS = 'lightstrips.json'
+FILE_DOOR_SENSORS = 'door_sensors.json'
 FILE_BRIDGE = 'bridge.json'
 FILE_CONFIG = 'config.json'
 FILE_PAIRING_HISTORY = 'pairing_history.json'

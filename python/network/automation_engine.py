@@ -7,7 +7,24 @@ import logging
 import threading
 import time
 from typing import Dict, List, Tuple, Optional
-from constants import ACT_CLICK, ACT_HOLDING, ACT_RELEASE, TIMEOUT_SCENE_CYCLE, FILE_LIGHTSTRIPS, REMOTE_ACTION_NORMAL, REMOTE_ACTION_TOGGLE, REMOTE_ACTION_BRIGHTNESS_UP, REMOTE_ACTION_BRIGHTNESS_DOWN, REMOTE_ACTION_SCENE_CYCLE, FILE_MOTION_SENSORS, ACT_MOTION_DETECTED, ACT_SYNC
+from constants import (
+    ACT_CLICK,
+    ACT_HOLDING,
+    ACT_RELEASE,
+    ACT_MOTION_DETECTED,
+    ACT_DOOR_OPENED,
+    ACT_DOOR_CLOSED,
+    ACT_SYNC,
+    TIMEOUT_SCENE_CYCLE,
+    FILE_LIGHTSTRIPS,
+    FILE_MOTION_SENSORS,
+    FILE_DOOR_SENSORS,
+    REMOTE_ACTION_NORMAL,
+    REMOTE_ACTION_TOGGLE,
+    REMOTE_ACTION_BRIGHTNESS_UP,
+    REMOTE_ACTION_BRIGHTNESS_DOWN,
+    REMOTE_ACTION_SCENE_CYCLE,
+)
 from controllers.hue_controller import Hue
 from controllers.color_controller import color_controller
 from services.hue_state_manager import hue_state_manager
@@ -38,6 +55,10 @@ class AutomationEngine:
         # Motion sensor state tracking: mac -> {after_timer, room_id, expected_scene_id, last_expected_clear_time}
         self._motion_states: Dict[str, Dict] = {}
         self._motion_lock = threading.RLock()
+
+        # Door sensor state tracking: mac -> {close_timer, close_timer_id}
+        self._door_states: Dict[str, Dict] = {}
+        self._door_lock = threading.RLock()
         
         # Room manual turn-off tracking: room_id -> timestamp (to prevent motion triggers after manual off)
         self._room_manual_off_times: Dict[str, float] = {}
@@ -87,6 +108,14 @@ class AutomationEngine:
         # Unsubscribe from state changes
         hue_state_manager.unsubscribe_scene_changes(self._on_hue_scene_changed)
         hue_state_manager.unsubscribe_room_changes(self._on_hue_room_changed)
+
+        # Cancel pending delayed door close actions
+        with self._door_lock:
+            for state in self._door_states.values():
+                timer = state.get('close_timer')
+                if timer and timer.is_alive():
+                    timer.cancel()
+            self._door_states.clear()
         
         logger.info("AutomationEngine stopped")
     
@@ -243,8 +272,7 @@ class AutomationEngine:
             
             if time_since_last > self.scene_timeout:
                 # Timeout expired - turn off room
-                room_state = hue_state_manager.get_room_state(room_id)
-                room_is_on = room_state.get('is_on', False) if room_state else False
+                room_is_on = self._is_room_currently_on(room_id)
                 
                 if room_is_on:
                     logger.info(f"Remote {remote_mac}: Timeout expired, turning off room {room_id}")
@@ -380,8 +408,7 @@ class AutomationEngine:
             room_id: Room ID to toggle
         """
         try:
-            room_state = hue_state_manager.get_room_state(room_id)
-            room_is_on = room_state.get('is_on', False) if room_state else False
+            room_is_on = self._is_room_currently_on(room_id)
             
             if room_is_on:
                 logger.info(f"Remote toggle: Turning off room {room_id}")
@@ -425,8 +452,7 @@ class AutomationEngine:
             
             if time_since_last > self.scene_timeout:
                 # Timeout expired - check if room is on using state manager
-                room_state = hue_state_manager.get_room_state(room_id)
-                room_is_on = room_state.get('is_on', False) if room_state else False
+                room_is_on = self._is_room_currently_on(room_id)
                 
                 if room_is_on:
                     # Turn off room
@@ -528,6 +554,54 @@ class AutomationEngine:
         hue_state_manager.set_room_scene(room_id, scene_id, old_scene_id, source=source)
         
         logger.info(f"Activated scene {scene_id} in room {room_id}")
+
+    def _resolve_grouped_light_id(self, room_id: str) -> Optional[str]:
+        """Resolve grouped_light ID for a room, hydrating state manager on cache miss."""
+        room_state = hue_state_manager.get_room_state(room_id)
+        if room_state:
+            grouped_light_id = room_state.get('grouped_light_id')
+            if grouped_light_id:
+                return grouped_light_id
+
+        try:
+            room = self.hue.get_room(room_id)
+        except Exception as e:
+            logger.error(f"Failed to fetch room {room_id} while resolving grouped_light: {e}")
+            return None
+
+        room_name = room.get('metadata', {}).get('name')
+        grouped_light_id = None
+        for service in room.get('services', []):
+            if service.get('rtype') == 'grouped_light':
+                grouped_light_id = service.get('rid')
+                break
+
+        if not grouped_light_id:
+            logger.error(f"No grouped_light found for room {room_id}")
+            return None
+
+        hue_state_manager.update_room(
+            room_id=room_id,
+            name=room_name,
+            grouped_light_id=grouped_light_id,
+        )
+        return grouped_light_id
+
+    def _is_room_currently_on(self, room_id: str) -> bool:
+        """Get room on/off state, falling back to live bridge query when cache is incomplete."""
+        room_state = hue_state_manager.get_room_state(room_id)
+        has_mapping = bool(room_state and room_state.get('grouped_light_id'))
+
+        if has_mapping and room_state.get('is_on') is not None:
+            return bool(room_state.get('is_on'))
+
+        try:
+            is_on = self.hue.is_room_on(room_id)
+            hue_state_manager.update_room(room_id=room_id, is_on=is_on)
+            return bool(is_on)
+        except Exception as e:
+            logger.warning(f"Failed to query live room state for {room_id}: {e}")
+            return bool(room_state.get('is_on', False)) if room_state else False
     
     def _turn_off_room(self, room_id: str):
         """Turn off all lights in a room.
@@ -537,18 +611,16 @@ class AutomationEngine:
         """
         # Turn off room via grouped_light
         room_state = hue_state_manager.get_room_state(room_id)
-        
-        if not room_state:
-            logger.error(f"Room {room_id} not found in state manager")
+        grouped_light_id = self._resolve_grouped_light_id(room_id)
+        if not grouped_light_id:
+            logger.error(f"Cannot turn off room {room_id}: grouped_light could not be resolved")
             return
-        
-        grouped_light_id = room_state.get('grouped_light_id')
-        if grouped_light_id:
-            payload = {'on': {'on': False}}
-            self.hue._put_resource('grouped_light', grouped_light_id, payload)
-        
+
+        payload = {'on': {'on': False}}
+        self.hue._put_resource('grouped_light', grouped_light_id, payload)
+
         # Update state manager
-        old_scene_id = room_state.get('current_scene_id')
+        old_scene_id = room_state.get('current_scene_id') if room_state else None
         hue_state_manager.set_room_scene(room_id, None, old_scene_id, source='button')
         
         logger.info(f"Turned off room {room_id}")
@@ -560,16 +632,13 @@ class AutomationEngine:
             room_id: Room ID
         """
         # Turn on room via grouped_light
-        room_state = hue_state_manager.get_room_state(room_id)
-        
-        if not room_state:
-            logger.error(f"Room {room_id} not found in state manager")
+        grouped_light_id = self._resolve_grouped_light_id(room_id)
+        if not grouped_light_id:
+            logger.error(f"Cannot turn on room {room_id}: grouped_light could not be resolved")
             return
-        
-        grouped_light_id = room_state.get('grouped_light_id')
-        if grouped_light_id:
-            payload = {'on': {'on': True}}
-            self.hue._put_resource('grouped_light', grouped_light_id, payload)
+
+        payload = {'on': {'on': True}}
+        self.hue._put_resource('grouped_light', grouped_light_id, payload)
         
         logger.info(f"Turned on room {room_id}")
     
@@ -819,6 +888,240 @@ class AutomationEngine:
                             logger.debug(f"Scheduled after action for {sensor_mac} in {after_duration}s")
                         else:
                             logger.debug(f"Restarted after action timer for {sensor_mac} ({after_duration}s)")
+
+    # ===== Door Sensor Event Handling =====
+
+    def handle_door_event(self, sensor_mac: str, action: int, light_level: Optional[int] = None,
+                          battery_mv: Optional[int] = None):
+        """Handle door sensor event and execute configured slot action.
+
+        Args:
+            sensor_mac: Door sensor MAC address
+            action: ACT_DOOR_OPENED, ACT_DOOR_CLOSED, or ACT_SYNC
+            light_level: Ambient light level (0-10)
+            battery_mv: Battery voltage in millivolts
+        """
+        if action not in (ACT_DOOR_OPENED, ACT_DOOR_CLOSED):
+            return
+
+        sensors = data_manager.read_json(FILE_DOOR_SENSORS, default=[])
+        sensor = None
+        for item in sensors:
+            if item.get('mac_address', '').upper() == sensor_mac.upper():
+                sensor = item
+                break
+
+        if not sensor:
+            logger.debug(f"Door event ignored: sensor {sensor_mac} not configured")
+            return
+
+        config = sensor.get('config', {})
+        if not config.get('enabled', True):
+            logger.debug(f"Door sensor {sensor_mac} is disabled, ignoring event")
+            return
+
+        room_id = config.get('room_id')
+        if not room_id:
+            logger.debug(f"Door sensor {sensor_mac} has no room assigned")
+            return
+
+        if action == ACT_DOOR_OPENED:
+            self._cancel_pending_door_close_timer(sensor_mac, reason='door opened')
+        else:
+            self._cancel_pending_door_close_timer(sensor_mac, reason='new close event received')
+
+        light_sensitivity = config.get('light_sensitivity', 5)
+        try:
+            light_sensitivity = int(light_sensitivity)
+        except (TypeError, ValueError):
+            light_sensitivity = 5
+
+        light_sensitivity = max(0, min(10, light_sensitivity))
+
+        current_slot = self._get_current_time_slot(config.get('time_slots', []))
+        if not current_slot:
+            logger.debug(f"Door sensor {sensor_mac} has no matching time slot")
+            return
+
+        if action == ACT_DOOR_OPENED:
+            event_name = 'opened'
+            action_key = 'open_action'
+            scene_key = 'open_scene_id'
+        else:
+            event_name = 'closed'
+            action_key = 'close_action'
+            scene_key = 'close_scene_id'
+
+        door_action = current_slot.get(action_key, 'nothing')
+        close_delay_seconds = 0
+        if action == ACT_DOOR_CLOSED:
+            close_delay_seconds = self._normalize_close_delay_seconds(
+                current_slot.get('close_delay_seconds', 0)
+            )
+
+        if door_action == 'nothing':
+            logger.debug(f"Door sensor {sensor_mac} event {event_name}: slot action is 'nothing'")
+            return
+
+        scene_id = current_slot.get(scene_key) if door_action == 'scene' else None
+
+        if door_action == 'scene' and light_level is not None and light_level > light_sensitivity:
+            logger.debug(
+                f"Door sensor {sensor_mac} light level too high "
+                f"({light_level} > {light_sensitivity}), ignoring scene action"
+            )
+            return
+
+        if door_action == 'scene' and current_slot.get('do_not_disturb', False):
+            room_state = hue_state_manager.get_room_state(room_id)
+            if room_state and room_state.get('is_on', False):
+                logger.debug(
+                    f"Door sensor {sensor_mac} DND mode: lights already on, skipping scene activation"
+                )
+                return
+
+        if door_action == 'scene' and not scene_id:
+            logger.warning(
+                f"Door sensor {sensor_mac} event {event_name}: "
+                f"missing scene id for action '{action_key}'"
+            )
+            return
+
+        if action == ACT_DOOR_CLOSED and close_delay_seconds > 0:
+            self._schedule_delayed_door_close_action(
+                sensor_mac,
+                room_id,
+                door_action,
+                scene_id,
+                close_delay_seconds,
+            )
+            return
+
+        self._execute_door_slot_action(sensor_mac, room_id, event_name, door_action, scene_id)
+
+    @staticmethod
+    def _normalize_close_delay_seconds(raw_delay: object) -> int:
+        """Normalize close delay to supported bounds."""
+        try:
+            delay_seconds = int(raw_delay)
+        except (TypeError, ValueError):
+            return 0
+
+        return max(0, min(86400, delay_seconds))
+
+    def _cancel_pending_door_close_timer(self, sensor_mac: str, reason: Optional[str] = None):
+        """Cancel any pending delayed close action for a door sensor."""
+        cancelled = False
+        with self._door_lock:
+            state = self._door_states.get(sensor_mac)
+            if not state:
+                return
+
+            timer = state.get('close_timer')
+            if timer and timer.is_alive():
+                timer.cancel()
+                cancelled = True
+
+            state['close_timer'] = None
+            state['close_timer_id'] = int(state.get('close_timer_id', 0)) + 1
+
+        if cancelled:
+            if reason:
+                logger.debug(f"Cancelled pending delayed close action for {sensor_mac}: {reason}")
+            else:
+                logger.debug(f"Cancelled pending delayed close action for {sensor_mac}")
+
+    def _schedule_delayed_door_close_action(
+        self,
+        sensor_mac: str,
+        room_id: str,
+        door_action: str,
+        scene_id: Optional[str],
+        delay_seconds: int,
+    ):
+        """Schedule door close action after configured delay."""
+        with self._door_lock:
+            state = self._door_states.setdefault(sensor_mac, {})
+
+            old_timer = state.get('close_timer')
+            if old_timer and old_timer.is_alive():
+                old_timer.cancel()
+
+            timer_id = int(state.get('close_timer_id', 0)) + 1
+            state['close_timer_id'] = timer_id
+
+            timer = threading.Timer(
+                delay_seconds,
+                self._execute_delayed_door_close_action,
+                args=(sensor_mac, timer_id, room_id, door_action, scene_id, delay_seconds),
+            )
+            timer.daemon = True
+            timer.start()
+            state['close_timer'] = timer
+
+        if door_action == 'scene' and scene_id:
+            action_desc = f"activate scene {scene_id}"
+        elif door_action == 'off':
+            action_desc = "turn off room"
+        else:
+            action_desc = door_action
+
+        logger.info(
+            f"🚪 Door sensor {sensor_mac} closed: scheduled action '{action_desc}' "
+            f"in room {room_id} after {delay_seconds}s"
+        )
+
+    def _execute_delayed_door_close_action(
+        self,
+        sensor_mac: str,
+        timer_id: int,
+        room_id: str,
+        door_action: str,
+        scene_id: Optional[str],
+        delay_seconds: int,
+    ):
+        """Execute a previously scheduled delayed close action."""
+        with self._door_lock:
+            state = self._door_states.get(sensor_mac)
+            if not state or state.get('close_timer_id') != timer_id:
+                logger.debug(f"Ignoring stale delayed close action for {sensor_mac}")
+                return
+
+        logger.info(
+            f"🚪 Door sensor {sensor_mac} closed: executing delayed action after {delay_seconds}s"
+        )
+        self._execute_door_slot_action(sensor_mac, room_id, 'closed (delayed)', door_action, scene_id)
+
+        with self._door_lock:
+            state = self._door_states.get(sensor_mac)
+            if state and state.get('close_timer_id') == timer_id:
+                state['close_timer'] = None
+
+    def _execute_door_slot_action(
+        self,
+        sensor_mac: str,
+        room_id: str,
+        event_name: str,
+        door_action: str,
+        scene_id: Optional[str],
+    ):
+        """Execute resolved door slot action immediately."""
+        try:
+            if door_action == 'scene':
+                logger.info(
+                    f"🚪 Door sensor {sensor_mac} {event_name}: "
+                    f"activating scene {scene_id} in room {room_id}"
+                )
+                self._activate_scene(room_id, scene_id, source='door')
+            elif door_action == 'off':
+                logger.info(f"🚪 Door sensor {sensor_mac} {event_name}: turning off room {room_id}")
+                self._turn_off_room(room_id)
+            else:
+                logger.warning(
+                    f"Door sensor {sensor_mac} event {event_name}: unsupported action '{door_action}'"
+                )
+        except Exception as e:
+            logger.error(f"Failed handling door event for {sensor_mac}: {e}")
 
     
     def _get_current_time_slot(self, time_slots: List[Dict]) -> Optional[Dict]:

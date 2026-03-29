@@ -61,6 +61,10 @@ class AutomationService:
         # If engine already exists, update its network server
         if self._engine:
             self._engine.set_network_server(network_server)
+            self._network_server.set_button_event_handler(self._engine.handle_button_event)
+            self._network_server.set_motion_event_handler(self._engine.handle_motion_event)
+            self._network_server.set_door_event_handler(self._engine.handle_door_event)
+            self._network_server.set_automation_engine(self._engine)
             logger.info("Network server updated in automation engine")
     
     def _initialize_engine(self):
@@ -100,6 +104,7 @@ class AutomationService:
                 self._engine.set_network_server(self._network_server)
                 self._network_server.set_button_event_handler(self._engine.handle_button_event)
                 self._network_server.set_motion_event_handler(self._engine.handle_motion_event)
+                self._network_server.set_door_event_handler(self._engine.handle_door_event)
                 self._network_server.set_automation_engine(self._engine)
             
             # Start the engine

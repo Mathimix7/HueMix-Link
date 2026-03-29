@@ -25,7 +25,7 @@
         <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
             
             <!-- Hue Bridge Status -->
-            <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-100">
+            <a href="/bridge" class="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-100 hover:shadow-2xl transition-all duration-300 hover:border-blue-500">
                 <div class="flex items-center justify-between mb-3">
                     <div class="flex items-center">
                         <div class="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center mr-3">
@@ -38,7 +38,7 @@
                     </span>
                 </div>
                 <p id="bridge-info" class="text-sm text-gray-500">Loading...</p>
-            </div>
+            </a>
 
             <!-- UDP Network Status -->
             <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-100">
@@ -84,7 +84,7 @@
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
             
             <!-- Bridge Setup -->
-            <a href="/bridge" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-blue-500">
+            <!-- <a href="/bridge" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-blue-500">
                 <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-blue-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
                 <div class="relative">
                     <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500/20 to-blue-500/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
@@ -93,7 +93,7 @@
                     <h3 class="text-xl font-bold text-gray-900 mb-2">Hue Bridge</h3>
                     <p class="text-sm text-gray-500">Configure Hue Bridge connection</p>
                 </div>
-            </a>
+            </a> -->
 
             <!-- Buttons Configuration -->
             <a href="/buttons" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-pink-500">
@@ -143,6 +143,18 @@
                 </div>
             </a>
 
+            <!-- Door Sensors -->
+            <a href="/door-sensors" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-red-500">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-red-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
+                <div class="relative">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-red-500/20 to-red-500/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <i class="fas fa-door-open text-2xl text-red-500"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-2">Door Sensors</h3>
+                    <p class="text-sm text-gray-500">Open/close automation events</p>
+                </div>
+            </a>
+
             <!-- Device Pairing -->
             <a href="/pairing" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-green-500">
                 <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-green-500/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
@@ -151,7 +163,7 @@
                         <i class="fas fa-link text-2xl text-green-500"></i>
                     </div>
                     <h3 class="text-xl font-bold text-gray-900 mb-2">Pair Devices</h3>
-                    <p class="text-sm text-gray-500">Add buttons & lightstrips</p>
+                    <p class="text-sm text-gray-500">Add buttons, sensors & lights</p>
                 </div>
             </a>
 

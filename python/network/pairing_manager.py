@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 from network.device_manager import device_manager
 from services.data_manager import data_manager
-from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, FILE_PAIRING_HISTORY
+from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, FILE_PAIRING_HISTORY
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,8 @@ class PairingManager:
                     'button': DEV_BUTTON,
                     'light': DEV_LIGHT,
                     'remote': DEV_REMOTE,
-                    'motion': DEV_MOTION
+                    'motion': DEV_MOTION,
+                    'door': DEV_DOOR
                 }
                 self._allowed_types = [type_map[t.lower()] for t in device_types if t.lower() in type_map]
             else:
@@ -126,7 +127,8 @@ class PairingManager:
                 DEV_BUTTON: 'button',
                 DEV_LIGHT: 'light',
                 DEV_REMOTE: 'remote',
-                DEV_MOTION: 'motion'
+                DEV_MOTION: 'motion',
+                DEV_DOOR: 'door'
             }
             allowed_type_names = [type_map.get(t, f'unknown({t})') for t in self._allowed_types]
             
@@ -203,6 +205,11 @@ class PairingManager:
                         device_copy['id'] = light.get('id')
                 elif device['type'] == DEV_MOTION:
                     sensor = device_manager.get_motion_sensor_by_mac(device['mac'])
+                    if sensor:
+                        device_copy['name'] = sensor.get('name', device['name'])
+                        device_copy['id'] = sensor.get('id')
+                elif device['type'] == DEV_DOOR:
+                    sensor = device_manager.get_door_sensor_by_mac(device['mac'])
                     if sensor:
                         device_copy['name'] = sensor.get('name', device['name'])
                         device_copy['id'] = sensor.get('id')

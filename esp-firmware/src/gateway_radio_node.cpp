@@ -16,6 +16,16 @@
 #include <esp_partition.h>
 #include "mbedtls/sha256.h"
 
+#ifndef IS_SERIAL_GATEWAY
+  #define IS_SERIAL_GATEWAY 0
+#endif
+
+#if IS_SERIAL_GATEWAY
+  #include <Wire.h>
+  #include <Adafruit_GFX.h>
+  #include <Adafruit_SSD1306.h>
+#endif
+
 Preferences prefs;
 uint32_t HOME_ID = 0; 
 bool nightMode = false;
@@ -24,10 +34,6 @@ bool netNodeHasWiFi = false;  // Tracks if net node has WiFi connectivity
 #define PIN_LED_STATUS 19
 #define PIN_RX         16
 #define PIN_TX         17
-
-#ifndef IS_SERIAL_GATEWAY
-  #define IS_SERIAL_GATEWAY 0
-#endif
 
 #if IS_SERIAL_GATEWAY
   #define SERIAL_COM Serial
@@ -79,6 +85,36 @@ unsigned long last_serial_activity = 0;
 #define STARTUP_HANDSHAKE_TIMEOUT 3000  // 3 seconds
 #define SERIAL_IDLE_THRESHOLD 50  // Must be idle for 50ms before checking for handshake request
 
+#if IS_SERIAL_GATEWAY
+  #define OLED_WIDTH 128
+  #define OLED_HEIGHT 64
+  #define OLED_I2C_ADDR 0x3C
+  #define OLED_RESET -1
+  #define OLED_PIN_SDA 21
+  #define OLED_PIN_SCL 22
+
+  Adafruit_SSD1306 oled(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
+
+  struct DashboardStats {
+    char cpu[8];
+    char ram[8];
+    char ip[24];
+    char uptime[16];
+    char temp[8];
+    bool valid;
+    unsigned long lastUpdateMs;
+  };
+
+  DashboardStats dashboardStats = {{0}, {0}, {0}, {0}, {0}, false, 0};
+  char dashboardLineBuffer[96] = {0};
+  uint8_t dashboardLineIndex = 0;
+  bool dashboardDisplayReady = false;
+  unsigned long lastDashboardRender = 0;
+  unsigned long dashboardActivityFlashUntilMs = 0;
+  #define DASHBOARD_STALE_RESET_MS 10000
+  #define DASHBOARD_ACTIVITY_FLASH_MS 350
+#endif
+
 // --- RADIO SERIAL PARSER ---
 enum SerialState { S_IDLE, S_READING, S_FOOTER };
 SerialState rxState = S_IDLE;
@@ -91,6 +127,253 @@ uint8_t rxRawBuffer[sizeof(HueMixLinkPacket)];
 #define OTA_ACCUMULATOR_SIZE (CHUNK_PAYLOAD_SIZE * OTA_BUFFER_MAX_CHUNKS)
 uint8_t otaAccumulator[OTA_ACCUMULATOR_SIZE];
 uint16_t otaAccumulatorIndex = 0;
+
+#if IS_SERIAL_GATEWAY
+void drawCenteredText(const char* text, int y, uint8_t textSize = 1) {
+  int16_t x1, y1;
+  uint16_t w, h;
+  oled.setTextSize(textSize);
+  oled.getTextBounds(text, 0, y, &x1, &y1, &w, &h);
+  int x = (OLED_WIDTH - (int)w) / 2;
+  if (x < 0) x = 0;
+  oled.setCursor(x, y);
+  oled.print(text);
+}
+
+void drawWifiIcon(int x, int y) {
+  // First signal arc (outer, largest)
+  oled.drawPixel(x+0, y+3, SSD1306_WHITE);
+  oled.drawPixel(x+1, y+2, SSD1306_WHITE);
+  oled.drawPixel(x+2, y+1, SSD1306_WHITE);
+  oled.drawFastHLine(x+3, y, 8, SSD1306_WHITE);
+  oled.drawPixel(x+11, y+1, SSD1306_WHITE);
+  oled.drawPixel(x+12, y+2, SSD1306_WHITE);
+  oled.drawPixel(x+13, y+3, SSD1306_WHITE);
+
+  // Second signal arc (middle)
+  oled.drawPixel(x+2, y+5, SSD1306_WHITE);
+  oled.drawPixel(x+3, y+4, SSD1306_WHITE);
+  oled.drawFastHLine(x+4, y+3, 6, SSD1306_WHITE);
+  oled.drawPixel(x+10, y+4, SSD1306_WHITE);
+  oled.drawPixel(x+11, y+5, SSD1306_WHITE);
+
+  // Third signal arc (inner, smallest)
+  oled.drawPixel(x+4, y+7, SSD1306_WHITE);
+  oled.drawPixel(x+5, y+6, SSD1306_WHITE);
+  oled.drawFastHLine(x+6, y+6, 2, SSD1306_WHITE);
+  oled.drawPixel(x+8, y+6, SSD1306_WHITE);
+  oled.drawPixel(x+9, y+7, SSD1306_WHITE);
+
+  // WiFi dot (square)
+  oled.drawPixel(x+6, y+9, SSD1306_WHITE);
+  oled.drawPixel(x+7, y+9, SSD1306_WHITE);
+  oled.drawPixel(x+6, y+10, SSD1306_WHITE);
+  oled.drawPixel(x+7, y+10, SSD1306_WHITE);
+}
+
+void drawActivityIndicator() {
+  if (millis() < dashboardActivityFlashUntilMs) {
+    oled.fillCircle(OLED_WIDTH - 4, OLED_HEIGHT - 4, 3, SSD1306_WHITE);
+  }
+}
+
+void renderInitializingScreen() {
+  oled.clearDisplay();
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setTextSize(1);
+
+  drawCenteredText("HueMix-Link", 19, 1);
+
+  int16_t x1, y1;
+  uint16_t wBase, hBase, wFull, hFull;
+  oled.getTextBounds("Initializing", 0, 0, &x1, &y1, &wBase, &hBase);
+  oled.getTextBounds("Initializing...", 0, 0, &x1, &y1, &wFull, &hFull);
+
+  int startX = (OLED_WIDTH - (int)wFull) / 2;
+  if (startX < 0) startX = 0;
+
+  oled.setCursor(startX, 36);
+  oled.print("Initializing");
+
+  uint8_t dots = (millis() / 300) % 4;
+  const char* dotsText = "";
+  if (dots == 1) dotsText = ".";
+  else if (dots == 2) dotsText = "..";
+  else if (dots == 3) dotsText = "...";
+
+  oled.setCursor(startX + (int)wBase, 36);
+  oled.print(dotsText);
+
+  drawActivityIndicator();
+
+  oled.display();
+}
+
+void drawCpuIcon(int x, int y) {
+  oled.drawRect(x + 2, y + 2, 12, 12, SSD1306_WHITE);
+  for (int i = 0; i < 4; i++) {
+    oled.drawFastVLine(x + 4 + i * 2, y, 2, SSD1306_WHITE);
+    oled.drawFastVLine(x + 4 + i * 2, y + 14, 2, SSD1306_WHITE);
+    oled.drawFastHLine(x, y + 4 + i * 2, 2, SSD1306_WHITE);
+    oled.drawFastHLine(x + 14, y + 4 + i * 2, 2, SSD1306_WHITE);
+  }
+  oled.drawRect(x + 6, y + 6, 4, 4, SSD1306_WHITE);
+}
+
+void drawRamIcon(int x, int y) {
+  oled.drawRect(x + 1, y + 3, 14, 10, SSD1306_WHITE);
+  oled.drawFastHLine(x + 2, y + 6, 12, SSD1306_WHITE);
+  oled.drawFastHLine(x + 2, y + 9, 12, SSD1306_WHITE);
+  for (int i = 0; i < 4; i++) {
+    oled.drawPixel(x + 3 + i * 3, y + 2, SSD1306_WHITE);
+    oled.drawPixel(x + 3 + i * 3, y + 13, SSD1306_WHITE);
+  }
+}
+
+void drawTempIcon(int x, int y) {
+  oled.drawRoundRect(x + 6, y + 2, 4, 10, 2, SSD1306_WHITE);
+  oled.fillCircle(x + 8, y + 13, 4, SSD1306_WHITE);
+  oled.drawFastVLine(x + 7, y + 4, 6, SSD1306_BLACK);
+}
+
+void drawClockIcon(int x, int y) {
+  oled.drawCircle(x + 8, y + 8, 7, SSD1306_WHITE);
+  oled.drawLine(x + 8, y + 8, x + 8, y + 4, SSD1306_WHITE);
+  oled.drawLine(x + 8, y + 8, x + 11, y + 10, SSD1306_WHITE);
+}
+
+void drawStatCell(int x, int y, const char* value, void (*iconFn)(int, int)) {
+  iconFn(x, y + 5);
+
+  uint8_t valueLen = strlen(value);
+  uint8_t valueSize = (valueLen <= 4) ? 2 : 1;
+  oled.setTextSize(valueSize);
+
+  int16_t x1, y1;
+  uint16_t w, h;
+  oled.getTextBounds(value, 0, 0, &x1, &y1, &w, &h);
+
+  int textX = x + 19;
+  int textY = y + ((24 - (int)h) / 2) + 2;
+  if (textY < y) textY = y;
+
+  oled.setCursor(textX, textY);
+  oled.print(value);
+}
+
+void renderDashboard() {
+  if (!dashboardDisplayReady) return;
+
+  unsigned long ageMs = dashboardStats.valid ? (millis() - dashboardStats.lastUpdateMs) : 0;
+  bool showInit = (!dashboardStats.valid) || (ageMs > DASHBOARD_STALE_RESET_MS);
+  if (showInit) {
+    renderInitializingScreen();
+    return;
+  }
+
+  oled.clearDisplay();
+  oled.setTextColor(SSD1306_WHITE);
+
+  uint8_t ipLen = strlen(dashboardStats.ip);
+  uint16_t ipWidth = ipLen * 6;
+  uint8_t wifiWidth = 16;
+  uint8_t gap = 4;
+  int blockWidth = wifiWidth + gap + ipWidth;
+  int startX = (OLED_WIDTH - blockWidth) / 2;
+  if (startX < 0) startX = 0;
+
+  drawWifiIcon(startX, 0);
+  oled.setTextSize(1);
+  oled.setCursor(startX + wifiWidth + gap, 1);
+  oled.print(dashboardStats.ip);
+
+  oled.drawFastHLine(0, 13, OLED_WIDTH, SSD1306_WHITE);
+
+  char cpuDisplay[10] = {0};
+  char ramDisplay[10] = {0};
+  char tempDisplay[10] = {0};
+
+  if (dashboardStats.valid && strcmp(dashboardStats.cpu, "--") != 0) {
+    snprintf(cpuDisplay, sizeof(cpuDisplay), "%s%%", dashboardStats.cpu);
+  } else {
+    strncpy(cpuDisplay, "--", sizeof(cpuDisplay) - 1);
+  }
+
+  if (dashboardStats.valid && strcmp(dashboardStats.ram, "--") != 0) {
+    snprintf(ramDisplay, sizeof(ramDisplay), "%s%%", dashboardStats.ram);
+  } else {
+    strncpy(ramDisplay, "--", sizeof(ramDisplay) - 1);
+  }
+
+  if (dashboardStats.valid && strcmp(dashboardStats.temp, "--") != 0) {
+    snprintf(tempDisplay, sizeof(tempDisplay), "%sC", dashboardStats.temp);
+  } else {
+    strncpy(tempDisplay, "--", sizeof(tempDisplay) - 1);
+  }
+
+  const char* cpuVal = cpuDisplay;
+  const char* ramVal = ramDisplay;
+  const char* tempVal = tempDisplay;
+  const char* upVal = dashboardStats.valid ? dashboardStats.uptime : "--";
+
+  drawStatCell(0, 14, cpuVal, drawCpuIcon);
+  drawStatCell(64, 14, ramVal, drawRamIcon);
+  drawStatCell(0, 38, tempVal, drawTempIcon);
+  drawStatCell(64, 38, upVal, drawClockIcon);
+
+  drawActivityIndicator();
+
+  oled.display();
+}
+
+void resetDashboardLine() {
+  dashboardLineIndex = 0;
+  dashboardLineBuffer[0] = '\0';
+}
+
+void applyDashboardLine(const char* line) {
+  if (!line || line[0] != '@') return;
+
+  char scratch[96] = {0};
+  strncpy(scratch, line + 1, sizeof(scratch) - 1);
+
+  char* savePtr = nullptr;
+  char* cpu = strtok_r(scratch, ",", &savePtr);
+  char* ram = strtok_r(nullptr, ",", &savePtr);
+  char* ip = strtok_r(nullptr, ",", &savePtr);
+  char* uptime = strtok_r(nullptr, ",", &savePtr);
+  char* temp = strtok_r(nullptr, ",", &savePtr);
+
+  if (!cpu || !ram || !ip || !uptime || !temp) return;
+
+  strncpy(dashboardStats.cpu, cpu, sizeof(dashboardStats.cpu) - 1);
+  dashboardStats.cpu[sizeof(dashboardStats.cpu) - 1] = '\0';
+  strncpy(dashboardStats.ram, ram, sizeof(dashboardStats.ram) - 1);
+  dashboardStats.ram[sizeof(dashboardStats.ram) - 1] = '\0';
+  strncpy(dashboardStats.ip, ip, sizeof(dashboardStats.ip) - 1);
+  dashboardStats.ip[sizeof(dashboardStats.ip) - 1] = '\0';
+  strncpy(dashboardStats.uptime, uptime, sizeof(dashboardStats.uptime) - 1);
+  dashboardStats.uptime[sizeof(dashboardStats.uptime) - 1] = '\0';
+  strncpy(dashboardStats.temp, temp, sizeof(dashboardStats.temp) - 1);
+  dashboardStats.temp[sizeof(dashboardStats.temp) - 1] = '\0';
+
+  dashboardStats.valid = true;
+  dashboardStats.lastUpdateMs = millis();
+  renderDashboard();
+}
+
+void initDashboardDisplay() {
+  Wire.begin(OLED_PIN_SDA, OLED_PIN_SCL);
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
+    SERIAL_DEBUG.println("[OLED] SSD1306 init failed");
+    dashboardDisplayReady = false;
+    return;
+  }
+
+  dashboardDisplayReady = true;
+  renderInitializingScreen();
+}
+#endif
 
 void updateBreathing() {
   breathingBrightness += breathingDirection * 10;
@@ -120,6 +403,10 @@ void stopDataLedBreathing() {
 
 void triggerStatusLED() {
   if (nightMode) return;
+
+#if IS_SERIAL_GATEWAY
+  dashboardActivityFlashUntilMs = millis() + DASHBOARD_ACTIVITY_FLASH_MS;
+#endif
   
   if (statusLEDState == STATUS_LED_IDLE) {
     // LED is off, turn it on
@@ -713,6 +1000,27 @@ void parseSerialByte(uint8_t b) {
         sendSerialHandshake(); 
         last_serial_activity = millis();
       }
+#if IS_SERIAL_GATEWAY
+      else if (b == '@') {
+        resetDashboardLine();
+        dashboardLineBuffer[dashboardLineIndex++] = '@';
+      }
+      else if (dashboardLineIndex > 0) {
+        if (b == '\n' || b == '\r') {
+          dashboardLineBuffer[dashboardLineIndex] = '\0';
+          applyDashboardLine(dashboardLineBuffer);
+          resetDashboardLine();
+        } else if (b >= 32 && b <= 126) {
+          if (dashboardLineIndex < sizeof(dashboardLineBuffer) - 1) {
+            dashboardLineBuffer[dashboardLineIndex++] = (char)b;
+          } else {
+            resetDashboardLine();
+          }
+        } else {
+          resetDashboardLine();
+        }
+      }
+#endif
       break;
     case S_READING:
       last_serial_activity = millis();
@@ -801,6 +1109,7 @@ void setup() {
   #if IS_SERIAL_GATEWAY
     SERIAL_COM.begin(460800);
     SERIAL_DEBUG.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX);
+    initDashboardDisplay();
   #else
     SERIAL_DEBUG.begin(115200);
     SERIAL_COM.setRxBufferSize(8192);
@@ -912,4 +1221,11 @@ void loop() {
       if (waitingForDelivery) break;
     }
   }
+
+#if IS_SERIAL_GATEWAY
+  if (dashboardDisplayReady && (millis() - lastDashboardRender) > 250) {
+    lastDashboardRender = millis();
+    renderDashboard();
+  }
+#endif
 }

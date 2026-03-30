@@ -5,3 +5,4 @@ waitress==3.0.2
 rich==14.2.0
 python-dotenv==1.2.1
 pyserial==3.5
+psutil==7.2.2

@@ -181,6 +181,25 @@ class SerialGatewayTransport:
                 logger.error(f"Failed to send packet over serial gateway: {e}")
                 return False
 
+    def send_dashboard_line(self, line: str) -> bool:
+        """Send one ASCII dashboard line to serial gateway OLED service."""
+        if not self.available:
+            return False
+
+        payload = (line.rstrip("\n") + "\n").encode("ascii", errors="ignore")
+
+        with self._lock:
+            ser = self.serial
+            if ser is None:
+                return False
+            try:
+                ser.write(payload)
+                ser.flush()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to send dashboard line over serial gateway: {e}")
+                return False
+
     def read_packet(self) -> Optional[bytes]:
         """Read one framed HueMix packet from serial stream."""
         if not self.available:

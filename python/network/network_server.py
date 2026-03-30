@@ -36,6 +36,12 @@ from .packet_protocol import PacketEncoder, PacketDecoder, MACFormatter
 from .device_manager import device_manager
 from .serial_gateway_transport import SerialGatewayTransport
 
+try:
+    import psutil  # type: ignore
+except Exception as e:
+    print(f"Error importing psutil: {e}")
+    psutil = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,6 +80,7 @@ class NetworkServer:
         self._serial_handshake_thread: Optional[threading.Thread] = None
         self._serial_handshake_lock = threading.Lock()
         self._netnode_status_thread: Optional[threading.Thread] = None
+        self._serial_dashboard_thread: Optional[threading.Thread] = None
         self.worker_threads: List[threading.Thread] = []
         self.packet_queue = queue.Queue()
 
@@ -85,6 +92,9 @@ class NetworkServer:
         self._serial_baudrate: int = 460800
         self._last_serial_port_present: Optional[bool] = None
         self._last_netnode_wifi_status: Optional[int] = None
+        self._process_start_time = time.time()
+        self._cached_server_ip = "0.0.0.0"
+        self._last_server_ip_refresh = 0.0
         
         # Gateway routing table: radio_mac -> {ip_address, wifi_mac, last_seen}
         self._gateway_table: Dict[str, Dict] = {}
@@ -102,6 +112,10 @@ class NetworkServer:
         # Device ping response tracking: device_mac -> {event, rssi_map, timestamp}
         self._pending_device_pings: Dict[str, Dict] = {}
         self._device_ping_lock = threading.RLock()
+        
+        # Serial handshake deduplication: radio_mac -> last_handshake_time
+        self._last_handshake_time: Dict[str, float] = {}
+        self._handshake_dedup_lock = threading.RLock()
         
         # OTA chunk ACK tracking: device_mac -> {event, last_chunk_index}
         self._ota_ack_events: Dict[str, Dict] = {}
@@ -366,6 +380,13 @@ class NetworkServer:
                 name='NetNode-WiFi-Status',
             )
             self._netnode_status_thread.start()
+
+            self._serial_dashboard_thread = threading.Thread(
+                target=self._serial_dashboard_loop,
+                daemon=True,
+                name='Serial-Dashboard',
+            )
+            self._serial_dashboard_thread.start()
             
             # Start worker threads (4 workers)
             for i in range(4):
@@ -402,6 +423,9 @@ class NetworkServer:
 
         if self._netnode_status_thread:
             self._netnode_status_thread.join(timeout=2.0)
+
+        if self._serial_dashboard_thread:
+            self._serial_dashboard_thread.join(timeout=2.0)
         
         for worker in self.worker_threads:
             worker.join(timeout=2.0)
@@ -588,6 +612,22 @@ class NetworkServer:
             return False
 
         endpoint = f"serial://{serial_port}"
+        transport_changed = (
+            self._serial_transport is not transport
+            or self._serial_endpoint != endpoint
+            or self._serial_gateway_radio_mac != radio_mac
+        )
+
+        # Deduplicate: ignore redundant handshakes within 2 seconds of last one
+        # (firmware sends 5 rapid handshakes for redundancy)
+        current_time = time.time()
+        with self._handshake_dedup_lock:
+            last_time = self._last_handshake_time.get(radio_mac)
+            if last_time and (current_time - last_time) < 2.0 and not transport_changed:
+                logger.debug(f"Ignoring duplicate handshake from {radio_mac} (received {current_time - last_time:.1f}s after last)")
+                return True
+            self._last_handshake_time[radio_mac] = current_time
+
         self._serial_transport = transport
         self._serial_gateway_radio_mac = radio_mac
         self._serial_endpoint = endpoint
@@ -725,6 +765,109 @@ class NetworkServer:
         else:
             logger.warning(f"Failed to sync net node WiFi status to {gateway_mac}")
         return success
+
+    def _serial_dashboard_loop(self):
+        """Push host metrics to serial gateway for OLED rendering."""
+        if psutil:
+            # Warm-up call to avoid an initial always-zero CPU reading.
+            try:
+                psutil.cpu_percent(interval=None)
+            except Exception:
+                pass
+
+        while self.running:
+            try:
+                transport = self._serial_transport
+                endpoint = self._serial_endpoint
+                if transport and endpoint and self._is_serial_endpoint(endpoint) and transport.available:
+                    line = self._build_serial_dashboard_line()
+                    transport.send_dashboard_line(line)
+            except Exception as e:
+                logger.debug(f"Serial dashboard publish error: {e}")
+
+            time.sleep(1.0)
+
+    def _build_serial_dashboard_line(self) -> str:
+        """Build compact dashboard line: @cpu,ram,ip,uptime,temp"""
+        cpu = 0
+        ram = 0
+
+        if psutil:
+            try:
+                cpu = int(round(psutil.cpu_percent(interval=None)))
+                ram = int(round(psutil.virtual_memory().percent))
+            except Exception:
+                pass
+        else:
+            logger.error("psutil not available, cannot get CPU/RAM metrics for serial dashboard")
+
+        ip = self._get_server_ip()
+        uptime = self._format_uptime(time.time() - self._process_start_time)
+        temp = self._get_cpu_temp_c()
+
+        return f"@{cpu},{ram},{ip},{uptime},{temp}"
+
+    def _get_server_ip(self) -> str:
+        """Resolve local host IPv4 suitable for UI display, with caching."""
+        now = time.time()
+        if now - self._last_server_ip_refresh < 30 and self._cached_server_ip:
+            return self._cached_server_ip
+
+        ip = "0.0.0.0"
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                ip = s.getsockname()[0]
+        except Exception:
+            try:
+                hostname = socket.gethostname()
+                ip = socket.gethostbyname(hostname)
+            except Exception:
+                ip = "0.0.0.0"
+
+        self._cached_server_ip = ip
+        self._last_server_ip_refresh = now
+        return ip
+
+    def _get_cpu_temp_c(self) -> str:
+        """Best-effort CPU temperature in Celsius, '--' when unavailable."""
+        if not psutil:
+            return "--"
+
+        try:
+            temps = psutil.sensors_temperatures(fahrenheit=False)
+            if not temps:
+                return "--"
+
+            for key in ("coretemp", "cpu-thermal", "soc_thermal", "k10temp"):
+                entries = temps.get(key)
+                if entries:
+                    current = getattr(entries[0], "current", None)
+                    if current is not None:
+                        return str(int(round(current)))
+
+            for entries in temps.values():
+                if entries:
+                    current = getattr(entries[0], "current", None)
+                    if current is not None:
+                        return str(int(round(current)))
+        except Exception:
+            return "--"
+
+        return "--"
+
+    @staticmethod
+    def _format_uptime(seconds: float) -> str:
+        """Format uptime as a single unit only: Xs, Xm, Xh, or Xd."""
+        total = max(0, int(seconds))
+
+        if total < 60:
+            return f"{total}s"
+        if total < 3600:
+            return f"{total // 60}m"
+        if total < 86400:
+            return f"{total // 3600}h"
+        return f"{total // 86400}d"
     
     def restart(self, new_port: Optional[int] = None):
         """Restart the UDP server, optionally with a new port.
@@ -2031,6 +2174,9 @@ class NetworkServer:
                         logger.info(f"Sent to {target_mac} via {gw_ip} (gateway: {gw_radio_mac}, msgID: {msg_id}, attempt: {attempt+1})")
                     else:
                         logger.warning(f"Failed to send to {target_mac} via gateway endpoint {gw_ip}")
+                        with self._delivery_lock:
+                            if msg_id in self._pending_deliveries:
+                                del self._pending_deliveries[msg_id]
                         continue
                     
                     # Wait for delivery report with timeout

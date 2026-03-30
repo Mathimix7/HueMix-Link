@@ -52,6 +52,96 @@ def set_dev_mode():
             'error': str(e)
         }), 500
 
+
+@admin_bp.route('/api/serial-gateway', methods=['GET'])
+def get_serial_gateway_settings():
+    """Get USB serial gateway settings."""
+    try:
+        cfg = config_manager.get_serial_gateway_config()
+        return jsonify({
+            'success': True,
+            'serial_gateway': cfg,
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@admin_bp.route('/api/serial-ports', methods=['GET'])
+def get_serial_ports():
+    """Get available USB serial ports for dropdown selection."""
+    try:
+        cfg = config_manager.get_serial_gateway_config()
+        configured_port = str(cfg.get('port', '') or '').strip()
+
+        ports = []
+        try:
+            from serial.tools import list_ports  # type: ignore
+
+            for port in list_ports.comports():
+                ports.append({
+                    'device': port.device,
+                    'description': port.description,
+                    'hwid': port.hwid,
+                    'available': True,
+                })
+        except Exception:
+            ports = []
+
+        if configured_port and not any((p.get('device') or '').upper() == configured_port.upper() for p in ports):
+            ports.append({
+                'device': configured_port,
+                'description': 'Configured port (currently not detected)',
+                'hwid': '',
+                'available': False,
+            })
+
+        ports.sort(key=lambda p: (not bool(p.get('available')), (p.get('device') or '').upper()))
+
+        return jsonify({
+            'success': True,
+            'ports': ports,
+            'configured_port': configured_port,
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'ports': [],
+            'configured_port': '',
+        }), 500
+
+
+@admin_bp.route('/api/serial-gateway', methods=['POST'])
+def set_serial_gateway_settings():
+    """Set USB serial gateway settings."""
+    try:
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get('enabled', False))
+        port = str(data.get('port', '') or '').strip()
+        baudrate = int(data.get('baudrate', 460800) or 460800)
+
+        if enabled and not port:
+            return jsonify({
+                'success': False,
+                'error': 'Port is required when enabling serial gateway'
+            }), 400
+
+        config_manager.set_serial_gateway_config(enabled=enabled, port=port, baudrate=baudrate)
+
+        return jsonify({
+            'success': True,
+            'serial_gateway': config_manager.get_serial_gateway_config(),
+            'message': 'Serial gateway settings applied.'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @admin_bp.route('/backups', methods=['GET'])
 def list_backups():
     """List all available backups."""

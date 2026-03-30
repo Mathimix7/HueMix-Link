@@ -65,6 +65,11 @@ BASE_DEVICE_CONFIGS = {
         'label': 'Gateway Radio Node (ESP-NOW)',
         'group': 'Gateways'
     },
+    'gateway_radio_python': {
+        'device_code': DEV_GATEWAY,
+        'label': 'Gateway Radio Node (Serial Python)',
+        'group': 'Gateways'
+    },
     'button_esp32': {
         'device_code': DEV_BUTTON,
         'label': 'Button ESP32',
@@ -114,12 +119,12 @@ for model_id, model_info in LIGHTSTRIP_MODELS.items():
 
 # Auto-generate derived dictionaries from base configs
 EXTENDED_DEVICE_TYPES = {
-    key: (config['device_code'], key) 
+    key: (config['device_code'], key)
     for key, config in BASE_DEVICE_CONFIGS.items()
 }
 
 DEVICE_TYPE_LABELS = {
-    key: config['label'] 
+    key: config['label']
     for key, config in BASE_DEVICE_CONFIGS.items()
 }
 
@@ -132,11 +137,17 @@ for key, config in BASE_DEVICE_CONFIGS.items():
 
 # For backwards compatibility and convenience in templates
 LIGHTSTRIP_MODEL_NAMES = {
-    model_id: f"{info['platform']}, {info['type']}, {info['chip']}" 
+    model_id: f"{info['platform']}, {info['type']}, {info['chip']}"
     for model_id, info in LIGHTSTRIP_MODELS.items()
 }
 
 
+def _is_serial_gateway(gateway: dict) -> bool:
+    """Return True when gateway is connected through USB serial transport."""
+    endpoint = gateway.get('transport_endpoint') or gateway.get('ip_address')
+    return (gateway.get('transport') == 'usb_serial') or (
+        isinstance(endpoint, str) and endpoint.startswith('serial://')
+    )
 def get_firmware_filename(device_type: int, version: str) -> str:
     """Generate firmware filename for device type and version.
     
@@ -261,6 +272,23 @@ def check_updates():
                 for asset in assets:
                     name = asset.get('name', '')
                     download_url = asset.get('url', '')
+
+                    # Dedicated serial-host radio firmware
+                    match_radio_python = re.match(
+                        r'huemixlink-(esp32|esp8266)-radio-python-v([\d\.]+)\.bin',
+                        name,
+                    )
+                    if match_radio_python:
+                        platform, version = match_radio_python.groups()
+                        if platform == 'esp32':
+                            available_firmwares['gateway_radio_python'] = {
+                                'version': version,
+                                'firmware_type': 'gateway_radio_python',
+                                'download_url': download_url,
+                                'filename': name,
+                                'source': 'github'
+                            }
+                        continue
                     
                     # Match firmware files (including motion_sensor and door_sensor)
                     match = re.match(r'huemixlink-(esp32|esp8266)-(net|radio|button|lightstrip|remote|motion_sensor|door_sensor)(?:-([0-9]+))?-v([\d\.]+)\.bin', name)
@@ -550,6 +578,7 @@ def start_ota(device_mac):
     try:
         data = request.get_json(silent=True) or {}
         firmware_path = data.get('firmware_path')
+        firmware_type = data.get('firmware_type')
         
         
         if not firmware_path:
@@ -562,12 +591,14 @@ def start_ota(device_mac):
         # Determine device type
         device = None
         device_type = None
+        matched_gateway = None
         
         # Check gateways
         gateways = device_manager.get_all_gateways()
         for gw in gateways:
             if gw.get('mac_address') == device_mac or gw.get('radio_mac') == device_mac:
                 device = gw
+                matched_gateway = gw
                 device_type = DEV_GATEWAY
                 break
         
@@ -604,6 +635,21 @@ def start_ota(device_mac):
 
         if device_type is None:
             return jsonify({'success': False, 'error': 'Unsupported device type'}), 400
+
+        if device_type == DEV_GATEWAY and matched_gateway:
+            is_serial_gateway = _is_serial_gateway(matched_gateway)
+
+            if is_serial_gateway and firmware_type != 'gateway_radio_python':
+                return jsonify({
+                    'success': False,
+                    'error': 'Serial gateway OTA only supports gateway_radio_python firmware'
+                }), 400
+
+            if not is_serial_gateway and firmware_type == 'gateway_radio_python':
+                return jsonify({
+                    'success': False,
+                    'error': 'gateway_radio_python firmware is only valid for serial gateways'
+                }), 400
         
         # Validate model_id for lightstrips
         if device_type == DEV_LIGHT:
@@ -641,6 +687,12 @@ def start_ota(device_mac):
                 'success': False,
                 'error': 'Another update is already in progress'
             }), 409
+
+        if device_type is None:
+            return jsonify({
+                'success': False,
+                'error': 'Unable to resolve device type for OTA'
+            }), 400
         
         # Start OTA update
         success = network_server.start_ota_update(device_mac, device_type, firmware_path)
@@ -747,25 +799,29 @@ def get_devices_with_versions():
         # Get all gateways
         gateways = device_manager.get_all_gateways()
         for gw in gateways:
-            # Add Net Node entry (WiFi MAC)
-            devices.append({
-                'mac_address': gw.get('mac_address'),
-                'radio_mac': gw.get('radio_mac'),
-                'name': gw.get('name', f"Gateway {gw.get('mac_address', '')[-8:]}"),
-                'type': 'gateway_net',
-                'device_type': DEV_GATEWAY,
-                'version': gw.get('version_net', '0.0.0')
-            })
-            
-            # Add Radio Node entry (Radio MAC) - only if radio_mac exists
+            is_serial = _is_serial_gateway(gw)
+
+            if not is_serial:
+                # Add Net Node entry (WiFi MAC) only for standard UDP gateways.
+                devices.append({
+                    'mac_address': gw.get('mac_address'),
+                    'radio_mac': gw.get('radio_mac'),
+                    'name': gw.get('name', f"Gateway {gw.get('mac_address', '')[-8:]}"),
+                    'type': 'gateway_net',
+                    'device_type': DEV_GATEWAY,
+                    'version': gw.get('version_net', '0.0.0')
+                })
+
+            # Add Radio Node entry (Radio MAC) - serial gateways use dedicated firmware type.
             if gw.get('radio_mac'):
                 devices.append({
-                    'mac_address': gw.get('radio_mac'),  # Use radio MAC as identifier
-                    'wifi_mac': gw.get('mac_address'),   # Keep reference to WiFi MAC
+                    'mac_address': gw.get('radio_mac'),
+                    'wifi_mac': gw.get('mac_address'),
                     'name': gw.get('name', f"Gateway {gw.get('mac_address', '')[-8:]}"),
-                    'type': 'gateway_radio',
+                    'type': 'gateway_radio_python' if is_serial else 'gateway_radio',
                     'device_type': DEV_GATEWAY,
-                    'version': gw.get('version_radio', '0.0.0')
+                    'version': gw.get('version_radio', '0.0.0'),
+                    'is_serial': is_serial,
                 })
         
         # Get all lightstrips

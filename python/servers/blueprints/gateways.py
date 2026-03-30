@@ -1,6 +1,7 @@
 """Gateways routes blueprint for ESP-NOW UDP network gateways."""
 from flask import Blueprint, render_template, request, jsonify
 from services import data_manager
+from services.config_manager import config_manager
 from network.network_server import network_server
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -9,17 +10,38 @@ from services import config_notifier
 
 gateways_bp = Blueprint('gateways', __name__, url_prefix='/gateways')
 
+
+def _extract_serial_port(endpoint):
+    """Extract COM/TTY port from serial endpoint string."""
+    if not endpoint or not isinstance(endpoint, str):
+        return None
+    if endpoint.startswith('serial://'):
+        return endpoint.replace('serial://', '', 1)
+    return None
+
+
+def _is_serial_gateway(server):
+    endpoint = server.get('transport_endpoint') or server.get('ip_address')
+    return (server.get('transport') == 'usb_serial') or (isinstance(endpoint, str) and endpoint.startswith('serial://'))
+
 def ping_single_gateway(server):
     """Ping a single gateway and return its status."""
     gateway_mac = server.get('mac_address')
     
     if not gateway_mac:
+        is_serial = _is_serial_gateway(server)
+        serial_endpoint = server.get('transport_endpoint') or server.get('ip_address')
         return {
             'id': server.get('id'),
             'name': server.get('name'),
             'mac_address': server.get('mac_address'),
             'radio_mac': server.get('radio_mac'),
             'ip_address': server.get('ip_address'),
+            'transport': server.get('transport'),
+            'transport_endpoint': server.get('transport_endpoint'),
+            'is_serial': is_serial,
+            'serial_endpoint': serial_endpoint if is_serial else None,
+            'serial_port': _extract_serial_port(serial_endpoint) if is_serial else None,
             'last_used': server.get('last_used'),
             'status': 'offline',
             'uptime': None,
@@ -29,6 +51,9 @@ def ping_single_gateway(server):
     
     # Ping gateway via UDP
     uptime = network_server.send_ping(gateway_mac, timeout=2.0)
+
+    is_serial = _is_serial_gateway(server)
+    serial_endpoint = server.get('transport_endpoint') or server.get('ip_address')
     
     return {
         'id': server.get('id'),
@@ -36,6 +61,11 @@ def ping_single_gateway(server):
         'mac_address': server.get('mac_address'),
         'radio_mac': server.get('radio_mac'),
         'ip_address': server.get('ip_address'),
+        'transport': server.get('transport'),
+        'transport_endpoint': server.get('transport_endpoint'),
+        'is_serial': is_serial,
+        'serial_endpoint': serial_endpoint if is_serial else None,
+        'serial_port': _extract_serial_port(serial_endpoint) if is_serial else None,
         'last_used': server.get('last_used'),
         'status': 'online' if uptime is not None else 'offline',
         'uptime': uptime,
@@ -73,6 +103,11 @@ def get_gateways_with_status():
                     'mac_address': orig.get('mac_address'),
                     'radio_mac': orig.get('radio_mac'),
                     'ip_address': orig.get('ip_address'),
+                    'transport': orig.get('transport'),
+                    'transport_endpoint': orig.get('transport_endpoint'),
+                    'is_serial': _is_serial_gateway(orig),
+                    'serial_endpoint': (orig.get('transport_endpoint') or orig.get('ip_address')) if _is_serial_gateway(orig) else None,
+                    'serial_port': _extract_serial_port(orig.get('transport_endpoint') or orig.get('ip_address')) if _is_serial_gateway(orig) else None,
                     'last_used': orig.get('last_used'),
                     'status': 'offline',
                     'uptime': None,
@@ -82,6 +117,7 @@ def get_gateways_with_status():
     
     # Rebuild results in original order
     results = [results_dict[i] for i in range(len(gateways))]
+    results.sort(key=lambda g: (0 if g.get('is_serial') else 1, (g.get('name') or '').lower()))
     return results
 
 
@@ -171,6 +207,16 @@ def delete_gateway(gateway_id):
         return jsonify({"success": False, "error": "Gateway not found"}), 404
     
     save_gateways(gateways)
+
+    # Deleting a serial gateway should also disable serial gateway settings.
+    if deleted_gateway and _is_serial_gateway(deleted_gateway):
+        serial_cfg = config_manager.get_serial_gateway_config()
+        serial_port = _extract_serial_port(deleted_gateway.get('transport_endpoint') or deleted_gateway.get('ip_address'))
+        config_manager.set_serial_gateway_config(
+            enabled=False,
+            port=serial_cfg.get('port') or (serial_port or ''),
+            baudrate=serial_cfg.get('baudrate', 460800),
+        )
     
     # Notify network server to remove from routing table
     if deleted_gateway:

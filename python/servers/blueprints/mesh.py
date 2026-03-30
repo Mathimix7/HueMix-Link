@@ -6,6 +6,19 @@ from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS
 mesh_bp = Blueprint('mesh', __name__, url_prefix='/mesh')
 
 
+def _extract_serial_port(endpoint):
+    if not endpoint or not isinstance(endpoint, str):
+        return None
+    if endpoint.startswith('serial://'):
+        return endpoint.replace('serial://', '', 1)
+    return None
+
+
+def _is_serial_gateway(server):
+    endpoint = server.get('transport_endpoint') or server.get('ip_address')
+    return (server.get('transport') == 'usb_serial') or (isinstance(endpoint, str) and endpoint.startswith('serial://'))
+
+
 @mesh_bp.route('/')
 def mesh_view():
     """Render mesh visualization page."""
@@ -34,18 +47,24 @@ def get_topology():
         nodes = []
         edges = []
         
-        # Add gateway nodes
+        # Add gateway nodes (serial gateways first)
         servers = data_manager.read_json(FILE_GATEWAYS, default=[])
+        servers = sorted(servers, key=lambda s: (0 if _is_serial_gateway(s) else 1, (s.get('name') or '').lower()))
         for server in servers:
             radio_mac = server.get('radio_mac')
             if not radio_mac:
                 continue
+            is_serial = _is_serial_gateway(server)
+            serial_endpoint = server.get('transport_endpoint') or server.get('ip_address')
             nodes.append({
                 'id': radio_mac,
                 'type': 'gateway',
                 'label': server.get('name', f"Gateway {radio_mac[-8:]}"),
                 'ip': server.get('ip_address'),
-                'wifi_mac': server.get('mac_address')
+                'wifi_mac': server.get('mac_address'),
+                'is_serial': is_serial,
+                'serial_endpoint': serial_endpoint if is_serial else None,
+                'serial_port': _extract_serial_port(serial_endpoint) if is_serial else None,
             })
 
         # Add lightstrip nodes and routing edges

@@ -13,9 +13,11 @@ from typing import Dict, Optional, List, Tuple
 from datetime import datetime
 import struct
 from services.data_manager import data_manager
+from services.config_manager import config_manager
 from services.config_change_notifier import config_notifier
 from services.home_id_manager import home_id_manager
 from services.ota_manager import ota_manager, OTAState
+from services.hue_service import hue_service
 from constants import (
     DEFAULT_UDP_IP, DEFAULT_UDP_PORT, DEFAULT_GATEWAY_PORT,
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_GW_LIST_UPD, PKT_PING, PKT_PING_DEVICE, PKT_MOTION_EVENT, PKT_DOOR_EVENT,
@@ -26,11 +28,19 @@ from constants import (
     OTA_CHUNK_ACK_TIMEOUT, OTA_CHUNK_MAX_RETRIES, OTA_CHECKPOINT_INTERVAL,
     OTA_POST_UPDATE_TIMEOUT,
     RSSI_AUTO_PAIR_THRESHOLD, MAX_GATEWAYS_PER_PACKET,
-    FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS, CMD_SET_MOTION_COOLDOWN, CMD_SET_MOTION_SLEEP
+    FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS,
+    CMD_SET_MOTION_COOLDOWN, CMD_SET_MOTION_SLEEP, CMD_NIGHT_MODE_ON, CMD_NIGHT_MODE_OFF, CMD_NETNODE_WIFI_STATUS
 )
 from network.pairing_manager import pairing_manager
 from .packet_protocol import PacketEncoder, PacketDecoder, MACFormatter
 from .device_manager import device_manager
+from .serial_gateway_transport import SerialGatewayTransport
+
+try:
+    import psutil  # type: ignore
+except Exception as e:
+    print(f"Error importing psutil: {e}")
+    psutil = None
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +76,25 @@ class NetworkServer:
         self.sock: Optional[socket.socket] = None
         self.running = False
         self.receive_thread: Optional[threading.Thread] = None
+        self.serial_receive_thread: Optional[threading.Thread] = None
+        self._serial_handshake_thread: Optional[threading.Thread] = None
+        self._serial_handshake_lock = threading.Lock()
+        self._netnode_status_thread: Optional[threading.Thread] = None
+        self._serial_dashboard_thread: Optional[threading.Thread] = None
         self.worker_threads: List[threading.Thread] = []
         self.packet_queue = queue.Queue()
+
+        # Optional USB serial gateway transport
+        self._serial_transport: Optional[SerialGatewayTransport] = None
+        self._serial_gateway_radio_mac: Optional[str] = None
+        self._serial_endpoint: Optional[str] = None
+        self._serial_port: Optional[str] = None
+        self._serial_baudrate: int = 460800
+        self._last_serial_port_present: Optional[bool] = None
+        self._last_netnode_wifi_status: Optional[int] = None
+        self._process_start_time = time.time()
+        self._cached_server_ip = "0.0.0.0"
+        self._last_server_ip_refresh = 0.0
         
         # Gateway routing table: radio_mac -> {ip_address, wifi_mac, last_seen}
         self._gateway_table: Dict[str, Dict] = {}
@@ -85,6 +112,10 @@ class NetworkServer:
         # Device ping response tracking: device_mac -> {event, rssi_map, timestamp}
         self._pending_device_pings: Dict[str, Dict] = {}
         self._device_ping_lock = threading.RLock()
+        
+        # Serial handshake deduplication: radio_mac -> last_handshake_time
+        self._last_handshake_time: Dict[str, float] = {}
+        self._handshake_dedup_lock = threading.RLock()
         
         # OTA chunk ACK tracking: device_mac -> {event, last_chunk_index}
         self._ota_ack_events: Dict[str, Dict] = {}
@@ -118,6 +149,7 @@ class NetworkServer:
         config_notifier.subscribe('udp_port_changed', self._on_udp_port_changed)
         config_notifier.subscribe('gateways_reload', self.reload_gateways)
         config_notifier.subscribe('gateway_deleted', self._on_gateway_deleted)
+        config_notifier.subscribe('serial_gateway_config_changed', self._on_serial_gateway_config_changed)
         home_id_manager.subscribe(self._on_home_id_changed)
     
     def _on_home_id_changed(self, new_id):
@@ -166,6 +198,49 @@ class NetworkServer:
             daemon=True,
             name="Gateway-Deletion"
         ).start()
+
+    def _on_serial_gateway_config_changed(self, notification):
+        """Apply serial gateway config changes without requiring backend restart."""
+        new_cfg = (notification or {}).get('data', {}).get('new', {})
+        threading.Thread(
+            target=self._apply_serial_gateway_config_change,
+            args=(new_cfg,),
+            daemon=True,
+            name="Serial-Gateway-Config-Apply",
+        ).start()
+
+    def _apply_serial_gateway_config_change(self, serial_cfg: Optional[Dict]):
+        """Apply serial gateway configuration at runtime."""
+        serial_cfg = serial_cfg or {}
+        enabled = bool(serial_cfg.get('enabled', False))
+        serial_port = str(serial_cfg.get('port', '') or '').strip()
+        baudrate = int(serial_cfg.get('baudrate', 460800) or 460800)
+
+        if not enabled or not serial_port:
+            self._serial_port = None
+            self._serial_baudrate = baudrate
+            self._last_serial_port_present = None
+            self._drop_serial_transport(clear_gateway_entry=True)
+            self.reload_gateways()
+            logger.info("Serial gateway disabled via config change")
+            return
+
+        port_changed = (self._serial_port or '').upper() != serial_port.upper()
+        baud_changed = self._serial_baudrate != baudrate
+
+        self._serial_port = serial_port
+        self._serial_baudrate = baudrate
+        self._last_serial_port_present = None
+
+        if port_changed or baud_changed:
+            self._drop_serial_transport(clear_gateway_entry=True)
+            logger.info(f"Serial gateway reconfigured to {serial_port} @ {baudrate}")
+
+        if self.running:
+            self._start_serial_gateway_transport()
+            self.reload_gateways()
+        else:
+            logger.info("Serial gateway config stored; it will be applied when NetworkServer starts")
     
     def _handle_gateway_deletion_async(self, wifi_mac: str, radio_mac: str):
         """Async handler for gateway deletion (runs in background thread).
@@ -229,10 +304,11 @@ class NetworkServer:
         gateways = data_manager.read_json(FILE_GATEWAYS, default=[])
         
         with self._gateway_lock:
+            self._gateway_table.clear()
             for gateway in gateways:
                 radio_mac = gateway.get('radio_mac')
                 wifi_mac = gateway.get('mac_address')
-                ip = gateway.get('ip_address')
+                ip = gateway.get('ip_address') or gateway.get('transport_endpoint')
                 
                 if radio_mac and wifi_mac and ip:
                     self._gateway_table[radio_mac] = {
@@ -293,6 +369,24 @@ class NetworkServer:
             # Start receive thread
             self.receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
             self.receive_thread.start()
+
+            # Start optional serial gateway transport (if configured)
+            self._start_serial_gateway_transport()
+
+            # Watch host connectivity state and sync cmd=3 on status changes.
+            self._netnode_status_thread = threading.Thread(
+                target=self._netnode_wifi_status_loop,
+                daemon=True,
+                name='NetNode-WiFi-Status',
+            )
+            self._netnode_status_thread.start()
+
+            self._serial_dashboard_thread = threading.Thread(
+                target=self._serial_dashboard_loop,
+                daemon=True,
+                name='Serial-Dashboard',
+            )
+            self._serial_dashboard_thread.start()
             
             # Start worker threads (4 workers)
             for i in range(4):
@@ -326,6 +420,12 @@ class NetworkServer:
         # Wait for threads
         if self.receive_thread:
             self.receive_thread.join(timeout=2.0)
+
+        if self._netnode_status_thread:
+            self._netnode_status_thread.join(timeout=2.0)
+
+        if self._serial_dashboard_thread:
+            self._serial_dashboard_thread.join(timeout=2.0)
         
         for worker in self.worker_threads:
             worker.join(timeout=2.0)
@@ -334,8 +434,440 @@ class NetworkServer:
         if self.sock:
             self.sock.close()
             self.sock = None
+
+        # Close serial transport
+        self._drop_serial_transport(clear_gateway_entry=False)
         
         logger.info("NetworkServer stopped")
+
+    def _start_serial_gateway_transport(self):
+        """Start USB serial gateway transport if enabled in configuration.
+        
+        Starts a supervisor thread that keeps retrying connect/handshake on failures.
+        """
+        serial_cfg = config_manager.get_serial_gateway_config()
+        if serial_cfg.get('enabled'):
+            serial_port = str(serial_cfg.get('port', '') or '').strip()
+            if not serial_port:
+                logger.warning("Serial gateway enabled but no serial port is configured")
+                return
+            self._serial_port = serial_port
+            self._serial_baudrate = int(serial_cfg.get('baudrate', 460800) or 460800)
+        elif not self._serial_port:
+            return
+
+        with self._serial_handshake_lock:
+            if self._serial_handshake_thread and self._serial_handshake_thread.is_alive():
+                return
+
+            # Start handshake supervisor in background to avoid blocking startup.
+            self._serial_handshake_thread = threading.Thread(
+                target=self._async_serial_gateway_handshake,
+                daemon=True,
+                name='Serial-Handshake',
+            )
+            self._serial_handshake_thread.start()
+
+    def _drop_serial_transport(self, clear_gateway_entry: bool = True):
+        """Close and clear active serial transport state.
+
+        Args:
+            clear_gateway_entry: Remove stale serial endpoint from gateway table.
+        """
+        old_radio_mac = self._serial_gateway_radio_mac
+
+        if self._serial_transport:
+            try:
+                self._serial_transport.close()
+            except Exception:
+                pass
+
+        self._serial_transport = None
+        self._serial_endpoint = None
+
+        if clear_gateway_entry and old_radio_mac:
+            with self._gateway_lock:
+                if old_radio_mac in self._gateway_table:
+                    del self._gateway_table[old_radio_mac]
+
+        self._serial_gateway_radio_mac = None
+
+    def _is_configured_serial_port_available(self, serial_port: str) -> bool:
+        """Return True only when the configured serial port currently exists."""
+        try:
+            from serial.tools import list_ports  # type: ignore
+            available = {p.device.upper() for p in list_ports.comports()}
+            exists = serial_port.upper() in available
+        except Exception as e:
+            # If port listing is unavailable, fall back to trying connect.
+            logger.debug(f"Serial port scan unavailable, falling back to connect attempts: {e}")
+            return True
+
+        if self._last_serial_port_present is None or self._last_serial_port_present != exists:
+            if exists:
+                logger.info(f"Serial port detected: {serial_port}")
+            else:
+                logger.warning(f"Serial port not present, waiting: {serial_port}")
+            self._last_serial_port_present = exists
+
+        return exists
+
+    def _async_serial_gateway_handshake(self):
+        """Perform serial gateway handshake asynchronously in background thread.
+        
+        Keeps retrying connect/handshake while server is running.
+        """
+        max_attempts = 3
+
+        while self.running:
+            serial_port = self._serial_port
+            baudrate = self._serial_baudrate
+
+            if not serial_port:
+                time.sleep(1.0)
+                continue
+
+            # If already connected and healthy, idle briefly.
+            if self._serial_transport and self._serial_transport.available and self._serial_gateway_radio_mac:
+                active_port = (self._serial_endpoint or '').replace('serial://', '', 1)
+                if active_port and active_port.upper() != serial_port.upper():
+                    logger.info(
+                        f"Serial port changed from {active_port} to {serial_port}; reconnecting transport"
+                    )
+                    self._drop_serial_transport(clear_gateway_entry=True)
+                    continue
+                time.sleep(1.0)
+                continue
+
+            # Only attempt reconnect when configured port is currently present.
+            if not self._is_configured_serial_port_available(serial_port):
+                time.sleep(2.0)
+                continue
+
+            attempt = 1
+            connected = False
+
+            while attempt <= max_attempts and self.running:
+                logger.info(f"Serial gateway handshake attempt {attempt}/{max_attempts} on {serial_port} @ {baudrate} baud")
+
+                self._drop_serial_transport(clear_gateway_entry=False)
+            
+                transport = SerialGatewayTransport(
+                    port=serial_port,
+                    baudrate=baudrate,
+                )
+                if not transport.connect():
+                    logger.error(f"Failed to connect to serial port {serial_port}")
+                    if attempt < max_attempts:
+                        logger.info("Retrying in 5 seconds...")
+                        time.sleep(5)
+                    attempt += 1
+                    continue
+
+                logger.debug("Serial port connected, attempting handshake...")
+                handshake = transport.request_handshake()
+            
+                if handshake:
+                    if not self._register_serial_gateway_from_handshake(handshake, transport, serial_port):
+                        transport.close()
+                        break
+
+                    radio_mac = handshake.get('radio_mac')
+                    endpoint = self._serial_endpoint
+
+                    if not self.serial_receive_thread or not self.serial_receive_thread.is_alive():
+                        self.serial_receive_thread = threading.Thread(
+                            target=self._serial_receive_loop,
+                            daemon=True,
+                            name='Serial-Receive',
+                        )
+                        self.serial_receive_thread.start()
+
+                    logger.info(f"Serial gateway transport active: {radio_mac} via {endpoint}")
+                    connected = True
+                    break
+            
+                logger.warning(f"Serial gateway handshake attempt {attempt} failed on {serial_port}")
+                transport.close()
+                if attempt < max_attempts:
+                    wait_time = 3
+                    logger.info(f"Retrying handshake in {wait_time} seconds (attempt {attempt + 1}/{max_attempts})...")
+                    time.sleep(wait_time)
+                attempt += 1
+
+            if not connected and self.running:
+                logger.error(f"Serial gateway handshake failed after {max_attempts} attempts on {serial_port}; retrying in 5s")
+                time.sleep(5)
+
+    def _register_serial_gateway_from_handshake(
+        self,
+        handshake: Dict[str, str],
+        transport: SerialGatewayTransport,
+        serial_port: str,
+    ) -> bool:
+        """Register serial gateway endpoint and persist metadata from handshake."""
+        radio_mac = handshake.get('radio_mac')
+        if not radio_mac:
+            logger.error("Serial gateway handshake missing radio MAC address")
+            return False
+
+        endpoint = f"serial://{serial_port}"
+        transport_changed = (
+            self._serial_transport is not transport
+            or self._serial_endpoint != endpoint
+            or self._serial_gateway_radio_mac != radio_mac
+        )
+
+        # Deduplicate: ignore redundant handshakes within 2 seconds of last one
+        # (firmware sends 5 rapid handshakes for redundancy)
+        current_time = time.time()
+        with self._handshake_dedup_lock:
+            last_time = self._last_handshake_time.get(radio_mac)
+            if last_time and (current_time - last_time) < 2.0 and not transport_changed:
+                logger.debug(f"Ignoring duplicate handshake from {radio_mac} (received {current_time - last_time:.1f}s after last)")
+                return True
+            self._last_handshake_time[radio_mac] = current_time
+
+        self._serial_transport = transport
+        self._serial_gateway_radio_mac = radio_mac
+        self._serial_endpoint = endpoint
+
+        gateway = device_manager.update_gateway(
+            wifi_mac=radio_mac,
+            radio_mac=radio_mac,
+            ip_address=endpoint,
+            version_net='serial-host',
+            version_radio=handshake.get('version'),
+        )
+        if gateway:
+            gateways = data_manager.read_json(FILE_GATEWAYS, default=[])
+            for gw in gateways:
+                if gw.get('radio_mac', '').upper() == radio_mac.upper():
+                    gw['transport'] = 'usb_serial'
+                    gw['transport_endpoint'] = endpoint
+                    break
+            data_manager.write_json(FILE_GATEWAYS, gateways)
+
+        with self._gateway_lock:
+            self._gateway_table[radio_mac] = {
+                'ip_address': endpoint,
+                'wifi_mac': radio_mac,
+                'last_seen': datetime.now(),
+            }
+
+        # For serial-radio OTA, reboot confirmation arrives as a serial handshake
+        # (not a HELLO packet). Accept this as post-update validation.
+        session = ota_manager.get_session(radio_mac)
+        if session and session.state == OTAState.VALIDATING:
+            expected_version = f"{session.version[0]}.{session.version[1]}.{session.version[2]}"
+            current_version = str(handshake.get('version', '0.0.0'))
+
+            if current_version == expected_version:
+                logger.info(f"✅ OTA validation SUCCESS (SERIAL-RADIO): {radio_mac} now running {current_version}")
+                ota_manager.update_session_state(radio_mac, OTAState.COMPLETE, "Firmware validated successfully via serial handshake",)
+            else:
+                error_msg = f"Version mismatch: expected {expected_version}, got {current_version}"
+                logger.error(f"❌ OTA validation FAILED (SERIAL-RADIO): {radio_mac} - {error_msg}")
+                ota_manager.update_session_state(radio_mac, OTAState.FAILED, error_msg)
+
+        self._resync_serial_gateway_runtime_state(radio_mac)
+        return True
+
+    def _resync_serial_gateway_runtime_state(self, radio_mac: str):
+        """Re-apply host state to radio after (re)handshake/reboot."""
+        self._last_netnode_wifi_status = None
+        self._sync_netnode_wifi_status(radio_mac)
+
+        with self._led_state_lock:
+            leds_enabled = self._gateway_leds_enabled
+        self.set_gateway_leds(radio_mac, leds_enabled)
+
+        # Restore routing list in radio and in paired devices after radio reboot.
+        self._broadcast_gateway_list(only_gateways=False)
+
+
+    def _serial_receive_loop(self):
+        """Receive framed packets from the USB serial radio transport."""
+        logger.info("Serial receive loop started")
+
+        while self.running and self._serial_transport and self._serial_endpoint:
+            handshake = self._serial_transport.pop_pending_handshake()
+            if handshake:
+                logger.info(
+                    f"Runtime serial handshake detected from {handshake.get('radio_mac')}, re-syncing gateway state"
+                )
+                runtime_serial_port = (self._serial_port or '').strip()
+                if not runtime_serial_port and self._serial_endpoint and self._is_serial_endpoint(self._serial_endpoint):
+                    runtime_serial_port = self._serial_endpoint.replace('serial://', '', 1)
+                self._register_serial_gateway_from_handshake(
+                    handshake,
+                    self._serial_transport,
+                    runtime_serial_port,
+                )
+                continue
+
+            packet = self._serial_transport.read_packet()
+            handshake = self._serial_transport.pop_pending_handshake()
+            if handshake:
+                logger.info(
+                    f"Runtime serial handshake detected from {handshake.get('radio_mac')}, re-syncing gateway state"
+                )
+                runtime_serial_port = (self._serial_port or '').strip()
+                if not runtime_serial_port and self._serial_endpoint and self._is_serial_endpoint(self._serial_endpoint):
+                    runtime_serial_port = self._serial_endpoint.replace('serial://', '', 1)
+                self._register_serial_gateway_from_handshake(
+                    handshake,
+                    self._serial_transport,
+                    runtime_serial_port,
+                )
+                continue
+
+            if not packet:
+                if self._serial_transport and not self._serial_transport.available:
+                    logger.warning("Serial gateway transport became unavailable; will reconnect")
+                    self._drop_serial_transport(clear_gateway_entry=False)
+                    break
+                time.sleep(0.01)
+                continue
+
+            # Reuse existing processing path by using a synthetic sender endpoint.
+            self.packet_queue.put((packet, (self._serial_endpoint, self.gateway_port)))
+
+        logger.info("Serial receive loop stopped")
+
+    def _netnode_wifi_status_loop(self):
+        """Push cmd=3 updates when host connectivity state changes."""
+        while self.running:
+            status_value = self._get_netnode_wifi_status_value()
+            if self._last_netnode_wifi_status != status_value:
+                radio_mac = self._serial_gateway_radio_mac
+                if radio_mac:
+                    self._sync_netnode_wifi_status(radio_mac)
+                self._last_netnode_wifi_status = status_value
+            time.sleep(2.0)
+
+    def _get_netnode_wifi_status_value(self) -> int:
+        """Return host connectivity status to publish to radio via SYS_CMD=3."""
+        try:
+            return 1 if hue_service.is_initialized() else 0
+        except Exception:
+            return 0
+
+    def _sync_netnode_wifi_status(self, gateway_mac: str) -> bool:
+        """Sync Python host connectivity state to radio netNodeHasWiFi."""
+        status_value = self._get_netnode_wifi_status_value()
+        success = self.send_system_command(gateway_mac, CMD_NETNODE_WIFI_STATUS, status_value)
+        if success:
+            logger.info(
+                f"Synced net node WiFi status to {gateway_mac}: "
+                f"{'CONNECTED' if status_value else 'DISCONNECTED'}"
+            )
+        else:
+            logger.warning(f"Failed to sync net node WiFi status to {gateway_mac}")
+        return success
+
+    def _serial_dashboard_loop(self):
+        """Push host metrics to serial gateway for OLED rendering."""
+        if psutil:
+            # Warm-up call to avoid an initial always-zero CPU reading.
+            try:
+                psutil.cpu_percent(interval=None)
+            except Exception:
+                pass
+
+        while self.running:
+            try:
+                transport = self._serial_transport
+                endpoint = self._serial_endpoint
+                if transport and endpoint and self._is_serial_endpoint(endpoint) and transport.available:
+                    line = self._build_serial_dashboard_line()
+                    transport.send_dashboard_line(line)
+            except Exception as e:
+                logger.debug(f"Serial dashboard publish error: {e}")
+
+            time.sleep(1.0)
+
+    def _build_serial_dashboard_line(self) -> str:
+        """Build compact dashboard line: @cpu,ram,ip,uptime,temp"""
+        cpu = 0
+        ram = 0
+
+        if psutil:
+            try:
+                cpu = int(round(psutil.cpu_percent(interval=None)))
+                ram = int(round(psutil.virtual_memory().percent))
+            except Exception:
+                pass
+        else:
+            logger.error("psutil not available, cannot get CPU/RAM metrics for serial dashboard")
+
+        ip = self._get_server_ip()
+        uptime = self._format_uptime(time.time() - self._process_start_time)
+        temp = self._get_cpu_temp_c()
+
+        return f"@{cpu},{ram},{ip},{uptime},{temp}"
+
+    def _get_server_ip(self) -> str:
+        """Resolve local host IPv4 suitable for UI display, with caching."""
+        now = time.time()
+        if now - self._last_server_ip_refresh < 30 and self._cached_server_ip:
+            return self._cached_server_ip
+
+        ip = "0.0.0.0"
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                ip = s.getsockname()[0]
+        except Exception:
+            try:
+                hostname = socket.gethostname()
+                ip = socket.gethostbyname(hostname)
+            except Exception:
+                ip = "0.0.0.0"
+
+        self._cached_server_ip = ip
+        self._last_server_ip_refresh = now
+        return ip
+
+    def _get_cpu_temp_c(self) -> str:
+        """Best-effort CPU temperature in Celsius, '--' when unavailable."""
+        if not psutil:
+            return "--"
+
+        try:
+            temps = psutil.sensors_temperatures(fahrenheit=False)
+            if not temps:
+                return "--"
+
+            for key in ("coretemp", "cpu-thermal", "soc_thermal", "k10temp"):
+                entries = temps.get(key)
+                if entries:
+                    current = getattr(entries[0], "current", None)
+                    if current is not None:
+                        return str(int(round(current)))
+
+            for entries in temps.values():
+                if entries:
+                    current = getattr(entries[0], "current", None)
+                    if current is not None:
+                        return str(int(round(current)))
+        except Exception:
+            return "--"
+
+        return "--"
+
+    @staticmethod
+    def _format_uptime(seconds: float) -> str:
+        """Format uptime as a single unit only: Xs, Xm, Xh, or Xd."""
+        total = max(0, int(seconds))
+
+        if total < 60:
+            return f"{total}s"
+        if total < 3600:
+            return f"{total // 60}m"
+        if total < 86400:
+            return f"{total // 3600}h"
+        return f"{total // 86400}d"
     
     def restart(self, new_port: Optional[int] = None):
         """Restart the UDP server, optionally with a new port.
@@ -393,6 +925,37 @@ class NetworkServer:
                 
             except Exception as e:
                 logger.error(f"Error in worker loop: {e}", exc_info=True)
+
+    def _resolve_gateway_radio_mac_by_sender(self, sender_endpoint: str) -> Optional[str]:
+        """Resolve gateway radio MAC by sender endpoint (IP or serial endpoint)."""
+        with self._gateway_lock:
+            for radio_mac, info in self._gateway_table.items():
+                if info.get('ip_address') == sender_endpoint:
+                    return radio_mac
+        return None
+
+    @staticmethod
+    def _is_serial_endpoint(endpoint: str) -> bool:
+        return isinstance(endpoint, str) and endpoint.startswith('serial://')
+
+    def _send_packet_to_gateway(self, gateway_endpoint: str, packet: bytes) -> bool:
+        """Send packet to a gateway endpoint over UDP or serial transport."""
+        if self._is_serial_endpoint(gateway_endpoint):
+            if not self._serial_transport:
+                logger.warning(f"Serial gateway not available for endpoint {gateway_endpoint}")
+                return False
+            success = self._serial_transport.send_packet(packet)
+            if not success:
+                logger.warning("Serial gateway send failed; resetting transport for reconnect")
+                self._drop_serial_transport(clear_gateway_entry=False)
+            return success
+
+        if not self.sock:
+            logger.warning("UDP socket not available for gateway send")
+            return False
+
+        self.sock.sendto(packet, (gateway_endpoint, self.gateway_port))
+        return True
     
     def _initial_led_sync(self):
         """Sync LED state for all gateways on startup (runs once in background)."""
@@ -768,13 +1331,8 @@ class NetworkServer:
                 logger.error(f"❌ OTA validation FAILED: {button_mac} - {error_msg}")
                 ota_manager.update_session_state(button_mac, OTAState.FAILED, error_msg)
         
-        # Find gateway radio MAC by IP
-        gateway_radio_mac = None
-        with self._gateway_lock:
-            for radio_mac, info in self._gateway_table.items():
-                if info['ip_address'] == sender_ip:
-                    gateway_radio_mac = radio_mac
-                    break
+        # Find gateway radio MAC by sender endpoint
+        gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
         
         if not is_paired:
             # Unpaired button - check pairing mode or RSSI
@@ -843,13 +1401,8 @@ class NetworkServer:
                 logger.error(f"❌ OTA validation FAILED: {light_mac} - {error_msg}")
                 ota_manager.update_session_state(light_mac, OTAState.FAILED, error_msg)
         
-        # Find gateway radio MAC by IP
-        gateway_radio_mac = None
-        with self._gateway_lock:
-            for radio_mac, info in self._gateway_table.items():
-                if info['ip_address'] == sender_ip:
-                    gateway_radio_mac = radio_mac
-                    break
+        # Find gateway radio MAC by sender endpoint
+        gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
         
         if not is_paired:
             # Unpaired light - check pairing mode or RSSI
@@ -894,8 +1447,7 @@ class NetworkServer:
                     all_gateway_macs = list(self._gateway_table.keys())
                     if all_gateway_macs:
                         light_packet = self.encoder.encode_gateway_list_for_device(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
-                        if self.sock:
-                            self.sock.sendto(light_packet, (sender_ip, self.gateway_port))
+                        if self._send_packet_to_gateway(sender_ip, light_packet):
                             logger.debug(f"Sent initial gateway list to {light_mac}")
                 
                 if pairing_mode_active:
@@ -937,8 +1489,7 @@ class NetworkServer:
                     all_gateway_macs = list(self._gateway_table.keys())
                     if all_gateway_macs:
                         light_packet = self.encoder.encode_gateway_list_for_device(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
-                        if self.sock:
-                            self.sock.sendto(light_packet, (sender_ip, self.gateway_port))
+                        if self._send_packet_to_gateway(sender_ip, light_packet):
                             logger.debug(f"Sent initial gateway list to {light_mac}")
             
             # Update gateway that successfully received HELLO
@@ -983,13 +1534,8 @@ class NetworkServer:
                 logger.error(f"❌ OTA validation FAILED: {remote_mac} - {error_msg}")
                 ota_manager.update_session_state(remote_mac, OTAState.FAILED, error_msg)
         
-        # Find gateway radio MAC by IP
-        gateway_radio_mac = None
-        with self._gateway_lock:
-            for radio_mac, info in self._gateway_table.items():
-                if info['ip_address'] == sender_ip:
-                    gateway_radio_mac = radio_mac
-                    break
+        # Find gateway radio MAC by sender endpoint
+        gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
         
         if not is_paired:
             # Unpaired remote - check pairing mode or RSSI
@@ -1068,13 +1614,8 @@ class NetworkServer:
                 logger.error(f"❌ OTA validation FAILED: {sensor_mac} - {error_msg}")
                 ota_manager.update_session_state(sensor_mac, OTAState.FAILED, error_msg)
         
-        # Find gateway radio MAC by sender IP
-        gateway_radio_mac = None
-        with self._gateway_lock:
-            for radio_mac, info in self._gateway_table.items():
-                if info['ip_address'] == sender_ip:
-                    gateway_radio_mac = radio_mac
-                    break
+        # Find gateway radio MAC by sender endpoint
+        gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
         
         if not is_paired:
             # UNPAIRED - Check pairing mode
@@ -1237,12 +1778,7 @@ class NetworkServer:
                 pairing_manager.record_device_paired(button_mac, DEV_BUTTON, f"Button {button_mac[-8:]}", 'short_range')
         
         # Find gateway for tracking
-        gateway_radio_mac = None
-        with self._gateway_lock:
-            for radio_mac, info in self._gateway_table.items():
-                if info['ip_address'] == sender_ip:
-                    gateway_radio_mac = radio_mac
-                    break
+        gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
         
         if gateway_radio_mac:
             device_manager.update_button_tracking(
@@ -1290,12 +1826,7 @@ class NetworkServer:
             pairing_manager.record_device_paired(sensor_mac, DEV_MOTION, f"Motion Sensor {sensor_mac[-8:]}", 'short_range')
         
         # Find gateway for tracking
-        gateway_radio_mac = None
-        with self._gateway_lock:
-            for radio_mac, info in self._gateway_table.items():
-                if info['ip_address'] == sender_ip:
-                    gateway_radio_mac = radio_mac
-                    break
+        gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
         
         if gateway_radio_mac:
             device_manager.update_motion_sensor_tracking(
@@ -1523,8 +2054,7 @@ class NetworkServer:
             gateway_ip: Gateway IP to route through
         """
         packet = self.encoder.encode_pair_confirm(target_mac, self.home_id)
-        if self.sock:
-            self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+        if self._send_packet_to_gateway(gateway_ip, packet):
             logger.debug(f"Sent PAIR_CONFIRM to {target_mac} via {gateway_ip}")
     
     def _send_with_fallback(self, target_mac: str, packet: bytes, wait_for_delivery: bool = True, msg_id: Optional[int] = None) -> bool:
@@ -1557,10 +2087,13 @@ class NetworkServer:
         # If target is a gateway, send directly
         if is_gateway:
             try:
-                if self.sock:
-                    self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                if not gateway_ip:
+                    logger.error(f"Gateway endpoint missing for {target_mac}")
+                    return False
+                if self._send_packet_to_gateway(gateway_ip, packet):
                     logger.debug(f"Sent packet to gateway {target_mac} at {gateway_ip}")
-                return True
+                    return True
+                return False
             except Exception as e:
                 logger.error(f"Failed to send to gateway {target_mac}: {e}")
                 return False
@@ -1637,9 +2170,14 @@ class NetworkServer:
                         }
                     
                     # Send packet
-                    if self.sock:
-                        self.sock.sendto(packet, (gw_ip, self.gateway_port))
+                    if self._send_packet_to_gateway(gw_ip, packet):
                         logger.info(f"Sent to {target_mac} via {gw_ip} (gateway: {gw_radio_mac}, msgID: {msg_id}, attempt: {attempt+1})")
+                    else:
+                        logger.warning(f"Failed to send to {target_mac} via gateway endpoint {gw_ip}")
+                        with self._delivery_lock:
+                            if msg_id in self._pending_deliveries:
+                                del self._pending_deliveries[msg_id]
+                        continue
                     
                     # Wait for delivery report with timeout
                     if event.wait(timeout=GATEWAY_DELIVERY_TIMEOUT_SECONDS):
@@ -1669,10 +2207,10 @@ class NetworkServer:
                             del self._pending_deliveries[msg_id]
                 else:
                     # No delivery tracking - just send and return on first success
-                    if self.sock:
-                        self.sock.sendto(packet, (gw_ip, self.gateway_port))
+                    if self._send_packet_to_gateway(gw_ip, packet):
                         logger.debug(f"Sent to {target_mac} via {gw_ip} (gateway: {gw_radio_mac}, no delivery tracking)")
-                    return True
+                        return True
+                    logger.warning(f"Failed to send to {target_mac} via gateway endpoint {gw_ip}")
                     
             except Exception as e:
                 logger.error(f"Failed to send to {target_mac} via {gw_ip}: {e}")
@@ -1701,8 +2239,7 @@ class NetworkServer:
             # Send to all gateways
             for radio_mac, info in self._gateway_table.items():
                 gateway_ip = info['ip_address']
-                if self.sock:
-                    self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                self._send_packet_to_gateway(gateway_ip, packet)
             
             logger.info(f"Broadcasted gateway list to gateways: {len(all_gateway_macs)} gateways")
             
@@ -1806,8 +2343,7 @@ class NetworkServer:
         try:
             # Encode and send ping packet
             packet = self.encoder.encode_ping(gateway_mac)
-            if self.sock:
-                self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+            if self._send_packet_to_gateway(gateway_ip, packet):
                 logger.info(f"📡 Ping sent to gateway {gateway_mac} ({gateway_ip})")
             
             # Wait for response
@@ -1844,7 +2380,11 @@ class NetworkServer:
         Returns:
             True if packet sent successfully, False if all routes failed
         """
-        cmd_name = {1: "Night Mode ON", 2: "Night Mode OFF"}.get(command, f"Command {command}")
+        cmd_name = {
+            CMD_NIGHT_MODE_ON: "Night Mode ON",
+            CMD_NIGHT_MODE_OFF: "Night Mode OFF",
+            CMD_NETNODE_WIFI_STATUS: "NetNode WiFi Status",
+        }.get(command, f"Command {command}")
         
         # Check if target is a gateway (send directly) or device (use routing)
         is_gateway = False
@@ -1971,10 +2511,9 @@ class NetworkServer:
             packet = self.encoder.encode_ping_device(device_mac)
             
             try:
-                if self.sock:
-                    self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                if self._send_packet_to_gateway(gateway_ip, packet):
                     logger.debug(f"  → Sent ping to {device_mac} via {gateway_ip} (radio: {radio_mac})")
-                sent_count += 1
+                    sent_count += 1
             except Exception as e:
                 logger.error(f"Failed to send ping via {gateway_ip}: {e}")
         
@@ -2050,8 +2589,8 @@ class NetworkServer:
         packet = self.encoder.encode_ping_device(device_mac)
         
         try:
-            if self.sock:
-                self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+            if not self._send_packet_to_gateway(gateway_ip, packet):
+                logger.error(f"Failed to send ping via gateway endpoint {gateway_ip}")
             logger.debug(f"  → Sent ping to {device_mac} via {gateway_ip}")
         except Exception as e:
             logger.error(f"Failed to send ping via {gateway_ip}: {e}")
@@ -2096,13 +2635,8 @@ class NetworkServer:
             rssi_byte = payload[0] if len(payload) > 0 else 0
             rssi_dbm = MACFormatter.parse_rssi(rssi_byte)
             
-            # Find gateway radio MAC by IP
-            gateway_radio_mac = None
-            with self._gateway_lock:
-                for radio_mac, info in self._gateway_table.items():
-                    if info['ip_address'] == sender_ip:
-                        gateway_radio_mac = radio_mac
-                        break
+            # Find gateway radio MAC by sender endpoint
+            gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
             
             if not gateway_radio_mac:
                 logger.warning(f"Received ping device response from unknown gateway {sender_ip}")
@@ -2173,9 +2707,14 @@ class NetworkServer:
             # Send packet
             if is_gateway:
                 # Direct send to gateway
-                if self.sock:
-                    self.sock.sendto(packet, (gateway_ip, self.gateway_port))
+                if not gateway_ip:
+                    ota_manager.update_session_state(device_mac, OTAState.FAILED, "Gateway endpoint not found")
+                    return False
+                if self._send_packet_to_gateway(gateway_ip, packet):
                     logger.info(f"📡 OTA_NOTIFY sent to gateway {device_mac} at {gateway_ip}")
+                else:
+                    ota_manager.update_session_state(device_mac, OTAState.FAILED, "Failed to send OTA_NOTIFY to gateway")
+                    return False
             else:
                 # Send via gateway mesh (no delivery tracking - device responds with PKT_OTA_READY instead)
                 success = self._send_with_fallback(device_mac, packet, wait_for_delivery=False)
@@ -2376,7 +2915,11 @@ class NetworkServer:
             else:
                 chunk_delay = 0.016  # Other devices via ESP-NOW
             
+            if is_gateway and locked_gateway_ip and self._is_serial_endpoint(locked_gateway_ip):
+                chunk_delay = 0.000
+                       
             logger.info(f"📦 Starting OTA transfer to {device_mac}: {len(firmware_data)} bytes in {total_chunks} chunks (is_gateway={is_gateway}, is_radio_node={is_radio_node}, delay={chunk_delay}s)")
+                   
             
             # Send chunks with checkpoint-based ACK
             chunk_idx = 0
@@ -2416,8 +2959,7 @@ class NetworkServer:
                     success = False
                     if is_gateway:
                         try:
-                            if self.sock:
-                                self.sock.sendto(packet, (locked_gateway_ip, self.gateway_port))
+                            if locked_gateway_ip and self._send_packet_to_gateway(locked_gateway_ip, packet):
                                 success = True
                         except Exception as e:
                             logger.error(f"Failed to send chunk {i}: {e}")
@@ -2462,8 +3004,7 @@ class NetworkServer:
                         
                         if locked_gateway_ip:
                             try:
-                                if self.sock:
-                                    self.sock.sendto(packet, (locked_gateway_ip, self.gateway_port))
+                                if self._send_packet_to_gateway(locked_gateway_ip, packet):
                                     success = True
                             except Exception as e:
                                 logger.error(f"Failed to send chunk {i}: {e}")
@@ -2500,12 +3041,11 @@ class NetworkServer:
                     # Send checkpoint request to device
                     checkpoint_packet = self.encoder.encode_ota_checkpoint_req(device_mac, checkpoint_msg_id)
                     if is_gateway:
-                        if self.sock:
-                            self.sock.sendto(checkpoint_packet, (locked_gateway_ip, self.gateway_port))
+                        if locked_gateway_ip:
+                            self._send_packet_to_gateway(locked_gateway_ip, checkpoint_packet)
                     else:
                         if locked_gateway_ip:
-                            if self.sock:
-                                self.sock.sendto(checkpoint_packet, (locked_gateway_ip, self.gateway_port))
+                            self._send_packet_to_gateway(locked_gateway_ip, checkpoint_packet)
                     
                     if checkpoint_retry == 0:
                         logger.debug(f"📍 Sent checkpoint request after chunk {batch_end - 1}, waiting for ACK...")
@@ -2558,12 +3098,11 @@ class NetworkServer:
             
             complete_packet = self.encoder.encode_ota_complete(device_mac, session.sha256_hash, msg_id)
             
-            if is_gateway:
-                if self.sock:
-                    self.sock.sendto(complete_packet, (locked_gateway_ip, self.gateway_port))
+            if locked_gateway_ip:
+                self._send_packet_to_gateway(locked_gateway_ip, complete_packet)
             else:
-                if self.sock:
-                    self.sock.sendto(complete_packet, (locked_gateway_ip, self.gateway_port))
+                ota_manager.update_session_state(device_mac, OTAState.FAILED, "No gateway endpoint for OTA_COMPLETE")
+                return
             
             # Update state
             ota_manager.update_session_state(device_mac, OTAState.VALIDATING)

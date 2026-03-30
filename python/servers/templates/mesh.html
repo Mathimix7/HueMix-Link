@@ -243,7 +243,14 @@ function renderMesh() {
     container.innerHTML = '';
     
     // Get gateways
-    const gateways = meshData.nodes.filter(n => n.type === 'gateway');
+    const gateways = meshData.nodes
+        .filter(n => n.type === 'gateway')
+        .sort((a, b) => {
+            const aSerial = !!a.is_serial;
+            const bSerial = !!b.is_serial;
+            if (aSerial !== bSerial) return aSerial ? -1 : 1;
+            return (a.label || '').localeCompare(b.label || '');
+        });
     
     if (gateways.length === 0) {
         container.innerHTML = `
@@ -275,6 +282,8 @@ function createGatewayCard(gateway) {
         n.type === 'light' && 
         meshData.edges.some(e => e.from === gateway.id && e.to === n.id)
     );
+
+    const serialPort = gateway.serial_port || (gateway.serial_endpoint || '').replace('serial://', '');
     
     card.innerHTML = `
         <div class="flex items-center justify-between mb-6">
@@ -285,7 +294,7 @@ function createGatewayCard(gateway) {
                 <div>
                     <h3 class="text-xl font-bold text-gray-900">${gateway.label}</h3>
                     <p class="text-sm text-gray-500 font-mono">${gateway.id}</p>
-                    <p class="text-xs text-gray-400">${gateway.ip || 'No IP'}</p>
+                    <p class="text-xs text-gray-400">${serialPort || gateway.ip || 'No IP'}</p>
                 </div>
             </div>
             <div class="text-right">

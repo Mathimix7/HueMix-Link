@@ -70,34 +70,57 @@ class DeviceManager:
             Updated gateway dict
         """
         def update_func(servers):
-            # Find existing gateway
+            normalized_wifi_mac = (wifi_mac or '').upper()
+            normalized_radio_mac = (radio_mac or '').upper()
+            is_serial_endpoint = isinstance(ip_address, str) and ip_address.startswith('serial://')
+
+            # Find existing gateway by either WiFi MAC or radio MAC.
+            # Matching on radio MAC prevents duplicates when switching between
+            # serial-host and normal net+radio gateway modes.
             gateway = None
             for server in servers:
-                if server.get('mac_address', '').upper() == wifi_mac.upper():
+                server_wifi = server.get('mac_address', '').upper()
+                server_radio = server.get('radio_mac', '').upper()
+                if server_wifi == normalized_wifi_mac or (normalized_radio_mac and server_radio == normalized_radio_mac):
                     gateway = server
                     break
             
             if gateway:
                 # Update existing
-                gateway['radio_mac'] = radio_mac.upper()
+                gateway['mac_address'] = normalized_wifi_mac
+                gateway['radio_mac'] = normalized_radio_mac
                 gateway['ip_address'] = ip_address
                 gateway['last_used'] = datetime.now().isoformat()
                 if version_net:
                     gateway['version_net'] = version_net
                 if version_radio:
                     gateway['version_radio'] = version_radio
+
+                if is_serial_endpoint:
+                    gateway['transport'] = 'usb_serial'
+                    gateway['transport_endpoint'] = ip_address
+                else:
+                    # If this gateway is now seen over UDP, clear stale serial metadata.
+                    if gateway.get('transport') == 'usb_serial':
+                        gateway.pop('transport', None)
+                    endpoint = gateway.get('transport_endpoint')
+                    if isinstance(endpoint, str) and endpoint.startswith('serial://'):
+                        gateway.pop('transport_endpoint', None)
             else:
                 # Create new gateway
                 gateway = {
                     'id': uuid.uuid4().hex,
                     'name': f"Gateway {wifi_mac[-8:]}",
-                    'mac_address': wifi_mac.upper(),
-                    'radio_mac': radio_mac.upper(),
+                    'mac_address': normalized_wifi_mac,
+                    'radio_mac': normalized_radio_mac,
                     'ip_address': ip_address,
                     'version_net': version_net or '0.0.0',
                     'version_radio': version_radio or '0.0.0',
                     'last_used': datetime.now().isoformat(),
                 }
+                if is_serial_endpoint:
+                    gateway['transport'] = 'usb_serial'
+                    gateway['transport_endpoint'] = ip_address
                 servers.append(gateway)
             
             return servers

@@ -165,6 +165,10 @@ class NetworkServer:
             if hasattr(self, 'decoder'):
                 self.decoder.home_id = new_id
             logger.info(f"NetworkServer updated HOME_ID -> {new_id}")
+
+            serial_mac = self._serial_gateway_radio_mac
+            if serial_mac and self._serial_transport and self._serial_transport.available:
+                self._sync_serial_gateway_home_id(serial_mac)
         except Exception:
             logger.exception('Error applying HOME_ID change to NetworkServer')
 
@@ -670,8 +674,26 @@ class NetworkServer:
                 logger.error(f"❌ OTA validation FAILED (SERIAL-RADIO): {radio_mac} - {error_msg}")
                 ota_manager.update_session_state(radio_mac, OTAState.FAILED, error_msg)
 
+        self._sync_serial_gateway_home_id(radio_mac)
         self._resync_serial_gateway_runtime_state(radio_mac)
         return True
+
+    def _sync_serial_gateway_home_id(self, radio_mac: str) -> bool:
+        """Push the current HOME_ID to the direct serial radio node."""
+        if not self._serial_transport or not self._serial_transport.available:
+            return False
+
+        endpoint = self._serial_endpoint
+        if not endpoint:
+            return False
+
+        packet = self.encoder.encode_pair_confirm('00:00:00:00:00:00', self.home_id)
+        success = self._send_packet_to_gateway(endpoint, packet)
+        if success:
+            logger.info(f"Synced HOME_ID to serial radio {radio_mac}: {self.home_id}")
+        else:
+            logger.warning(f"Failed to sync HOME_ID to serial radio {radio_mac}")
+        return success
 
     def _resync_serial_gateway_runtime_state(self, radio_mac: str):
         """Re-apply host state to radio after (re)handshake/reboot."""

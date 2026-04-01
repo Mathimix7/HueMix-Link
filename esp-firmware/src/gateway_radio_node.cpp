@@ -111,6 +111,7 @@ unsigned long last_serial_activity = 0;
   bool dashboardDisplayReady = false;
   unsigned long lastDashboardRender = 0;
   unsigned long dashboardActivityFlashUntilMs = 0;
+  bool dashboardScreenOn = true;
   #define DASHBOARD_STALE_RESET_MS 10000
   #define DASHBOARD_ACTIVITY_FLASH_MS 350
 #endif
@@ -173,7 +174,7 @@ void drawWifiIcon(int x, int y) {
 
 void drawActivityIndicator() {
   if (millis() < dashboardActivityFlashUntilMs) {
-    oled.fillCircle(OLED_WIDTH - 4, OLED_HEIGHT - 4, 3, SSD1306_WHITE);
+    oled.fillCircle(OLED_WIDTH - 5, OLED_HEIGHT - 5, 2, SSD1306_WHITE);
   }
 }
 
@@ -267,6 +268,10 @@ void renderDashboard() {
   unsigned long ageMs = dashboardStats.valid ? (millis() - dashboardStats.lastUpdateMs) : 0;
   bool showInit = (!dashboardStats.valid) || (ageMs > DASHBOARD_STALE_RESET_MS);
   if (showInit) {
+    if (dashboardStats.valid && netNodeHasWiFi) {
+      netNodeHasWiFi = false;
+      SERIAL_DEBUG.println("[RADIO] Dashboard data stale, assuming net node WiFi is OFF");
+    }
     renderInitializingScreen();
     return;
   }
@@ -331,6 +336,14 @@ void resetDashboardLine() {
   dashboardLineBuffer[0] = '\0';
 }
 
+void setDashboardScreenPower(bool on) {
+  if (!dashboardDisplayReady) return;
+  if (dashboardScreenOn == on) return;
+
+  dashboardScreenOn = on;
+  oled.ssd1306_command(on ? SSD1306_DISPLAYON : SSD1306_DISPLAYOFF);
+}
+
 void applyDashboardLine(const char* line) {
   if (!line || line[0] != '@') return;
 
@@ -359,6 +372,10 @@ void applyDashboardLine(const char* line) {
 
   dashboardStats.valid = true;
   dashboardStats.lastUpdateMs = millis();
+  if (!netNodeHasWiFi) {
+    netNodeHasWiFi = true;
+    SERIAL_DEBUG.println("[RADIO] Dashboard data resumed, assuming net node WiFi is ON");
+  }
   renderDashboard();
 }
 
@@ -371,6 +388,7 @@ void initDashboardDisplay() {
   }
 
   dashboardDisplayReady = true;
+  dashboardScreenOn = true;
   renderInitializingScreen();
 }
 #endif
@@ -919,8 +937,19 @@ void handleSerialPacket(uint8_t* data) {
       }
     }
     
-    if (radioTx.payload.sys.cmd == 1) nightMode = true;
-    else if (radioTx.payload.sys.cmd == 2) nightMode = false;
+        if (radioTx.payload.sys.cmd == 1) {
+      nightMode = true;
+    #if IS_SERIAL_GATEWAY
+      setDashboardScreenPower(false);
+    #endif
+        }
+        else if (radioTx.payload.sys.cmd == 2) {
+      nightMode = false;
+    #if IS_SERIAL_GATEWAY
+      setDashboardScreenPower(true);
+      renderDashboard();
+    #endif
+        }
     else if (radioTx.payload.sys.cmd == 3) {
       // WiFi status update from net node
       netNodeHasWiFi = (radioTx.payload.raw[1] == 1);
@@ -968,13 +997,16 @@ void handleSerialPacket(uint8_t* data) {
     HOME_ID = radioTx.payload.pair.newHomeID;
     prefs.putUInt("hid", HOME_ID);
 
-    esp_now_peer_info_t peer = {}; memcpy(peer.peer_addr, radioTx.targetMAC, 6);
-    peer.channel = HUEMIXLINK_CHANNEL; peer.encrypt = false;
-    if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
-    lastMsgID = radioTx.msgID;
-    memcpy(lastTargetMAC, radioTx.targetMAC, 6);
-    waitingForDelivery = true;
-    esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
+    uint8_t zeroMac[6] = {0};
+    if (memcmp(radioTx.targetMAC, zeroMac, 6) != 0) {
+      esp_now_peer_info_t peer = {}; memcpy(peer.peer_addr, radioTx.targetMAC, 6);
+      peer.channel = HUEMIXLINK_CHANNEL; peer.encrypt = false;
+      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      lastMsgID = radioTx.msgID;
+      memcpy(lastTargetMAC, radioTx.targetMAC, 6);
+      waitingForDelivery = true;
+      esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
+    }
   } else {
     esp_now_peer_info_t peer = {}; memcpy(peer.peer_addr, radioTx.targetMAC, 6);
     peer.channel = HUEMIXLINK_CHANNEL; peer.encrypt = false;

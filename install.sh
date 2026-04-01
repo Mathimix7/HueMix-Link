@@ -209,6 +209,51 @@ create_service_user() {
   fi
 }
 
+setup_serial_access() {
+  log "Configuring serial access for ${SERVICE_USER}"
+
+  local groups_added=0
+  local serial_groups=(dialout uucp tty lock plugdev)
+
+  for grp in "${serial_groups[@]}"; do
+    if ! getent group "$grp" >/dev/null 2>&1; then
+      continue
+    fi
+
+    if id -nG "$SERVICE_USER" | tr ' ' '\n' | grep -qx "$grp"; then
+      continue
+    fi
+
+    if run usermod -a -G "$grp" "$SERVICE_USER"; then
+      groups_added=1
+      debug "Added ${SERVICE_USER} to group: ${grp}"
+    else
+      warn "Failed to add ${SERVICE_USER} to group ${grp}"
+    fi
+  done
+
+  if [ "$groups_added" -eq 1 ]; then
+    success "Serial groups updated for ${SERVICE_USER}"
+  else
+    log "Serial groups already configured for ${SERVICE_USER}"
+  fi
+
+  # Ensure common USB serial devices are group-accessible.
+  if getent group dialout >/dev/null 2>&1; then
+    local rule_file="/etc/udev/rules.d/99-huemixlink-serial.rules"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "DRY-RUN: would write ${rule_file} and reload udev rules"
+    else
+      cat > "$rule_file" <<'EOF'
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", MODE="0660", GROUP="dialout"
+SUBSYSTEM=="tty", KERNEL=="ttyACM*", MODE="0660", GROUP="dialout"
+EOF
+      run udevadm control --reload-rules || true
+      run udevadm trigger --subsystem-match=tty || true
+    fi
+  fi
+}
+
 copy_files() {
   log "Syncing files to ${APP_DIR}"
   run mkdir -p "$APP_DIR"
@@ -559,6 +604,7 @@ main_install() {
   [ -f "$APP_DIR/VERSION" ] && rm -f "$APP_DIR/VERSION"
 
   create_service_user
+  setup_serial_access
   copy_files
   create_venv_and_deps
   setup_permissions

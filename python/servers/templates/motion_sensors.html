@@ -366,8 +366,8 @@
                             <div>
                                 <label class="block text-xs text-blue-700 mb-1">Wait Duration</label>
                                 <div class="flex items-center space-x-2">
-                                    <input type="number" id="slot-after-duration" min="1" max="60" value="5" class="w-full border border-blue-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
-                                    <span class="text-sm text-blue-700 whitespace-nowrap">min</span>
+                                    <input type="number" id="slot-after-duration" min="5" max="3600" value="300" class="w-full border border-blue-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                    <span class="text-sm text-blue-700 whitespace-nowrap">sec</span>
                                 </div>
                             </div>
                             <div>
@@ -1027,7 +1027,7 @@ function renderTimeSlots() {
         const motionAction = slot.motion_action === 'scene' ? (slot.scene_name || 'Scene') : 'Do Nothing';
         const afterAction = slot.after_action === 'off' ? 'Turn Off' : (slot.after_action === 'scene' ? (slot.after_scene_name || 'Scene') : 'Do Nothing');
         const dndBadge = slot.do_not_disturb ? '<span class="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded"><i class="fas fa-moon mr-1"></i>DND</span>' : '';
-        const durationMinutes = slot.after_duration || 5;
+        const durationSeconds = getSlotAfterDurationSeconds(slot);
         
         slotDiv.innerHTML = `
             <div class="flex justify-between items-center">
@@ -1041,7 +1041,7 @@ function renderTimeSlots() {
                         <i class="fas fa-running text-xs mr-1"></i>Motion → ${motionAction}
                     </div>
                     <div class="text-sm text-gray-600">
-                        <i class="fas fa-hourglass-half text-xs mr-1"></i>After ${durationMinutes}min → ${afterAction}
+                        <i class="fas fa-hourglass-half text-xs mr-1"></i>After ${durationSeconds}s → ${afterAction}
                     </div>
                 </div>
                 <button onclick="deleteTimeSlot(${index}); event.stopPropagation();" class="text-red-600 hover:text-red-800 p-1 inline-flex items-center">
@@ -1051,6 +1051,21 @@ function renderTimeSlots() {
         `;
         container.appendChild(slotDiv);
     });
+}
+
+function getSlotAfterDurationSeconds(slot) {
+    const explicitSeconds = Number(slot.after_duration_seconds);
+    if (Number.isFinite(explicitSeconds) && explicitSeconds > 0) {
+        return Math.floor(explicitSeconds);
+    }
+
+    // Backward compatibility: legacy configs stored this field in minutes.
+    const legacyMinutes = Number(slot.after_duration);
+    if (Number.isFinite(legacyMinutes) && legacyMinutes > 0) {
+        return Math.floor(legacyMinutes * 60);
+    }
+
+    return 300;
 }
 
 function subtractOneMinute(timeStr) {
@@ -1084,7 +1099,7 @@ function addTimeSlot() {
     document.getElementById('slot-start-time').value = '00:00';
     document.getElementById('slot-motion-action').value = 'scene';
     document.getElementById('slot-scene-select').value = '';
-    document.getElementById('slot-after-duration').value = '5';
+    document.getElementById('slot-after-duration').value = '300';
     document.getElementById('slot-after-action').value = 'off';
     document.getElementById('slot-after-scene-select').value = '';
     document.getElementById('slot-dnd').checked = false;
@@ -1106,7 +1121,7 @@ function editTimeSlot(index) {
         document.getElementById('slot-start-time').value = slot.start_time || '00:00';
         document.getElementById('slot-motion-action').value = slot.motion_action || 'scene';
         document.getElementById('slot-scene-select').value = slot.scene_id || '';
-        document.getElementById('slot-after-duration').value = slot.after_duration || 5;
+        document.getElementById('slot-after-duration').value = getSlotAfterDurationSeconds(slot);
         document.getElementById('slot-after-action').value = slot.after_action || 'off';
         document.getElementById('slot-after-scene-select').value = slot.after_scene_id || '';
         document.getElementById('slot-dnd').checked = slot.do_not_disturb || false;
@@ -1180,11 +1195,15 @@ document.addEventListener('DOMContentLoaded', () => {
 function saveTimeSlot() {
     const motionAction = document.getElementById('slot-motion-action').value;
     const afterAction = document.getElementById('slot-after-action').value;
+    const rawAfterDuration = parseInt(document.getElementById('slot-after-duration').value, 10);
+    const afterDurationSeconds = Number.isFinite(rawAfterDuration)
+        ? Math.max(1, Math.min(3600, rawAfterDuration))
+        : 300;
     
     const timeSlot = {
         start_time: document.getElementById('slot-start-time').value,
         motion_action: motionAction,
-        after_duration: parseInt(document.getElementById('slot-after-duration').value) || 5,
+        after_duration_seconds: afterDurationSeconds,
         after_action: afterAction,
         do_not_disturb: document.getElementById('slot-dnd').checked
     };

@@ -714,6 +714,29 @@ class AutomationEngine:
         logger.info(f"Room {room_id} dimmed: {current_brightness:.1f}% -> {new_brightness:.1f}%")
     
     # ===== Motion Sensor Event Handling =====
+
+    def _get_motion_after_duration_seconds(self, time_slot: Dict) -> int:
+        """Get after-action delay in seconds for a motion time slot.
+
+        Supports both the new second-based field and legacy minute-based configs.
+        """
+        raw_seconds = time_slot.get('after_duration_seconds')
+        try:
+            if raw_seconds is not None:
+                explicit_seconds = int(str(raw_seconds).strip())
+                return max(0, explicit_seconds)
+        except (TypeError, ValueError):
+            pass
+
+        # Backward compatibility: older configs stored this duration in minutes.
+        raw_minutes = time_slot.get('after_duration', 5)
+        try:
+            legacy_minutes = int(str(raw_minutes).strip())
+            return max(0, legacy_minutes) * 60
+        except (TypeError, ValueError):
+            pass
+
+        return 300
     
     def handle_motion_event(self, sensor_mac: str, action: int, light_level: Optional[int] = None, battery_mv: Optional[int] = None):
         """Handle motion sensor event.
@@ -852,7 +875,7 @@ class AutomationEngine:
                 self._motion_states[sensor_mac]['room_id'] = room_id
                 
                 # Schedule after action
-                after_duration = current_slot.get('after_duration', 5) * 60  # Convert minutes to seconds
+                after_duration = self._get_motion_after_duration_seconds(current_slot)
                 after_action = current_slot.get('after_action', 'off')
                 
                 if after_action != 'nothing' and after_duration > 0:

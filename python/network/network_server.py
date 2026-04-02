@@ -771,7 +771,10 @@ class NetworkServer:
     def _get_netnode_wifi_status_value(self) -> int:
         """Return host connectivity status to publish to radio via SYS_CMD=3."""
         try:
-            return 1 if hue_service.is_initialized() else 0
+            ip = self._get_server_ip()
+            if ip == "127.0.0.1":
+                return 0
+            return 1
         except Exception:
             return 0
 
@@ -835,7 +838,7 @@ class NetworkServer:
         if now - self._last_server_ip_refresh < 30 and self._cached_server_ip:
             return self._cached_server_ip
 
-        ip = "0.0.0.0"
+        ip = "127.0.0.1"
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("8.8.8.8", 80))
@@ -845,7 +848,7 @@ class NetworkServer:
                 hostname = socket.gethostname()
                 ip = socket.gethostbyname(hostname)
             except Exception:
-                ip = "0.0.0.0"
+                ip = "127.0.0.1"
 
         self._cached_server_ip = ip
         self._last_server_ip_refresh = now

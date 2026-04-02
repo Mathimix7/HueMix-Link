@@ -283,13 +283,17 @@ void renderDashboard() {
   uint16_t ipWidth = ipLen * 6;
   uint8_t wifiWidth = 16;
   uint8_t gap = 4;
-  int blockWidth = wifiWidth + gap + ipWidth;
+  int blockWidth = netNodeHasWiFi ? (wifiWidth + gap + ipWidth) : ipWidth;
   int startX = (OLED_WIDTH - blockWidth) / 2;
   if (startX < 0) startX = 0;
 
-  drawWifiIcon(startX, 0);
   oled.setTextSize(1);
-  oled.setCursor(startX + wifiWidth + gap, 1);
+  if (netNodeHasWiFi) {
+    drawWifiIcon(startX, 0);
+    oled.setCursor(startX + wifiWidth + gap, 1);
+  } else {
+    oled.setCursor(startX, 1);
+  }
   oled.print(dashboardStats.ip);
 
   oled.drawFastHLine(0, 13, OLED_WIDTH, SSD1306_WHITE);

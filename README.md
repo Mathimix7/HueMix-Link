@@ -3,7 +3,7 @@
 
 ## Project Overview
 
-HueMix-Link is a local smart home bridge that connects custom ESP-based devices (gateways, buttons, remotes, motion sensors, and lightstrips) to Philips Hue rooms and scenes.
+HueMix-Link is a local smart home bridge that connects custom ESP-based devices (gateways, buttons, remotes, motion sensors, door sensors, and lightstrips) to Philips Hue rooms and scenes.
 
 It provides:
 
@@ -16,8 +16,8 @@ It provides:
 ## What Is In This Repository
 
 - `python/`: Main backend service (Flask UI + UDP network + automations + OTA)
-- `esp-firmware/`: PlatformIO firmware sources for all device types (gateway, buttons, remotes, motion, lightstrips)
-- `Hardware-designs/`: KiCad design files for all device types (gateway, buttons, remotes, motion, lightstrips)
+- `esp-firmware/`: PlatformIO firmware sources for all device types (gateway, buttons, remotes, motion sensors, door sensors, lightstrips)
+- `Hardware-designs/`: KiCad design files for all device types (gateway, buttons, remotes, motion sensors, door sensors, lightstrips)
 - `install.sh`: Linux installer/updater
 - `VERSION`: Version file for installer/update workflows
 
@@ -52,7 +52,7 @@ It provides:
 ### Hardware
 
 - At least one Hue Bridge with configured rooms/scenes
-- Supported HueMix-Link devices (gateways, buttons, remotes, motion sensors, lightstrips)
+- Supported HueMix-Link devices (gateways, buttons, remotes, motion sensors, door sensors, lightstrips)
 - Firmware binaries matching your device type and model
 
 ## Installation
@@ -117,10 +117,11 @@ The installer detects the existing installation, updates the files, and restarts
    - Power on or reset target devices
    - Devices announce themselves via ESP-NOW → gateway → backend
 5. **Configure each device**:
-   - **Buttons/Remotes**: Map to room + scenes + action behavior (normal, toggle, brightness, scene-cycle)
-   - **Motion Sensors**: Set room, time slots, motion actions, after-actions, cooldown periods
-   - **Lightstrips**: Assign room, configure LED count/type, optional color scene overrides
-   - **Gateways**: Verify online status, mesh routing, LED schedule (day/night auto-off)
+    - **Buttons/Remotes**: Map to room + scenes + action behavior (normal, toggle, brightness, scene-cycle)
+    - **Motion Sensors**: Set room, time slots, motion actions, after-actions, cooldown periods
+    - **Door Sensors**: Set room, open/close actions, and any automation triggers tied to magnetic state changes
+    - **Lightstrips**: Assign room, configure LED count/type, optional color scene overrides
+    - **Gateways**: Verify online status, mesh routing, LED schedule (day/night auto-off)
 6. **Validate behavior** by triggering physical events and checking Hue room/scene changes
 
 ## ESP Firmware: Build and Flash
@@ -249,6 +250,24 @@ Both nodes are updated from the OTA page. Gateways receive OTA directly (no doub
 
 ---
 
+### Radio Gateway (Serial Python)
+
+The Radio Gateway can also run as a serial-connected ESP32 node that pairs with the Python backend instead of WiFi.
+
+- **Net/host side**: Python maintains the gateway state, serial transport, OTA scheduling, and dashboard telemetry
+- **Radio side**: ESP32 radio node handles ESP-NOW traffic, OLED status display, and forwards packets over UART
+- **LED indicators**: Follows the configured gateway LED schedule; the OLED display also respects the same on/off timing
+- **OTA**: Updated from the OTA page using the `gateway_radio_python` firmware target
+
+**Setup**
+
+1. Flash the `esp32_radio_python` firmware
+2. Connect the radio node to the backend host over USB serial
+3. Configure the serial port in the web UI
+4. The backend will sync HOME_ID, gateway state, and dashboard telemetry automatically
+
+---
+
 ### Button
 
 <table><tr>
@@ -366,6 +385,7 @@ The Motion Sensor is a battery-powered ESP32 device with a PIR sensor and an amb
 | State | Meaning |
 |-------|---------|
 | Brief flash | Motion detected, event sent |
+| 2 fast blinks | No acknowledgment — gateway may be out of range |
 | 3 blinks | OTA mode |
 | 5 blinks | Device powered on |
 | Breathing | OTA in progress |
@@ -386,6 +406,40 @@ The Motion Sensor is a battery-powered ESP32 device with a PIR sensor and an amb
 **OTA**
 
 Battery-powered. **Double-press the reset button** to enter OTA mode. The LED will blink 3 times to confirm. Then flash from the OTA page.
+
+---
+
+### Door Sensor
+
+The Door Sensor is a battery-powered ESP32 device that reports magnetic open/close state changes and ambient light level over ESP-NOW.
+
+**Events sent**
+
+- Door opened
+- Door closed
+- Ambient light level (1-10)
+- Battery voltage
+- Firmware version / platform metadata
+
+**LED indicators**
+
+| State | Meaning |
+|-------|---------|
+| Brief flash | Door event sent |
+| 2 fast blinks | No acknowledgment — gateway may be out of range |
+| 3 blinks | OTA mode |
+| 5 blinks | Device powered on |
+| Breathing | OTA in progress |
+
+**Setup and pairing**
+
+1. Flash the door sensor firmware via serial or the OTA page
+2. Open the Pairing page, start a pairing window, then single-press the reset button or activate the reed switch to wake the device
+3. After pairing, assign the sensor to a room and add any open/close automations
+
+**OTA**
+
+Battery-powered. **Double-press the reset button** to enter OTA mode. Then flash from the OTA page.
 
 ---
 

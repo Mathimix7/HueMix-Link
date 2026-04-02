@@ -284,6 +284,8 @@ function createGatewayCard(gateway) {
     );
 
     const serialPort = gateway.serial_port || (gateway.serial_endpoint || '').replace('serial://', '');
+    const isOnline = gateway.online === true;
+    const uptimeLabel = isOnline ? formatUptime(gateway.uptime) : '';
     
     card.innerHTML = `
         <div class="flex items-center justify-between mb-6">
@@ -299,9 +301,9 @@ function createGatewayCard(gateway) {
             </div>
             <div class="text-right">
                 <div class="flex items-center space-x-3">
-                    <div class="px-3 py-1 text-xs font-semibold rounded-full ${gateway.ip ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'} inline-flex items-center">
-                        <i class="fas ${gateway.ip ? 'fa-check-circle' : 'fa-circle'} mr-1"></i>
-                        ${gateway.ip ? 'Online' : 'Offline'}
+                    <div class="px-3 py-1 text-xs font-semibold rounded-full ${isOnline ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'} inline-flex items-center">
+                        <i class="fas ${isOnline ? 'fa-check-circle' : 'fa-circle'} mr-1"></i>
+                        ${isOnline ? 'Online' : 'Offline'}
                     </div>
                     <button onclick="toggleGatewayDevices('${gateway.id}')" class="text-gray-400 hover:text-gray-600">
                         <i id="gateway-${gateway.id}-icon" class="fas fa-chevron-down transition-transform"></i>
@@ -421,6 +423,25 @@ function getRssiTextColor(rssi) {
     if (rssi >= -50) return 'text-green-700';
     if (rssi >= -70) return 'text-yellow-700';
     return 'text-red-700';
+}
+
+function formatUptime(totalSeconds) {
+    if (totalSeconds === null || totalSeconds === undefined) {
+        return '';
+    }
+
+    const seconds = Math.max(0, Number(totalSeconds) || 0);
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+
+    if (days > 0) {
+        return `Uptime ${days}d ${hours}h`;
+    }
+    if (hours > 0) {
+        return `Uptime ${hours}h ${minutes}m`;
+    }
+    return `Uptime ${minutes}m`;
 }
 
 function refreshMesh() {

@@ -1,5 +1,7 @@
 """Mesh visualization blueprint for gateway network topology."""
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Blueprint, render_template, jsonify
+from network.network_server import network_server
 from services.data_manager import data_manager
 from constants import FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS
 
@@ -17,6 +19,58 @@ def _extract_serial_port(endpoint):
 def _is_serial_gateway(server):
     endpoint = server.get('transport_endpoint') or server.get('ip_address')
     return (server.get('transport') == 'usb_serial') or (isinstance(endpoint, str) and endpoint.startswith('serial://'))
+
+
+def _get_gateway_ping_target(server):
+    """Return gateway MAC to use for ping lookups in NetworkServer."""
+    gateway_mac = (server.get('mac_address') or server.get('radio_mac') or '').strip()
+    return gateway_mac or None
+
+
+def _get_gateway_status_map(servers, timeout=2.0):
+    """Ping gateways concurrently and return online/uptime by radio MAC."""
+    status_map = {}
+    ping_jobs = []
+
+    for server in servers:
+        radio_mac = (server.get('radio_mac') or '').upper()
+        if not radio_mac:
+            continue
+
+        status_map[radio_mac] = {
+            'online': False,
+            'uptime': None,
+        }
+
+        target_mac = _get_gateway_ping_target(server)
+        if target_mac:
+            ping_jobs.append((radio_mac, target_mac))
+
+    if not ping_jobs:
+        return status_map
+
+    max_workers = min(10, len(ping_jobs))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_radio_mac = {
+            executor.submit(network_server.send_ping, target_mac, timeout): radio_mac
+            for radio_mac, target_mac in ping_jobs
+        }
+
+        for future in as_completed(future_to_radio_mac):
+            radio_mac = future_to_radio_mac[future]
+            try:
+                uptime = future.result()
+                status_map[radio_mac] = {
+                    'online': uptime is not None,
+                    'uptime': uptime,
+                }
+            except Exception:
+                status_map[radio_mac] = {
+                    'online': False,
+                    'uptime': None,
+                }
+
+    return status_map
 
 
 @mesh_bp.route('/')
@@ -50,12 +104,14 @@ def get_topology():
         # Add gateway nodes (serial gateways first)
         servers = data_manager.read_json(FILE_GATEWAYS, default=[])
         servers = sorted(servers, key=lambda s: (0 if _is_serial_gateway(s) else 1, (s.get('name') or '').lower()))
+        gateway_status_map = _get_gateway_status_map(servers, timeout=2.0)
         for server in servers:
             radio_mac = server.get('radio_mac')
             if not radio_mac:
                 continue
             is_serial = _is_serial_gateway(server)
             serial_endpoint = server.get('transport_endpoint') or server.get('ip_address')
+            status = gateway_status_map.get(radio_mac.upper(), {'online': False, 'uptime': None})
             nodes.append({
                 'id': radio_mac,
                 'type': 'gateway',
@@ -65,6 +121,9 @@ def get_topology():
                 'is_serial': is_serial,
                 'serial_endpoint': serial_endpoint if is_serial else None,
                 'serial_port': _extract_serial_port(serial_endpoint) if is_serial else None,
+                'online': status['online'],
+                'status': 'online' if status['online'] else 'offline',
+                'uptime': status['uptime'],
             })
 
         # Add lightstrip nodes and routing edges
@@ -159,6 +218,10 @@ def get_gateway_details(mac):
         
         buttons = data_manager.read_json(FILE_BUTTONS, default=[])
         buttons_count = sum(1 for b in buttons if b.get('last_seen_gateway', '').upper() == mac.upper())
+
+        ping_target = _get_gateway_ping_target(gateway)
+        uptime = network_server.send_ping(ping_target, timeout=2.0) if ping_target else None
+        online = uptime is not None
         
         return jsonify({
             'success': True,
@@ -169,7 +232,10 @@ def get_gateway_details(mac):
                 'ip': gateway.get('ip_address'),
                 'last_used': gateway.get('last_used'),
                 'lights_count': lights_count,
-                'buttons_count': buttons_count
+                'buttons_count': buttons_count,
+                'online': online,
+                'status': 'online' if online else 'offline',
+                'uptime': uptime,
             }
         })
     

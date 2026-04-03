@@ -5,8 +5,8 @@
 	(uuid "0f0498d4-a5c0-4d85-9217-2613ef2d2837")
 	(paper "A4")
 	(title_block
-		(title "HueMix-Link Motion Sensor")
-		(date "2026-02-18")
+		(title "HueMix-Link Magnetic Sensor")
+		(date "2026-04-03")
 		(rev "1.0")
 	)
 	(lib_symbols
@@ -6651,8 +6651,8 @@
 				(justify right)
 			)
 		)
-		(property "Value" "270k"
-			(at 207.01 148.59 0)
+		(property "Value" "200k"
+			(at 208.28 148.59 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7895,7 +7895,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1nF"
+		(property "Value" "68nF"
 			(at 25.4 41.9099 0)
 			(effects
 				(font
@@ -9198,7 +9198,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "68k"
+		(property "Value" "75k"
 			(at 262.89 140.9699 0)
 			(effects
 				(font

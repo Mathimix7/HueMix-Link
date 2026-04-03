@@ -4422,7 +4422,7 @@
 				)
 			)
 		)
-		(property "Value" "1nF"
+		(property "Value" "68nF"
 			(at 0 1.68 90)
 			(layer "F.Fab")
 			(uuid "ab43c6e8-6634-4c23-8993-c96909e4b1ce")

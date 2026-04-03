@@ -1,5 +1,6 @@
 ﻿Designator,Footprint,Quantity,Value,LCSC Part #
-"C1, C10, C13, C2",0603,4,100nF,
+C1,0603,1,68nF,
+"C10, C13, C2",0603,3,100nF,
 C11,1206,1,4.7uFx25V,
 C12,1206,1,22uFx10V,
 J1,TerminalBlock_MaiXu_MX126-5.0-02P_1x02_P5.00mm,1,In 24V,

@@ -2742,6 +2742,7 @@
 		)
 		(embedded_fonts no)
 		(model "${KICAD9_3DMODEL_DIR}/TerminalBlock_Phoenix.3dshapes/TerminalBlock_Phoenix_MKDS-1,5-4_1x04_P5.00mm_Horizontal.step"
+			(hide yes)
 			(offset
 				(xyz 15 0 0)
 			)
@@ -2770,7 +2771,7 @@
 				)
 			)
 		)
-		(property "Value" "100nF"
+		(property "Value" "68nF"
 			(at 0 1.43 90)
 			(layer "F.Fab")
 			(uuid "8d990fd3-52af-423e-aaec-9a290e47124b")
@@ -4571,6 +4572,7 @@
 		)
 		(embedded_fonts no)
 		(model "${KICAD9_3DMODEL_DIR}/TerminalBlock_Phoenix.3dshapes/TerminalBlock_Phoenix_MKDS-1,5-2_1x02_P5.00mm_Horizontal.step"
+			(hide yes)
 			(offset
 				(xyz 0 0 0)
 			)

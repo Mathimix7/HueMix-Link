@@ -8169,7 +8169,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1nF"
+		(property "Value" "68nF"
 			(at 25.4 40.6399 0)
 			(effects
 				(font
@@ -9376,7 +9376,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "68k"
+		(property "Value" "75k"
 			(at 195.58 142.2399 0)
 			(effects
 				(font

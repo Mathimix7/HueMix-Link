@@ -4666,7 +4666,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "100nF"
+		(property "Value" "68nF"
 			(at 149.86 44.4499 90)
 			(effects
 				(font

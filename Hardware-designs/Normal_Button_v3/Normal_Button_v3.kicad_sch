@@ -6443,7 +6443,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1nF"
+		(property "Value" "68nF"
 			(at 27.94 38.0999 0)
 			(effects
 				(font

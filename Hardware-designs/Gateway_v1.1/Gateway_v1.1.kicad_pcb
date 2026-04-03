@@ -2561,7 +2561,7 @@
 				)
 			)
 		)
-		(property "Value" "1nF"
+		(property "Value" "68nF"
 			(at 0 1.68 0)
 			(layer "F.SilkS")
 			(uuid "50814bd4-3857-4398-aec5-11271cf1cacc")
@@ -2760,7 +2760,7 @@
 				)
 			)
 		)
-		(property "Value" "1nF"
+		(property "Value" "68nF"
 			(at 0 1.68 0)
 			(layer "F.SilkS")
 			(uuid "ad32e805-a403-4240-9843-af1145ed8960")

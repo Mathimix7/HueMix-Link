@@ -1,5 +1,5 @@
 <h1 align="center">HueMix-Link</h1>
-<p align="center"><img src="/images/logo.png" alt="HueMix-Link's logo", width="250" ></p>
+<p align="center"><img src="images/logo.png" alt="HueMix-Link's logo", width="250" ></p>
 
 ## Project Overview
 
@@ -18,6 +18,7 @@ It provides:
 - `python/`: Main backend service (Flask UI + UDP network + automations + OTA)
 - `esp-firmware/`: PlatformIO firmware sources for all device types (gateway, buttons, remotes, motion sensors, door sensors, lightstrips)
 - `Hardware-designs/`: KiCad design files for all device types (gateway, buttons, remotes, motion sensors, door sensors, lightstrips)
+- `3D Files/`: 3D model files for all device types (STL format for 3D printing)
 - `install.sh`: Linux installer/updater
 - `VERSION`: Version file for installer/update workflows
 
@@ -206,8 +207,8 @@ On startup, config sync reconciles saved room/scene references against live Hue 
 ### Gateway
 
 <table><tr>
-  <td><img src="images/gateway.png" alt="Gateway" width="350"></td>
-  <td><img src="images/gateway-open.png" alt="Gateway" width="350"></td>
+  <td><img src="images/gateway.jpeg" alt="Gateway" width="150"></td>
+  <td><img src="images/gateway_open.png" alt="Gateway" width="150"></td>
 </tr></table>
 
 The Gateway is a single board that contains two ESP32 modules working together:
@@ -271,8 +272,8 @@ The Radio Gateway can also run as a serial-connected ESP32 node that pairs with 
 ### Button
 
 <table><tr>
-  <td><img src="images/button.png" alt="Button" width="350"></td>
-  <td><img src="images/button-open.png" alt="Button" width="350"></td>
+  <td><img src="images/button.jpeg" alt="Button" width="150"></td>
+  <td><img src="images/button_open.png" alt="Button" width="150"></td>
 </tr></table>
 
 The Button is a single pushbutton device that sends click, hold, and release events via ESP-NOW. The ESP32 version is battery-powered and deep-sleeps between presses, while the ESP8266 version is always-on and runs continuously.
@@ -316,8 +317,8 @@ The Button is a single pushbutton device that sends click, hold, and release eve
 ### Remote
 
 <table><tr>
-  <td><img src="images/remote.png" alt="Remote" width="350"></td>
-  <td><img src="images/remote-open.png" alt="Remote" width="350"></td>
+  <td><img src="images/remote.jpeg" alt="Remote" width="150"></td>
+  <td><img src="images/remote_open.png" alt="Remote" width="150"></td>
 </tr></table>
 
 The Remote is a battery-powered ESP32 device with up to 4 independently configurable buttons. Each button can target a different room with its own action type. The number of active buttons (1–4) is configured via hardware at flash time.
@@ -368,8 +369,8 @@ Battery-powered. **Double-press the reset button** to enter OTA mode. The LED wi
 ### Motion Sensor
 
 <table><tr>
-  <td><img src="images/motion-sensor.png" alt="Motion Sensor" width="350"></td>
-  <td><img src="images/motion-sensor-open.png" alt="Motion Sensor" width="350"></td>
+  <td><img src="images/motion_sensor.jpeg" alt="Motion Sensor" width="150"></td>
+  <td><img src="images/motion_sensor_open.png" alt="Motion Sensor" width="150"></td>
 </tr></table>
 
 The Motion Sensor is a battery-powered ESP32 device with a PIR sensor and an ambient light level sensor (LDR). It sleeps in deep sleep and wakes when the PIR fires. After sending a motion event it enters a configurable cooldown period (default 60s) before re-arming.
@@ -411,6 +412,11 @@ Battery-powered. **Double-press the reset button** to enter OTA mode. The LED wi
 
 ### Door Sensor
 
+<table><tr>
+  <td><img src="images/door_sensor.jpeg" alt="Door Sensor" width="150"></td>
+  <td><img src="images/door_sensor_open.png" alt="Door Sensor" width="150"></td>
+</tr></table>
+
 The Door Sensor is a battery-powered ESP32 device that reports magnetic open/close state changes and ambient light level over ESP-NOW.
 
 **Events sent**
@@ -446,8 +452,8 @@ Battery-powered. **Double-press the reset button** to enter OTA mode. Then flash
 ### Lightstrip
 
 <table><tr>
-  <td><img src="images/lightstrip.png" alt="Lightstrip" width="350"></td>
-  <td><img src="images/lightstrip-open.png" alt="Lightstrip" width="350"></td>
+  <td><img src="images/lightstrip.jpeg" alt="Lightstrip" width="150"></td>
+  <td><img src="images/lightstrip_open.png" alt="Lightstrip" width="150"></td>
 </tr></table>
 
 The Lightstrip is an ESP32 or ESP8266 device that drives WS2812B or SK6812 LED strips (up to 60 LEDs). It mirrors the scene colors of an assigned Hue room in real-time, syncing color, brightness, and saturation from the Hue state cache.

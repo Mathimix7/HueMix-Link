@@ -1,0 +1,19 @@
+.spinner {
+    --spinner-size: 20px;
+    --spinner-color: #3b82f6;
+    --spinner-track: rgba(59, 130, 246, 0.3);
+}
+
+.color-preview {
+    width: 40px;
+    height: 40px;
+    border-radius: 0.5rem;
+    border: 2px solid #e5e7eb;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.color-preview:hover {
+    border-color: #9333ea;
+    transform: scale(1.1);
+}

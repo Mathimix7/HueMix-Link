@@ -1,0 +1,11 @@
+.spinner {
+    --spinner-size: 20px;
+    --spinner-color: #06b6d4;
+    --spinner-track: rgba(6, 182, 212, 0.3);
+}
+
+.rssi-bar {
+    height: 8px;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}

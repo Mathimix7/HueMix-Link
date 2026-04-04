@@ -1,0 +1,5 @@
+.spinner {
+    --spinner-size: 20px;
+    --spinner-color: #22c55e;
+    --spinner-track: rgba(34, 197, 94, 0.3);
+}

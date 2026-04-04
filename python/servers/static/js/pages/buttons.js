@@ -1,0 +1,1918 @@
+let devices = [];
+let rooms = [];
+let currentDeviceId = null;
+let selectedScenes = [];
+let draggedElement = null;
+let deleteDeviceId = null;
+let deleteDeviceName = null;
+// Global clipboard for copying room+scenes
+let clipboardConfig = null;
+
+// --- Button Press Flash Logic ---
+let lastPressStates = {};
+
+function pollButtonPressStates() {
+    fetch('/buttons/api/press_states')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.press_states) {
+                const pressStates = data.press_states;
+                for (const [id, lastPressed] of Object.entries(pressStates)) {
+                    // New press detected for a previously-known device: flash and update only that row
+                    if (lastPressed && lastPressStates[id] && lastPressStates[id] !== lastPressed) {
+                        flashButtonRow(id);
+
+                        // Fetch the single-device endpoint to get updated battery/metadata and update the row
+                        fetch(`/buttons/api/devices/${id}`)
+                            .then(resp => resp.json())
+                            .then(devData => {
+                                if (devData.success && devData.device) {
+                                    updateDeviceRow(devData.device);
+                                }
+                            })
+                            .catch(() => {
+                                // On error, fall back to full refresh
+                                loadDevices();
+                            });
+                    }
+
+                    // If this press is from a device we don't know about yet, do a full refresh
+                    if (!devices.find(d => d.id === id)) {
+                        // flash unknown device to draw attention after refresh
+                        loadDevices();
+                    }
+
+                    // Update cached state
+                    lastPressStates[id] = lastPressed;
+                }
+            }
+        })
+        .catch(err => {/* ignore errors for polling */});
+}
+
+
+function updateDeviceRow(device) {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    const rows = Array.from(tbody.children);
+    const row = rows.find(r => r.dataset && r.dataset.deviceId === device.id);
+    if (!row) return;
+
+    // Update name
+    const nameSpan = row.querySelector('td:nth-child(1) span.text-sm');
+    if (nameSpan) nameSpan.textContent = device.name || '';
+
+    // Update battery cell (td:nth-child(3))
+    const batteryCell = row.children[2];
+    batteryCell.innerHTML = '';
+    if (device.battery_percent !== undefined && device.battery_percent !== null) {
+        const batteryWrap = document.createElement('div');
+        batteryWrap.className = 'flex items-center space-x-2 battery-tooltip';
+
+        let lastUpdatedText = 'Never';
+        if (device.battery_last_updated) {
+            const lastUpdate = new Date(device.battery_last_updated);
+            lastUpdatedText = lastUpdate.toLocaleString();
+        }
+
+        const tooltipContent = document.createElement('div');
+        tooltipContent.className = 'tooltip-content';
+        tooltipContent.innerHTML = `<div><strong>Voltage:</strong> ${device.battery_mv || 'N/A'} mV</div><div><strong>Updated:</strong> ${lastUpdatedText}</div>`;
+
+        const batteryIcon = document.createElement('i');
+        let iconClass, textColor;
+        if (device.battery_percent >= 60) {
+            iconClass = 'fa-battery-full';
+            textColor = 'text-green-600';
+        } else if (device.battery_percent >= 20) {
+            iconClass = 'fa-battery-half';
+            textColor = 'text-yellow-600';
+        } else {
+            iconClass = 'fa-battery-quarter';
+            textColor = 'text-red-600';
+        }
+        batteryIcon.className = `fas ${iconClass} ${textColor}`;
+
+        const batteryText = document.createElement('span');
+        batteryText.className = `text-sm font-medium ${textColor}`;
+        batteryText.textContent = `${device.battery_percent}%`;
+
+        batteryWrap.appendChild(batteryIcon);
+        batteryWrap.appendChild(batteryText);
+        batteryWrap.appendChild(tooltipContent);
+        batteryCell.appendChild(batteryWrap);
+    } else {
+        const naSpan = document.createElement('span');
+        naSpan.className = 'text-sm text-gray-400 flex items-center space-x-2';
+        naSpan.innerHTML = '<i class="fas fa-battery-empty text-gray-400"></i><span>N/A</span>';
+        batteryCell.appendChild(naSpan);
+    }
+
+    // Update status cell (td:nth-child(4))
+    const statusCell = row.children[3];
+    statusCell.innerHTML = '';
+    const statusSpan = document.createElement('span');
+    if (device.configured) {
+        statusSpan.className = 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center';
+        statusSpan.innerHTML = '<i class="fas fa-check-circle mr-1"></i> Configured';
+    } else {
+        statusSpan.className = 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 items-center';
+        statusSpan.innerHTML = '<i class="fas fa-circle mr-1"></i> Not Configured';
+    }
+    statusCell.appendChild(statusSpan);
+
+    // Update in-memory devices array
+    const idx = devices.findIndex(d => d.id === device.id);
+    if (idx > -1) devices[idx] = device;
+}
+
+// Copy/paste helpers
+function copyDeviceConfig(deviceId) {
+    const device = devices.find(d => d.id === deviceId);
+    if (!device || !device.config) {
+        showToast('Copy Failed', 'No configuration to copy for this device', 'warning');
+        return;
+    }
+
+    // For remote devices, don't copy whole remote - prefer copying per-button inside remote modal
+        if (device.device_type === 4 || (device.config && device.config.device_type === 'remote')) {
+        showToast('Copy Unavailable', 'Open the remote and copy an individual button', 'warning');
+        return;
+    }
+
+    clipboardConfig = {
+        room_id: device.config.room_id || null,
+        scenes: (device.config.scenes || []).slice()
+    };
+    showToast('Copied', 'Room and scenes copied to clipboard', 'success');
+}
+
+    function openRemoteCopyMenu(deviceId, anchorEventOrElem) {
+        const device = devices.find(d => d.id === deviceId);
+        if (!device || !device.config || !device.config.buttons) return showToast('Copy Failed', 'Remote has no buttons', 'error');
+
+        let anchorX = 0, anchorY = 0, anchorRect = null;
+        if (anchorEventOrElem && anchorEventOrElem.clientX !== undefined) {
+            anchorX = anchorEventOrElem.clientX;
+            anchorY = anchorEventOrElem.clientY;
+        } else if (anchorEventOrElem && anchorEventOrElem.getBoundingClientRect) {
+            anchorRect = anchorEventOrElem.getBoundingClientRect();
+            anchorX = anchorRect.left + 10;
+            anchorY = anchorRect.bottom + 6;
+        }
+
+        const existing = document.getElementById('remote-copy-menu');
+        if (existing) existing.remove();
+
+        const menu = document.createElement('div');
+        menu.id = 'remote-copy-menu';
+        menu.style.position = 'fixed';
+        menu.style.left = (anchorX) + 'px';
+        menu.style.top = (anchorY) + 'px';
+        menu.style.zIndex = 2000;
+        menu.className = 'bg-white border rounded-md shadow-md p-2';
+
+        const title = document.createElement('div');
+        title.className = 'text-sm font-medium px-2 pb-1 text-gray-700';
+        title.textContent = `Copy from ${device.name}`;
+        menu.appendChild(title);
+
+        device.config.buttons.forEach((btn, idx) => {
+            const item = document.createElement('button');
+            item.className = 'block w-full text-left px-2 py-1 text-sm hover:bg-gray-100 rounded';
+            // Display button using its actual index (btn.index) not array position
+            const displayIndex = btn.index !== undefined ? btn.index : idx;
+            const buttonCount = device.button_count || 4;
+            const buttonName = getButtonName(displayIndex, buttonCount);
+            item.textContent = `${buttonName} — ${getActionTypeLabel(btn.action_type || btn.action || 'normal')}`;
+            item.addEventListener('click', (e) => {
+                clipboardConfig = { room_id: btn.room_id || null, scenes: (btn.scenes || []).slice() };
+                showToast('Copied', `${buttonName} copied`, 'success');
+                menu.remove();
+            });
+            menu.appendChild(item);
+        });
+
+        const cancel = document.createElement('button');
+        cancel.className = 'mt-2 block w-full text-left px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => menu.remove());
+        menu.appendChild(cancel);
+
+        document.body.appendChild(menu);
+
+        const hideOnClick = (ev) => {
+            if (!menu.contains(ev.target)) {
+                menu.remove();
+                document.removeEventListener('click', hideOnClick);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', hideOnClick), 10);
+    }
+
+function pasteConfigToModal() {
+    if (!clipboardConfig) {
+        showToast('Nothing to Paste', 'Clipboard is empty', 'warning');
+        return;
+    }
+
+    // Set room select and load scenes, then apply scenes after a short delay
+    const roomSelect = document.getElementById('room-select');
+    if (!roomSelect) return;
+
+    roomSelect.value = clipboardConfig.room_id || '';
+    loadScenesForRoom();
+
+    // Apply scenes after scenes are loaded (best-effort timing)
+    setTimeout(() => {
+        if (!clipboardConfig || !clipboardConfig.room_id) return;
+        const room = rooms.find(r => r.id === clipboardConfig.room_id);
+        if (!room || !room.scenes) return;
+
+        // Map scene ids to scene objects available for the room
+        selectedScenes = [];
+        clipboardConfig.scenes.forEach(sid => {
+            const sceneObj = room.scenes.find(s => s.id === sid);
+            if (sceneObj) selectedScenes.push(sceneObj);
+        });
+
+        renderSelectedScenes();
+        updateSceneCardStates();
+        showToast('Pasted', 'Scenes pasted into configuration', 'success');
+    }, 300);
+}
+
+function copyRemoteButtonConfig(buttonIndex) {
+    const btn = remoteConfig.buttons[buttonIndex];
+    if (!btn) return showToast('Copy Failed', 'Button not found', 'error');
+
+    const device = devices.find(d => d.id === remoteDeviceId);
+    const buttonCount = device ? (device.button_count || 4) : 4;
+    const buttonName = getButtonName(buttonIndex, buttonCount);
+    
+    clipboardConfig = {
+        room_id: btn.room_id || null,
+        scenes: (btn.scenes || []).slice()
+    };
+    showToast('Copied', `${buttonName} scenes copied`, 'success');
+}
+
+function pasteToRemoteButton(index) {
+    if (!clipboardConfig) return showToast('Nothing to Paste', 'Clipboard is empty', 'warning');
+
+    remoteConfig.buttons[index].room_id = clipboardConfig.room_id || null;
+    // Set scenes from clipboard (will be filtered by loadRemoteRoomScenes)
+    remoteConfig.buttons[index].scenes = (clipboardConfig.scenes || []).slice();
+    renderRemoteButtonConfig(index);
+
+    // Reload room scenes so the available scene cards reflect the selected state
+    if (clipboardConfig.room_id) {
+        setTimeout(() => {
+            loadRemoteRoomScenes(clipboardConfig.room_id, index);
+            const validCount = remoteConfig.buttons[index].scenes ? remoteConfig.buttons[index].scenes.length : 0;
+            const device = devices.find(d => d.id === remoteDeviceId);
+            const buttonCount = device ? (device.button_count || 4) : 4;
+            const buttonIndex = remoteConfig.buttons[index].index;
+            const buttonName = getButtonName(buttonIndex, buttonCount);
+            showToast('Pasted', `Pasted ${validCount} scene(s) to ${buttonName}`, 'success');
+        }, 150);
+    }
+}
+
+function flashButtonRow(deviceId) {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    const rows = Array.from(tbody.children);
+    for (const row of rows) {
+        if (row.dataset && row.dataset.deviceId === deviceId) {
+            row.classList.remove('flash-press');
+            void row.offsetWidth;
+            row.classList.add('flash-press');
+            setTimeout(() => row.classList.remove('flash-press'), 800);
+            break;
+        }
+    }
+}
+
+// Start polling after devices are loaded
+window.addEventListener('DOMContentLoaded', function() {
+    setInterval(pollButtonPressStates, 1000);
+});
+
+// Load devices on page load
+window.addEventListener('DOMContentLoaded', function() {
+    loadDevices();
+    loadRooms();
+});
+
+function loadDevices() {
+    showDevicesSkeleton();
+    
+    fetch('/buttons/api/devices')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                devices = data.devices;
+                renderDevices();
+            }
+        })
+        .catch(err => console.error('Error loading devices:', err));
+}
+
+function showDevicesSkeleton() {
+    const tbody = document.getElementById('devices-table-body');
+    tbody.innerHTML = '';
+    
+    // Create 3 skeleton rows
+    for (let i = 0; i < 3; i++) {
+        const row = document.createElement('tr');
+        row.className = 'animate-pulse';
+        row.innerHTML = `
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="flex items-center">
+                    <div class="w-4 h-4 bg-gray-200 rounded mr-2"></div>
+                    <div class="h-4 bg-gray-200 rounded w-32"></div>
+                </div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="h-4 bg-gray-200 rounded w-40"></div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="h-5 bg-gray-200 rounded-full w-24"></div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="flex space-x-2">
+                    <div class="h-4 bg-gray-200 rounded w-16"></div>
+                    <div class="h-4 bg-gray-200 rounded w-20"></div>
+                </div>
+            </td>
+        `;
+        tbody.appendChild(row);
+    }
+}
+
+function renderDevices() {
+    const tbody = document.getElementById('devices-table-body');
+    tbody.innerHTML = '';
+
+    if (devices.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="5" class="px-6 py-12 text-center text-gray-500">
+                    <p class="text-lg">No buttons found</p>
+                    <p class="text-sm mt-1">Buttons will appear here automatically once detected.</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    devices.forEach(device => {
+        const row = document.createElement('tr');
+        row.className = 'hover:bg-gray-50';
+        row.dataset.deviceId = device.id;
+
+        // Name cell
+        const nameCell = document.createElement('td');
+        nameCell.className = 'px-6 py-4 whitespace-nowrap';
+        const nameWrap = document.createElement('div');
+        nameWrap.className = 'flex items-center';
+        const icon = document.createElement('i');
+        icon.className = 'fas fa-microchip mr-2 text-pink-500 flex-shrink-0';
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'text-sm font-medium text-gray-900';
+        nameSpan.textContent = device.name;
+        nameWrap.appendChild(icon);
+        nameWrap.appendChild(nameSpan);
+        nameCell.appendChild(nameWrap);
+
+        // MAC cell
+        const macCell = document.createElement('td');
+        macCell.className = 'px-6 py-4 whitespace-nowrap';
+        const macSpan = document.createElement('span');
+        macSpan.className = 'text-sm text-gray-500 font-mono';
+        macSpan.textContent = device.mac_address;
+        macCell.appendChild(macSpan);
+
+        // Battery cell
+        const batteryCell = document.createElement('td');
+        batteryCell.className = 'px-6 py-4 whitespace-nowrap';
+        
+        if (device.battery_percent !== undefined && device.battery_percent !== null) {
+            const batteryWrap = document.createElement('div');
+            batteryWrap.className = 'flex items-center space-x-2 battery-tooltip';
+            
+            // Format last updated time nicely
+            let lastUpdatedText = 'Never';
+            if (device.battery_last_updated) {
+                const lastUpdate = new Date(device.battery_last_updated);
+                lastUpdatedText = lastUpdate.toLocaleString();
+            }
+            
+            // Create custom tooltip
+            const tooltipContent = document.createElement('div');
+            tooltipContent.className = 'tooltip-content';
+            tooltipContent.innerHTML = `<div><strong>Voltage:</strong> ${device.battery_mv || 'N/A'} mV</div><div><strong>Updated:</strong> ${lastUpdatedText}</div>`;
+            
+            const batteryIcon = document.createElement('i');
+            let iconClass, textColor;
+            
+            if (device.battery_percent >= 60) {
+                iconClass = 'fa-battery-full';
+                textColor = 'text-green-600';
+            } else if (device.battery_percent >= 20) {
+                iconClass = 'fa-battery-half';
+                textColor = 'text-yellow-600';
+            } else {
+                iconClass = 'fa-battery-quarter';
+                textColor = 'text-red-600';
+            }
+            
+            batteryIcon.className = `fas ${iconClass} ${textColor}`;
+            
+            const batteryText = document.createElement('span');
+            batteryText.className = `text-sm font-medium ${textColor}`;
+            batteryText.textContent = `${device.battery_percent}%`;
+            
+            batteryWrap.appendChild(batteryIcon);
+            batteryWrap.appendChild(batteryText);
+            batteryWrap.appendChild(tooltipContent);
+            batteryCell.appendChild(batteryWrap);
+        } else {
+            const naSpan = document.createElement('span');
+            naSpan.className = 'text-sm text-gray-400 flex items-center space-x-2';
+            naSpan.innerHTML = '<i class="fas fa-battery-empty text-gray-400"></i><span>N/A</span>';
+            batteryCell.appendChild(naSpan);
+        }
+
+        // Status cell
+        const statusCell = document.createElement('td');
+        statusCell.className = 'px-6 py-4 whitespace-nowrap';
+        const statusSpan = document.createElement('span');
+        if (device.configured) {
+            statusSpan.className = 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center';
+            statusSpan.innerHTML = '<i class="fas fa-check-circle mr-1"></i> Configured';
+        } else {
+            statusSpan.className = 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 items-center';
+            statusSpan.innerHTML = '<i class="fas fa-circle mr-1"></i> Not Configured';
+        }
+        statusCell.appendChild(statusSpan);
+
+        // Actions cell
+        const actionsCell = document.createElement('td');
+        actionsCell.className = 'px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2';
+
+        // Rename button
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'text-pink-600 hover:text-pink-900 inline-flex items-center';
+        renameBtn.innerHTML = '<i class="fas fa-edit mr-1"></i> Rename';
+        renameBtn.addEventListener('click', () => openRenameModal(device.id));
+
+        // Configure button
+        const configBtn = document.createElement('button');
+        configBtn.className = 'text-green-600 hover:text-green-900 inline-flex items-center';
+        configBtn.innerHTML = '<i class="fas fa-cog mr-1"></i> Configure';
+        console.log("Device type for device", device.id, "is", device.device_type);
+        if (device.device_type === 4) { // Remote Control
+            console.log("Configuring remote control:", device.id);
+            configBtn.addEventListener('click', () => openRemoteConfigModal(device.id));
+        } else { // Button Device
+            console.log("Configuring button device:", device.id);
+            configBtn.addEventListener('click', () => openConfigModal(device.id));
+        }
+
+        // Delete button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'text-red-600 hover:text-red-900 inline-flex items-center';
+        deleteBtn.innerHTML = '<i class="fas fa-trash mr-1"></i> Delete';
+        deleteBtn.addEventListener('click', () => deleteDevice(device.id, device.name));
+
+        actionsCell.appendChild(renameBtn);
+        actionsCell.appendChild(configBtn);
+        actionsCell.appendChild(deleteBtn);
+
+        row.appendChild(nameCell);
+        row.appendChild(macCell);
+        row.appendChild(batteryCell);
+        row.appendChild(statusCell);
+        row.appendChild(actionsCell);
+
+        tbody.appendChild(row);
+    });
+}
+
+function loadRooms() {
+    const roomSelect = document.getElementById('room-select');
+    const loadingState = document.getElementById('room-loading-state');
+    const errorState = document.getElementById('room-error-state');
+    
+    // Show loading state
+    loadingState.classList.remove('hidden');
+    errorState.classList.add('hidden');
+    roomSelect.disabled = true;
+    
+    fetch('/api/rooms')
+        .then(response => response.json())
+        .then(data => {
+            loadingState.classList.add('hidden');
+            roomSelect.disabled = false;
+            
+            if (data.success) {
+                rooms = data.rooms;
+                roomSelect.innerHTML = '<option value="">-- Select a room --</option>';
+                rooms.forEach(room => {
+                    const option = document.createElement('option');
+                    option.value = room.id;
+                    option.textContent = room.name;
+                    roomSelect.appendChild(option);
+                });
+            } else if (data.needs_config) {
+                // Show error state
+                errorState.classList.remove('hidden');
+                document.getElementById('room-error-message').textContent = 
+                    'Hue Bridge is not configured. Please configure your bridge to load rooms and scenes.';
+                roomSelect.disabled = true;
+            } else {
+                // Show error state
+                errorState.classList.remove('hidden');
+                document.getElementById('room-error-message').textContent = 
+                    data.error || 'Failed to load rooms from Hue Bridge';
+                roomSelect.disabled = true;
+            }
+        })
+        .catch(err => {
+            console.error('Error loading rooms:', err);
+            loadingState.classList.add('hidden');
+            errorState.classList.remove('hidden');
+            document.getElementById('room-error-message').textContent = 
+                'Failed to connect to server. Please check your connection.';
+            roomSelect.disabled = true;
+        });
+}
+
+function refreshDevices() {
+    const refreshIcon = document.getElementById('refresh-icon');
+    
+    // Add spinning animation
+    refreshIcon.classList.add('rotate-360');
+    setTimeout(() => {
+        refreshIcon.classList.remove('rotate-360');
+    }, 500);
+    // Load devices
+    loadDevices();
+}
+
+// Rename Modal Functions
+function openRenameModal(deviceId) {
+    currentDeviceId = deviceId;
+    const device = devices.find(d => d.id === deviceId);
+    document.getElementById('device-name').value = device.name;
+    document.getElementById('rename-modal').classList.remove('hidden');
+}
+
+function closeRenameModal() {
+    document.getElementById('rename-modal').classList.add('hidden');
+    currentDeviceId = null;
+}
+
+function saveDeviceName() {
+    const newName = document.getElementById('device-name').value.trim();
+    if (!newName) {
+        showToast('Validation Error', 'Please enter a device name', 'warning');
+        return;
+    }
+
+    fetch(`/buttons/api/devices/${currentDeviceId}/rename`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: newName})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            loadDevices();
+            closeRenameModal();
+            showToast('Success!', `Device renamed to "${newName}"`, 'success');
+        }
+    })
+    .catch(err => {
+        console.error('Error renaming device:', err);
+        showToast('Error', 'Failed to rename device', 'error');
+    });
+}
+
+// Configuration Modal Functions
+function openConfigModal(deviceId) {
+    currentDeviceId = deviceId;
+    selectedScenes = [];
+    const device = devices.find(d => d.id === deviceId);
+    document.getElementById('config-device-name').textContent = device.name;
+    
+    // Populate room select
+    const roomSelect = document.getElementById('room-select');
+    roomSelect.innerHTML = '<option value="">-- Select a room --</option>';
+    rooms.forEach(room => {
+        const option = document.createElement('option');
+        option.value = room.id;
+        option.textContent = room.name;
+        roomSelect.appendChild(option);
+    });
+
+    document.getElementById('config-modal').classList.remove('hidden');
+    document.getElementById('scenes-section').classList.add('hidden');
+    document.getElementById('selected-section').classList.add('hidden');
+    
+    // Load existing configuration if device is configured
+    if (device.configured) {
+        // Show loading skeleton, hide content
+        document.getElementById('config-loading-skeleton').classList.remove('hidden');
+        document.getElementById('config-content').classList.add('hidden');
+        loadExistingConfig(deviceId);
+    } else {
+        // Show content, hide skeleton for new configurations
+        document.getElementById('config-loading-skeleton').classList.add('hidden');
+        document.getElementById('config-content').classList.remove('hidden');
+    }
+}
+
+function loadExistingConfig(deviceId) {
+    fetch(`/buttons/api/${deviceId}/config`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const config = data.config;
+                
+                // Set the room
+                document.getElementById('room-select').value = config.room_id;
+                
+                // Load scenes for that room
+                fetch(`/api/rooms/${config.room_id}/scenes`)
+                    .then(response => response.json())
+                    .then(scenesData => {
+                        if (scenesData.success) {
+                            renderAvailableScenes(scenesData.scenes);
+                            document.getElementById('scenes-section').classList.remove('hidden');
+                            document.getElementById('selected-section').classList.remove('hidden');
+                            
+                            // Pre-select the configured scenes in order
+                            selectedScenes = [];
+                            config.scenes.forEach(sceneId => {
+                                const scene = scenesData.scenes.find(s => s.id === sceneId);
+                                if (scene) {
+                                    selectedScenes.push(scene);
+                                }
+                            });
+                            
+                            renderSelectedScenes();
+                            updateSceneCardStates();
+                            
+                            // Hide skeleton, show content
+                            document.getElementById('config-loading-skeleton').classList.add('hidden');
+                            document.getElementById('config-content').classList.remove('hidden');
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Error loading scenes:', err);
+                        // Hide skeleton on error too
+                        document.getElementById('config-loading-skeleton').classList.add('hidden');
+                        document.getElementById('config-content').classList.remove('hidden');
+                    });
+            }
+        })
+        .catch(err => {
+            console.error('Error loading config:', err);
+            // Hide skeleton on error
+            document.getElementById('config-loading-skeleton').classList.add('hidden');
+            document.getElementById('config-content').classList.remove('hidden');
+        });
+}
+
+function closeConfigModal() {
+    document.getElementById('config-modal').classList.add('hidden');
+    currentDeviceId = null;
+    selectedScenes = [];
+    document.getElementById('search-scene').value = '';
+}
+
+function loadScenesForRoom() {
+    const roomId = document.getElementById('room-select').value;
+    if (!roomId) {
+        document.getElementById('scenes-section').classList.add('hidden');
+        document.getElementById('selected-section').classList.add('hidden');
+        selectedScenes = []; // Clear selected scenes
+        return;
+    }
+
+    // Clear selected scenes when changing rooms
+    selectedScenes = [];
+
+    fetch(`/api/rooms/${roomId}/scenes`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                renderAvailableScenes(data.scenes);
+                renderSelectedScenes(); // Update selected section to show empty
+                document.getElementById('scenes-section').classList.remove('hidden');
+                document.getElementById('selected-section').classList.remove('hidden');
+            } else if (data.needs_config) {
+                showToast('Bridge Configuration Required', 
+                    'Please configure your Hue Bridge first.', 
+                    'warning');
+                closeConfigModal();
+                setTimeout(() => {
+                    window.location.href = '/bridge';
+                }, 2000);
+            } else {
+                showToast('Error Loading Scenes', 
+                    data.error || 'Failed to load scenes', 
+                    'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error loading scenes:', err);
+            showToast('Connection Error', 
+                'Failed to load scenes from server', 
+                'error');
+        });
+}
+
+function renderAvailableScenes(scenes) {
+    const container = document.getElementById('available-scenes');
+    container.innerHTML = '';
+
+    if (scenes.length === 0) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-4 col-span-2">No scenes available for this room</p>';
+        return;
+    }
+
+    scenes.forEach(scene => {
+        const sceneCard = document.createElement('div');
+        sceneCard.className = 'border-2 border-gray-200 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors scene-card';
+        sceneCard.onclick = () => toggleScene(scene);
+        sceneCard.id = `scene-${scene.id}`;
+        sceneCard.dataset.sceneName = scene.name.toLowerCase();
+        sceneCard.innerHTML = `
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium flex-1">${scene.name}</span>
+                <i class="fas fa-plus-circle text-pink-600 flex-shrink-0"></i>
+            </div>
+        `;
+        container.appendChild(sceneCard);
+    });
+}
+
+function filterScenes() {
+    const searchTerm = document.getElementById('search-scene').value.toLowerCase();
+    const sceneCards = document.querySelectorAll('.scene-card');
+    
+    sceneCards.forEach(card => {
+        const sceneName = card.dataset.sceneName;
+        if (sceneName.includes(searchTerm)) {
+            card.style.display = 'block';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    const container = document.getElementById('available-scenes');
+    const sceneCardsList = Array.from(sceneCards);
+
+    // If there are no scene cards at all, keep whatever message is already shown by renderAvailableScenes
+    if (sceneCardsList.length === 0) return;
+
+    const anyVisible = sceneCardsList.some(card => card.style.display !== 'none');
+    const existingMsg = container.querySelector('#no-scenes-found-msg');
+
+    if (!anyVisible) {
+        if (!existingMsg) {
+            const msg = document.createElement('p');
+            msg.id = 'no-scenes-found-msg';
+            msg.className = 'text-gray-400 text-center py-4 col-span-2';
+            msg.textContent = 'No scenes found';
+            container.appendChild(msg);
+        }
+    } else {
+        if (existingMsg) existingMsg.remove();
+    }
+}
+
+function filterRemoteScenes() {
+    const searchEl = document.getElementById('remote-search-scene');
+    const searchTerm = (searchEl ? searchEl.value : '').toLowerCase();
+    const sceneCards = document.querySelectorAll('.remote-scene-card');
+
+    sceneCards.forEach(card => {
+        const sceneName = card.dataset.sceneName || '';
+        if (sceneName.includes(searchTerm)) {
+            card.style.display = 'block';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    const container = document.getElementById('remote-available-scenes');
+    const sceneCardsList = Array.from(sceneCards);
+
+    if (sceneCardsList.length === 0) return;
+
+    const anyVisible = sceneCardsList.some(card => card.style.display !== 'none');
+    const existingMsg = container ? container.querySelector('#no-remote-scenes-found-msg') : null;
+
+    if (!anyVisible) {
+        if (container && !existingMsg) {
+            const msg = document.createElement('p');
+            msg.id = 'no-remote-scenes-found-msg';
+            msg.className = 'text-gray-400 text-center py-4 col-span-2';
+            msg.textContent = 'No scenes found';
+            container.appendChild(msg);
+        }
+    } else {
+        if (existingMsg) existingMsg.remove();
+    }
+}
+
+function toggleScene(scene) {
+    const index = selectedScenes.findIndex(s => s.id === scene.id);
+    if (index > -1) {
+        selectedScenes.splice(index, 1);
+    } else {
+        selectedScenes.push(scene);        
+        fetch(`/api/scenes/${scene.id}/activate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Show visual feedback
+                const card = document.getElementById(`scene-${scene.id}`);
+                if (card) {
+                    const originalClasses = card.className;
+                    card.className = 'border-2 border-green-500 bg-green-50 rounded-lg p-3 cursor-pointer transition-colors scene-card';
+                    setTimeout(() => {
+                        card.className = originalClasses;
+                        // Re-apply selected state if this scene is selected
+                        if (selectedScenes.findIndex(s => s.id === scene.id) > -1) {
+                            card.className = 'border-2 border-pink-500 bg-pink-50 rounded-lg p-3 cursor-pointer transition-colors scene-card';
+                        }
+                    }, 1000);
+                }
+            } else {
+                showToast('Error', 'Failed to activate scene: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error activating scene:', err);
+            showToast('Error', 'Failed to activate scene', 'error');
+        });
+    }
+    
+    renderSelectedScenes();
+    updateSceneCardStates();
+}
+
+function updateSceneCardStates() {
+    // Reset all cards first
+    document.querySelectorAll('[id^="scene-"]').forEach(card => {
+        card.className = 'border-2 border-gray-200 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors scene-card';
+        const icon = card.querySelector('i');
+        if (icon) {
+            icon.className = 'fas fa-plus-circle text-pink-600 flex-shrink-0';
+        }
+    });
+
+    // Update selected cards
+    selectedScenes.forEach(scene => {
+        const card = document.getElementById(`scene-${scene.id}`);
+        if (card) {
+            card.className = 'border-2 border-pink-500 bg-pink-50 rounded-lg p-3 cursor-pointer transition-colors scene-card';
+            const icon = card.querySelector('i');
+            if (icon) {
+                icon.className = 'fas fa-check-circle text-pink-600 flex-shrink-0';
+            }
+        }
+    });
+}
+
+function renderSelectedScenes() {
+    const container = document.getElementById('selected-scenes');
+    if (selectedScenes.length === 0) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes selected yet</p>';
+        return;
+    }
+
+    container.innerHTML = '';
+    selectedScenes.forEach((scene, index) => {
+        const sceneItem = document.createElement('div');
+        sceneItem.className = 'bg-white border border-gray-300 rounded-lg p-3 cursor-move hover:shadow-md transition-shadow';
+        sceneItem.draggable = true;
+        sceneItem.dataset.index = index;
+        sceneItem.innerHTML = `
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <i class="fas fa-grip-vertical text-gray-400"></i>
+                    <span class="font-medium">${scene.name}</span>
+                </div>
+                <button onclick="event.stopPropagation(); removeScene(${index})" class="text-red-600 hover:text-red-800">
+                    <i class="fas fa-times-circle"></i>
+                </button>
+            </div>
+        `;
+
+        // Drag events
+        sceneItem.addEventListener('dragstart', handleDragStart);
+        sceneItem.addEventListener('dragover', handleDragOver);
+        sceneItem.addEventListener('drop', handleDrop);
+        sceneItem.addEventListener('dragend', handleDragEnd);
+        sceneItem.addEventListener('dragenter', handleDragEnter);
+        sceneItem.addEventListener('dragleave', handleDragLeave);
+
+        container.appendChild(sceneItem);
+    });
+}
+
+function removeScene(index) {
+    selectedScenes.splice(index, 1);
+    renderSelectedScenes();
+    updateSceneCardStates();
+}
+
+// Drag and Drop handlers
+function handleDragStart(e) {
+    draggedElement = this;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', this.innerHTML);
+    this.classList.add('opacity-40');
+}
+
+function handleDragOver(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+    e.dataTransfer.dropEffect = 'move';
+    
+    // Remove border from all items first
+    document.querySelectorAll('#selected-scenes > div').forEach(item => {
+        if (item !== draggedElement) {
+            item.classList.remove('border-pink-500', 'bg-pink-50');
+        }
+    });
+    
+    // Add visual feedback to current item
+    if (this !== draggedElement) {
+        this.classList.add('border-pink-500', 'bg-pink-50');
+    }
+    
+    return false;
+}
+
+function handleDragEnter(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+}
+
+function handleDragLeave(e) {
+    // Handled in dragover now
+}
+
+function handleDrop(e) {
+    if (e.stopPropagation) {
+        e.stopPropagation();
+    }
+    e.preventDefault();
+
+    // Remove all highlighting
+    document.querySelectorAll('#selected-scenes > div').forEach(item => {
+        item.classList.remove('border-pink-500', 'bg-pink-50');
+    });
+
+    if (draggedElement !== this) {
+        const draggedIndex = parseInt(draggedElement.dataset.index);
+        const targetIndex = parseInt(this.dataset.index);
+
+        const draggedScene = selectedScenes[draggedIndex];
+        selectedScenes.splice(draggedIndex, 1);
+        selectedScenes.splice(targetIndex, 0, draggedScene);
+
+        renderSelectedScenes();
+    }
+
+    return false;
+}
+
+function handleDragEnd(e) {
+    this.classList.remove('opacity-40');
+    // Remove border highlighting from all items
+    document.querySelectorAll('#selected-scenes > div').forEach(item => {
+        item.classList.remove('border-pink-500', 'bg-pink-50');
+    });
+}
+
+function saveConfiguration() {
+    if (!currentDeviceId) return;
+
+    const roomId = document.getElementById('room-select').value;
+    if (!roomId) {
+        showToast('Validation Error', 'Please select a room', 'warning');
+        return;
+    }
+
+    if (selectedScenes.length === 0) {
+        showToast('Validation Error', 'Please select at least one scene', 'warning');
+        return;
+    }
+
+    const config = {
+        device_id: currentDeviceId,
+        room_id: roomId,
+        scenes: selectedScenes.map(s => s.id)
+    };
+
+    fetch('/buttons/api/configure', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(config)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const device = devices.find(d => d.id === currentDeviceId);
+            showToast('Configuration Saved!', `${device.name} has been configured with ${selectedScenes.length} scene(s)`, 'success');
+            loadDevices();
+            closeConfigModal();
+        }
+    })
+    .catch(err => {
+        console.error('Error saving configuration:', err);
+        showToast('Error', 'Failed to save configuration', 'error');
+    });
+}
+
+function deleteDevice(deviceId, deviceName) {
+    deleteDeviceId = deviceId;
+    deleteDeviceName = deviceName;
+    document.getElementById('delete-device-name').textContent = deviceName;
+    document.getElementById('delete-modal').classList.remove('hidden');
+}
+
+function closeDeleteModal() {
+    document.getElementById('delete-modal').classList.add('hidden');
+    deleteDeviceId = null;
+    deleteDeviceName = null;
+}
+
+function confirmDelete() {
+    if (!deleteDeviceId) return;
+    
+    fetch(`/buttons/api/devices/${deleteDeviceId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Device Deleted', `${deleteDeviceName} has been removed`, 'success');
+            loadDevices();
+            closeDeleteModal();
+        } else {
+            showToast('Error', data.error || 'Failed to delete device', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error deleting device:', err);
+        showToast('Error', 'Failed to delete device', 'error');
+    });
+}
+
+// --- Remote Configuration Functions ---
+let remoteDeviceId = null;
+let remoteConfig = {
+    buttons: [
+        { index: 0, action_type: 'toggle', room_id: '', scenes: [] },
+        { index: 1, action_type: 'brightness_up', room_id: '', scenes: [] },
+        { index: 2, action_type: 'brightness_down', room_id: '', scenes: [] },
+        { index: 3, action_type: 'scene_cycle', room_id: '', scenes: [] }
+    ]
+};
+
+function openRemoteConfigModal(deviceId) {
+    const device = devices.find(d => d.id === deviceId);
+    
+    remoteDeviceId = deviceId;
+    
+    // Get button_count from device (default to 4 for legacy remotes)
+    const buttonCount = device.button_count || 4;
+    
+    // Generate button indices based on button_count
+    // 1 button:  [3] (only button 3, pin 26)
+    // 2 buttons: [0, 1]
+    // 3 buttons: [0, 3, 1] (display order: Circle, Center, Square)
+    // 4 buttons: [0, 1, 2, 3]
+    const buttonIndices = [];
+    if (buttonCount === 1) {
+        buttonIndices.push(3);
+    } else if (buttonCount === 2) {
+        buttonIndices.push(0, 1);
+    } else if (buttonCount === 3) {
+        buttonIndices.push(0, 3, 1);  // Display order: Circle, Center, Square
+    } else {
+        buttonIndices.push(0, 1, 2, 3);
+    }
+    
+    // Helper function to get default action type based on button count and position
+    const getDefaultActionType = (idx, count) => {
+        if (count === 1) {
+            // 1 button (Center): normal
+            return 'normal';
+        } else if (count === 2) {
+            // 2 buttons (Circle, Square): toggle, scene_cycle
+            return idx === 0 ? 'toggle' : 'scene_cycle';
+        } else if (count === 3) {
+            // 3 buttons in display order: Circle(0)=brightness_up, Center(3)=normal, Square(1)=brightness_down
+            return idx === 0 ? 'brightness_up' : idx === 3 ? 'normal' : 'brightness_down';
+        } else {
+            // 4 buttons: toggle, brightness_up, brightness_down, scene_cycle
+            return idx === 0 ? 'toggle' : idx === 1 ? 'brightness_up' : idx === 2 ? 'brightness_down' : 'scene_cycle';
+        }
+    };
+    
+    // Reset to default config for this device
+    remoteConfig = {
+        buttons: buttonIndices.map(idx => ({
+            index: idx,
+            action_type: getDefaultActionType(idx, buttonCount),
+            room_id: '',
+            scenes: []
+        }))
+    };
+    
+    // Load existing remote configuration if available
+    fetch(`/buttons/api/${deviceId}/config`)
+        .then(response => response.json())
+        .then(data => {
+            console.log('Loaded remote config:', data);
+            if (data.success && data.config && data.config.device_type === 'remote' && data.config.buttons) {
+                // Merge loaded buttons with default structure to ensure all properties exist
+                // Filter to only include buttons that exist based on button_count
+                remoteConfig.buttons = data.config.buttons
+                    .filter(btn => buttonIndices.includes(btn.index))
+                    .map(btn => ({
+                        index: btn.index,
+                        action_type: btn.action_type || 'normal',
+                        room_id: btn.room_id || '',
+                        scenes: Array.isArray(btn.scenes) ? btn.scenes : []
+                    }));
+                
+                // Add any missing button indices
+                buttonIndices.forEach(idx => {
+                    if (!remoteConfig.buttons.find(b => b.index === idx)) {
+                        remoteConfig.buttons.push({
+                            index: idx,
+                            action_type: getDefaultActionType(idx, buttonCount),
+                            room_id: '',
+                            scenes: []
+                        });
+                    }
+                });
+                
+                // Sort by index, with special handling for 3-button mode
+                // For 3 buttons: display order should be [0, 3, 1] (Circle, Center, Square)
+                remoteConfig.buttons.sort((a, b) => {
+                    if (buttonCount === 3) {
+                        // Custom order: 0 (Circle) → 3 (Center) → 1 (Square)
+                        const displayOrder = { 0: 0, 3: 1, 1: 2 };
+                        return (displayOrder[a.index] || 99) - (displayOrder[b.index] || 99);
+                    } else {
+                        const orderA = buttonIndices.indexOf(a.index);
+                        const orderB = buttonIndices.indexOf(b.index);
+                        return orderA - orderB;
+                    }
+                });
+                
+                console.log('Merged remote config:', remoteConfig);
+            }
+            
+            // Show modal first
+            document.getElementById('remote-config-modal').classList.remove('hidden');
+            
+            // Load rooms for remote modal - wait for it to complete
+            loadRemoteRooms();
+        })
+        .catch(err => {
+            console.error('Error loading remote config:', err);
+            document.getElementById('remote-config-modal').classList.remove('hidden');
+            loadRemoteRooms();
+        });
+}
+
+function loadRemoteRooms() {
+    // Fetch rooms and populate the global rooms array
+    fetch('/api/rooms')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                rooms = data.rooms;
+                console.log('Loaded rooms with scenes:', rooms);
+                // Now render the UI after rooms are loaded
+                renderRemoteConfigTabs();
+                // Select first button by default
+                selectRemoteButton(0);
+            } else {
+                console.error('Failed to load rooms:', data.error);
+                rooms = [];
+                renderRemoteConfigTabs();
+                selectRemoteButton(0);
+                showToast('Error', 'Failed to load rooms', 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error loading rooms:', err);
+            rooms = [];
+            renderRemoteConfigTabs();
+            selectRemoteButton(0);
+            showToast('Error', 'Failed to load rooms', 'error');
+        });
+}
+
+function closeRemoteConfigModal() {
+    document.getElementById('remote-config-modal').classList.add('hidden');
+    remoteDeviceId = null;
+}
+
+function getButtonName(buttonIndex, buttonCount) {
+    // Get custom button names based on button count
+    // buttonIndex is the actual hardware index (0, 1, 2, 3)
+    if (buttonCount === 1) {
+        // Only button 3 (index 3) - Center Button
+        return 'Center Button';
+    } else if (buttonCount === 2) {
+        // Buttons 0, 1 - Circle and Square
+        const names = ['Circle Button', 'Square Button'];
+        return names[buttonIndex] || `Button ${buttonIndex + 1}`;
+    } else if (buttonCount === 3) {
+        // Buttons 0, 1, 3 - Circle, Square, Center
+        const nameMap = { 0: 'Circle Button', 1: 'Square Button', 3: 'Center Button' };
+        return nameMap[buttonIndex] || `Button ${buttonIndex + 1}`;
+    } else {
+        // 4 buttons - Keep existing names (Button 1, 2, 3, 4)
+        return `Button ${buttonIndex + 1}`;
+    }
+}
+
+function renderRemoteConfigTabs() {
+    const tabsContainer = document.getElementById('remote-tabs');
+    tabsContainer.innerHTML = '';
+    
+    // Get button count from device
+    const device = devices.find(d => d.id === remoteDeviceId);
+    const buttonCount = device ? (device.button_count || 4) : 4;
+    
+    // Render tabs based on actual button count in remoteConfig
+    remoteConfig.buttons.forEach((button, arrayIndex) => {
+        const buttonIndex = button.index; // Actual button index (0, 1, 3 for 3-button mode)
+        const buttonName = getButtonName(buttonIndex, buttonCount);
+        const tab = document.createElement('button');
+        tab.type = 'button';
+        tab.className = `px-4 py-2 font-medium text-sm rounded-t-lg max-w-[150px] transition-colors ${
+            arrayIndex === 0 
+                ? 'bg-pink-600 text-white' 
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+        }`;
+        tab.onclick = () => selectRemoteButton(arrayIndex);
+        tab.draggable = true;
+        tab.dataset.index = arrayIndex;
+        tab.ondragstart = handleRemoteTabDragStart;
+        tab.ondragover = handleRemoteTabDragOver;
+        tab.ondrop = handleRemoteTabDrop;
+        tab.ondragend = handleRemoteTabDragEnd;
+        tab.innerHTML = `
+            <i class="fas fa-circle mr-2"></i>
+            ${buttonName}
+            ${button.action_type ? `<span class="text-xs ml-2">(${getActionTypeLabel(button.action_type)})</span>` : ''}
+        `;
+        tabsContainer.appendChild(tab);
+    });
+}
+
+// Drag & drop handlers for re-ordering remote buttons
+let remoteTabDragged = null;
+function handleRemoteTabDragStart(e) {
+    remoteTabDragged = this;
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', this.dataset.index); } catch (err) { /* some browsers require try/catch */ }
+    this.classList.add('opacity-50');
+}
+
+function handleRemoteTabDragOver(e) {
+    if (e.preventDefault) e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    return false;
+}
+
+function handleRemoteTabDrop(e) {
+    if (e.stopPropagation) e.stopPropagation();
+    e.preventDefault();
+
+    if (!remoteTabDragged || remoteTabDragged === this) return false;
+
+    const from = parseInt(remoteTabDragged.dataset.index, 10);
+    const to = parseInt(this.dataset.index, 10);
+
+    // Swap the two entries (replace hovered with dragged)
+    try {
+        const tmp = remoteConfig.buttons[from];
+        remoteConfig.buttons[from] = remoteConfig.buttons[to];
+        remoteConfig.buttons[to] = tmp;
+    } catch (err) {
+        console.error('Error swapping remote buttons:', err);
+    }
+
+    // Re-render tabs and select the target index (where replacement landed)
+    renderRemoteConfigTabs();
+    selectRemoteButton(to);
+
+    if (remoteTabDragged) remoteTabDragged.classList.remove('opacity-50');
+    remoteTabDragged = null;
+    return false;
+}
+
+function handleRemoteTabDragEnd(e) {
+    if (remoteTabDragged) {
+        remoteTabDragged.classList.remove('opacity-50');
+        remoteTabDragged = null;
+    }
+}
+
+// Ensure opacity is cleared if drag ends outside a valid drop target
+document.addEventListener('dragend', function () {
+    if (remoteTabDragged) {
+        remoteTabDragged.classList.remove('opacity-50');
+        remoteTabDragged = null;
+    }
+});
+
+function selectRemoteButton(index) {
+    const button = remoteConfig.buttons[index];
+    const tabsContainer = document.getElementById('remote-tabs');
+    
+    // Update tab styling
+    Array.from(tabsContainer.children).forEach((tab, i) => {
+        if (i === index) {
+            tab.className = 'px-4 py-2 font-medium text-sm rounded-t-lg max-w-[150px] transition-colors bg-pink-600 text-white';
+        } else {
+            tab.className = 'px-4 py-2 font-medium text-sm rounded-t-lg max-w-[150px] transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200';
+        }
+    });
+    
+    // Render button configuration panel
+    renderRemoteButtonConfig(index);
+}
+
+function renderRemoteButtonConfig(index) {
+    const button = remoteConfig.buttons[index];
+    const panelContainer = document.getElementById('remote-button-config');
+    
+    panelContainer.innerHTML = `
+        <div class="space-y-6">
+            
+            <!-- Action Type Selection -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-medium text-gray-700">
+                        <i class="fas fa-bolt mr-2 text-yellow-500 pb-2"></i>Action Type
+                    </label>
+                    ${ (button.action_type === 'normal' || button.action_type === 'scene_cycle') ? `
+                    <div class="flex space-x-2">
+                        <button onclick="copyRemoteButtonConfig(${index})" title="Copy" class="inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-500 hover:text-gray-700 bg-white border border-gray-100"><i class="fas fa-copy"></i></button>
+                        <button onclick="pasteToRemoteButton(${index})" title="Paste" class="inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-500 hover:text-gray-700 bg-white border border-gray-100"><i class="fas fa-paste"></i></button>
+                    </div>
+                    ` : '' }
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'normal' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="normal" 
+                            ${button.action_type === 'normal' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'normal')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">Normal Button</span>
+                            <span class="text-xs text-gray-500">Click: cycle scenes with off<br>Hold: brightness</span>
+                        </span>
+                    </label>
+                    
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'scene_cycle' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="scene_cycle" 
+                            ${button.action_type === 'scene_cycle' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'scene_cycle')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">Scene Cycle</span>
+                            <span class="text-xs text-gray-500">Click: cycle scenes only<br>Hold: brightness</span>
+                        </span>
+                    </label>
+                    
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'toggle' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="toggle" 
+                            ${button.action_type === 'toggle' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'toggle')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">Toggle On/Off</span>
+                            <span class="text-xs text-gray-500">Turn room on/off</span>
+                        </span>
+                    </label>
+                    
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'brightness_up' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="brightness_up" 
+                            ${button.action_type === 'brightness_up' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'brightness_up')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">Brightness Up</span>
+                            <span class="text-xs text-gray-500">Increase brightness</span>
+                        </span>
+                    </label>
+                    
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'brightness_down' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="brightness_down" 
+                            ${button.action_type === 'brightness_down' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'brightness_down')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">Brightness Down</span>
+                            <span class="text-xs text-gray-500">Decrease brightness</span>
+                        </span>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Room Selection -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    <i class="fas fa-door-open mr-2 text-blue-500"></i>Select Room
+                </label>
+                <select id="remote-room-select" onchange="updateRemoteButtonRoom(${index})" 
+                    class="w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-pink-500 focus:border-pink-500">
+                    <option value="">-- Select a room --</option>
+                    ${rooms.map(room => `
+                        <option value="${room.id}" ${button.room_id === room.id ? 'selected' : ''}>
+                            ${room.name}
+                        </option>
+                    `).join('')}
+                </select>
+            </div>
+            
+            <!-- Scenes Selection (for normal or scene_cycle action types) - hidden until a room is selected -->
+            ${(button.action_type === 'normal' || button.action_type === 'scene_cycle') ? `
+                <div id="remote-scenes-block" class="${button.room_id ? '' : 'hidden'}">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        <i class="fas fa-palette mr-2 text-purple-500"></i>Select Scenes (drag to reorder)
+                    </label>
+                    <div class="relative mb-2 w-full">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                            <i class="fas fa-search text-gray-400"></i>
+                        </span>
+                        <input type="text" id="remote-search-scene" placeholder="Search scenes..." onkeyup="filterRemoteScenes()" class="w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 pl-10 focus:outline-none focus:ring-pink-500 focus:border-pink-500 w-full">
+                    </div>
+                    <div id="remote-available-scenes" class="grid grid-cols-2 gap-3 mb-4 max-h-64 overflow-y-auto p-2 border border-gray-200 rounded-lg">
+                        <!-- Available scenes will be loaded here -->
+                    </div>
+                    <div id="remote-selected-scenes" class="space-y-2 min-h-[100px] border-2 border-dashed border-gray-300 rounded-lg p-4 bg-gray-50">
+                        <p class="text-gray-400 text-center py-4">No scenes selected yet</p>
+                    </div>
+                </div>
+            ` : ''}
+        </div>
+    `;
+    
+    // Load available scenes for this button's room if applicable
+    if ((button.action_type === 'normal' || button.action_type === 'scene_cycle') && button.room_id) {
+        // Use setTimeout to ensure DOM is ready
+        setTimeout(() => {
+            loadRemoteRoomScenes(button.room_id, index);
+        }, 0);
+    }
+}
+
+function loadRemoteRoomScenes(roomId, buttonIndex) {
+    const room = rooms.find(r => r.id === roomId);
+    
+    console.log(`Loading scenes for room ${roomId}, button ${buttonIndex}. Room:`, room);
+    
+    if (!room) {
+        console.warn(`Room ${roomId} not found in rooms array`);
+        const availableScenesDiv = document.getElementById('remote-available-scenes');
+        if (availableScenesDiv) availableScenesDiv.innerHTML = '<p class="text-red-400 text-center py-4">Room not found</p>';
+        return;
+    }
+    
+    if (!room.scenes || room.scenes.length === 0) {
+        // Clear scenes display if room has no scenes
+        const availableScenesDiv = document.getElementById('remote-available-scenes');
+        const selectedScenesDiv = document.getElementById('remote-selected-scenes');
+        if (availableScenesDiv) availableScenesDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes available in this room</p>';
+        if (selectedScenesDiv) selectedScenesDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes selected</p>';
+        console.log(`Room ${roomId} has no scenes or scenes property`);
+        return;
+    }
+    
+    const button = remoteConfig.buttons[buttonIndex];
+    const availableScenesDiv = document.getElementById('remote-available-scenes');
+    
+    if (!availableScenesDiv) {
+        console.warn('remote-available-scenes div not found');
+        return;
+    }
+    
+    console.log(`Rendering ${room.scenes.length} scenes for room ${roomId}`);
+    
+    // Store scenes in window scope for drag/drop handlers
+    window.remoteCurrentScenes = {
+        buttonIndex: buttonIndex,
+        roomId: roomId,
+        scenes: room.scenes
+    };
+    
+    // Render available scenes
+    availableScenesDiv.innerHTML = '';
+    room.scenes.forEach(scene => {
+        const isSelected = button.scenes.includes(scene.id);
+        const sceneCard = document.createElement('div');
+        sceneCard.className = `border-2 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors remote-scene-card ${
+            isSelected 
+                ? 'border-pink-500 bg-pink-50' 
+                : 'border-gray-200 bg-white'
+        }`;
+            sceneCard.dataset.sceneName = scene.name.toLowerCase();
+        sceneCard.id = `remote-scene-${scene.id}`;
+        sceneCard.onclick = () => toggleRemoteScene(buttonIndex, scene.id);
+        sceneCard.innerHTML = `
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium flex-1">${scene.name}</span>
+                <i class="fas ${isSelected ? 'fa-check-circle' : 'fa-plus-circle'} text-pink-600 flex-shrink-0"></i>
+            </div>
+        `;
+        availableScenesDiv.appendChild(sceneCard);
+    });
+    
+    // Apply any active search filter
+    try { filterRemoteScenes(); } catch (e) { /* ignore */ }
+
+    // Render selected scenes with drag handles
+    renderRemoteSelectedScenes(buttonIndex);
+}
+
+function renderRemoteSelectedScenes(buttonIndex) {
+    const button = remoteConfig.buttons[buttonIndex];
+    const selectedScenesDiv = document.getElementById('remote-selected-scenes');
+    
+    console.log(`Rendering selected scenes for button ${buttonIndex}:`, button.scenes);
+    
+    if (!selectedScenesDiv) {
+        console.warn('remote-selected-scenes div not found');
+        return;
+    }
+    
+    if (button.scenes.length === 0) {
+        selectedScenesDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes selected yet</p>';
+        return;
+    }
+    
+    selectedScenesDiv.innerHTML = '';
+    button.scenes.forEach((sceneId, index) => {
+        // Find scene object from rooms
+        let sceneName = sceneId;
+        for (const room of rooms) {
+            const scene = room.scenes.find(s => s.id === sceneId);
+            if (scene) {
+                sceneName = scene.name;
+                break;
+            }
+        }
+        
+        const sceneItem = document.createElement('div');
+        sceneItem.className = 'bg-white border border-gray-300 rounded-lg p-3 cursor-move hover:shadow-md transition-shadow';
+        sceneItem.draggable = true;
+        sceneItem.dataset.index = index;
+        sceneItem.dataset.buttonIndex = buttonIndex;
+        sceneItem.innerHTML = `
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <i class="fas fa-grip-vertical text-gray-400"></i>
+                    <span class="font-medium">${sceneName}</span>
+                </div>
+                <button onclick="event.stopPropagation(); removeRemoteScene(${buttonIndex}, ${index})" class="text-red-600 hover:text-red-800">
+                    <i class="fas fa-times-circle"></i>
+                </button>
+            </div>
+        `;
+        
+        // Drag events
+        sceneItem.addEventListener('dragstart', handleRemoteSceneDragStart);
+        sceneItem.addEventListener('dragover', handleRemoteSceneDragOver);
+        sceneItem.addEventListener('drop', handleRemoteSceneDrop);
+        sceneItem.addEventListener('dragend', handleRemoteSceneDragEnd);
+        sceneItem.addEventListener('dragenter', handleRemoteSceneDragEnter);
+        sceneItem.addEventListener('dragleave', handleRemoteSceneDragLeave);
+        
+        selectedScenesDiv.appendChild(sceneItem);
+    });
+}
+
+function updateRemoteButtonActionType(index, actionType) {
+    remoteConfig.buttons[index].action_type = actionType;
+    // Reset scenes when action type changes to a non-scene action
+    if (actionType !== 'normal' && actionType !== 'scene_cycle') {
+        remoteConfig.buttons[index].scenes = [];
+    }
+    renderRemoteButtonConfig(index);
+    // Update only the current button's tab label, don't re-render all tabs
+    const device = devices.find(d => d.id === remoteDeviceId);
+    const buttonCount = device ? (device.button_count || 4) : 4;
+    const buttonIndex = remoteConfig.buttons[index].index;
+    const buttonName = getButtonName(buttonIndex, buttonCount);
+    
+    const tabsContainer = document.getElementById('remote-tabs');
+    if (tabsContainer && tabsContainer.children[index]) {
+        const tab = tabsContainer.children[index];
+        tab.innerHTML = `
+            <i class="fas fa-circle mr-2"></i>
+            ${buttonName}
+            <span class="text-xs ml-2">(${getActionTypeLabel(actionType)})</span>
+        `;
+    }
+}
+
+function updateRemoteButtonRoom(index) {
+    const roomSelect = document.getElementById('remote-room-select');
+    const newRoomId = roomSelect.value;
+    console.log(`Updating room for button ${index} to ${newRoomId}`);
+    
+    // Only reset scenes if the room actually changed
+    if (newRoomId !== remoteConfig.buttons[index].room_id) {
+        remoteConfig.buttons[index].room_id = newRoomId;
+        remoteConfig.buttons[index].scenes = [];
+    }
+    
+    // Reload scenes for new room
+    if (!newRoomId) {
+        const scenesBlock = document.getElementById('remote-scenes-block');
+        if (scenesBlock) scenesBlock.classList.add('hidden');
+        return;
+    }
+    if (newRoomId) {
+        loadRemoteRoomScenes(newRoomId, index);
+        // Reveal scenes block if hidden
+        const scenesBlock = document.getElementById('remote-scenes-block');
+        if (scenesBlock) scenesBlock.classList.remove('hidden');
+    }
+}
+
+function toggleRemoteScene(buttonIndex, sceneId) {
+    const button = remoteConfig.buttons[buttonIndex];
+    const idx = button.scenes.indexOf(sceneId);
+    
+    console.log(`Toggle scene ${sceneId} for button ${buttonIndex}, currently at index ${idx}`);
+    
+    if (idx > -1) {
+        // Remove scene
+        button.scenes.splice(idx, 1);
+        console.log(`Removed scene, new scenes:`, button.scenes);
+    } else {
+        // Add scene and activate for preview
+        button.scenes.push(sceneId);
+        console.log(`Added scene, new scenes:`, button.scenes);
+        
+        // Activate scene for preview
+        fetch(`/api/scenes/${sceneId}/activate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Success', 'Scene activated', 'success');
+            } else {
+                showToast('Error', 'Failed to activate scene: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error activating scene:', err);
+            showToast('Error', 'Failed to activate scene', 'error');
+        });
+    }
+    
+    // Re-render the entire available scenes section to update icons
+    const room = rooms.find(r => r.id === button.room_id);
+    if (room) {
+        const availableScenesDiv = document.getElementById('remote-available-scenes');
+        if (availableScenesDiv) {
+            availableScenesDiv.innerHTML = '';
+            room.scenes.forEach(scene => {
+                const isSelected = button.scenes.includes(scene.id);
+                const sceneCard = document.createElement('div');
+                sceneCard.className = `border-2 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors remote-scene-card ${
+                    isSelected 
+                        ? 'border-pink-500 bg-pink-50' 
+                        : 'border-gray-200 bg-white'
+                }`;
+                sceneCard.dataset.sceneName = scene.name.toLowerCase();
+                sceneCard.id = `remote-scene-${scene.id}`;
+                sceneCard.onclick = () => toggleRemoteScene(buttonIndex, scene.id);
+                sceneCard.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-medium flex-1">${scene.name}</span>
+                        <i class="fas ${isSelected ? 'fa-check-circle' : 'fa-plus-circle'} text-pink-600 flex-shrink-0"></i>
+                    </div>
+                `;
+                availableScenesDiv.appendChild(sceneCard);
+            });
+            try { filterRemoteScenes(); } catch (e) { /* ignore */ }
+        }
+    }
+    
+    renderRemoteSelectedScenes(buttonIndex);
+}
+
+function removeRemoteScene(buttonIndex, sceneIndex) {
+    remoteConfig.buttons[buttonIndex].scenes.splice(sceneIndex, 1);
+    renderRemoteSelectedScenes(buttonIndex);
+    
+    // Re-render available scenes to update icons
+    const button = remoteConfig.buttons[buttonIndex];
+    const room = rooms.find(r => r.id === button.room_id);
+    if (room) {
+        const availableScenesDiv = document.getElementById('remote-available-scenes');
+        if (availableScenesDiv) {
+            availableScenesDiv.innerHTML = '';
+            room.scenes.forEach(scene => {
+                const isSelected = button.scenes.includes(scene.id);
+                const sceneCard = document.createElement('div');
+                sceneCard.className = `border-2 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors remote-scene-card ${
+                    isSelected 
+                        ? 'border-pink-500 bg-pink-50' 
+                        : 'border-gray-200 bg-white'
+                }`;
+                sceneCard.dataset.sceneName = scene.name.toLowerCase();
+                sceneCard.id = `remote-scene-${scene.id}`;
+                sceneCard.onclick = () => toggleRemoteScene(buttonIndex, scene.id);
+                sceneCard.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-medium flex-1">${scene.name}</span>
+                        <i class="fas ${isSelected ? 'fa-check-circle' : 'fa-plus-circle'} text-pink-600 flex-shrink-0"></i>
+                    </div>
+                `;
+                availableScenesDiv.appendChild(sceneCard);
+            });
+            try { filterRemoteScenes(); } catch (e) { /* ignore */ }
+        }
+    }
+}
+
+let remoteScenesDraggedElement = null;
+
+// Drag and Drop handlers for remote scenes
+function handleRemoteSceneDragStart(e) {
+    remoteScenesDraggedElement = this;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', this.innerHTML);
+    this.classList.add('opacity-40');
+}
+
+function handleRemoteSceneDragOver(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+    e.dataTransfer.dropEffect = 'move';
+    
+    // Remove border from all items first
+    document.querySelectorAll('#remote-selected-scenes > div').forEach(item => {
+        if (item !== remoteScenesDraggedElement) {
+            item.classList.remove('border-pink-500', 'bg-pink-50');
+        }
+    });
+    
+    // Add visual feedback to current item
+    if (this !== remoteScenesDraggedElement) {
+        this.classList.add('border-pink-500', 'bg-pink-50');
+    }
+    
+    return false;
+}
+
+function handleRemoteSceneDragEnter(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+}
+
+function handleRemoteSceneDragLeave(e) {
+    // Handled in dragover now
+}
+
+function handleRemoteSceneDrop(e) {
+    if (e.stopPropagation) {
+        e.stopPropagation();
+    }
+    e.preventDefault();
+
+    // Remove all highlighting
+    document.querySelectorAll('#remote-selected-scenes > div').forEach(item => {
+        item.classList.remove('border-pink-500', 'bg-pink-50');
+    });
+
+    if (remoteScenesDraggedElement !== this) {
+        const draggedIndex = parseInt(remoteScenesDraggedElement.dataset.index);
+        const targetIndex = parseInt(this.dataset.index);
+        const buttonIndex = parseInt(remoteScenesDraggedElement.dataset.buttonIndex);
+
+        const draggedScene = remoteConfig.buttons[buttonIndex].scenes[draggedIndex];
+        remoteConfig.buttons[buttonIndex].scenes.splice(draggedIndex, 1);
+        remoteConfig.buttons[buttonIndex].scenes.splice(targetIndex, 0, draggedScene);
+        
+        renderRemoteSelectedScenes(buttonIndex);
+    }
+
+    return false;
+}
+
+function handleRemoteSceneDragEnd(e) {
+    this.classList.remove('opacity-40');
+    document.querySelectorAll('#remote-selected-scenes > div').forEach(item => {
+        item.classList.remove('border-pink-500', 'bg-pink-50');
+    });
+}
+
+function findSceneById(sceneId) {
+    for (const room of rooms) {
+        const scene = room.scenes.find(s => s.id === sceneId);
+        if (scene) return scene;
+    }
+    return null;
+}
+
+function getActionTypeLabel(actionType) {
+    const labels = {
+        'normal': 'Normal Button',
+        'scene_cycle': 'Scene Cycle',
+        'toggle': 'Toggle On/Off',
+        'brightness_up': 'Brightness Up',
+        'brightness_down': 'Brightness Down'
+    };
+    return labels[actionType] || actionType;
+}
+
+function saveRemoteConfiguration() {
+    if (!remoteDeviceId) return;
+    
+    const button = document.querySelector('#remote-config-modal button[onclick*="saveRemoteConfiguration"]');
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Saving...';
+    
+    fetch(`/buttons/api/remote/${remoteDeviceId}/configure`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(remoteConfig)
+    })
+    .then(response => response.json())
+    .then(data => {
+        button.disabled = false;
+        button.innerHTML = '<i class="fas fa-save mr-2"></i>Save Configuration';
+        
+        if (data.success) {
+            showToast('Remote Configured', 'Remote device configuration saved successfully', 'success');
+            closeRemoteConfigModal();
+            loadDevices();
+        } else {
+            showToast('Error', data.error || 'Failed to save configuration', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Error saving remote config:', err);
+        button.disabled = false;
+        button.innerHTML = '<i class="fas fa-save mr-2"></i>Save Configuration';
+        showToast('Error', 'Failed to save configuration', 'error');
+    });
+}

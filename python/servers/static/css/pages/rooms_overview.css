@@ -1,0 +1,33 @@
+.room-tooltip {
+    position: fixed;
+    pointer-events: none;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    transform: translate(-50%, -120%);
+    white-space: nowrap;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    opacity: 0;
+}
+
+.room-tooltip.visible {
+    opacity: 1;
+}
+
+.room-tooltip .title {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.room-tooltip .meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.room-swatch {
+    cursor: default;
+}

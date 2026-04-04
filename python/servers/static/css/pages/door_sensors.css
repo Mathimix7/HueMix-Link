@@ -1,0 +1,9 @@
+.flash-door {
+    animation: flash-door-bg 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes flash-door-bg {
+    0% { background-color: #e5e7eb; }
+    60% { background-color: #d1d5db; }
+    100% { background-color: transparent; }
+}

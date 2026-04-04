@@ -1,0 +1,14 @@
+.pulse-animation {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.spinner {
+    --spinner-size: 40px;
+    --spinner-color: #3b82f6;
+    --spinner-track: rgba(59, 130, 246, 0.3);
+}

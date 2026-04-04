@@ -1,0 +1,69 @@
+.spinner {
+    display: inline-block;
+    box-sizing: border-box;
+    width: var(--spinner-size, 20px);
+    height: var(--spinner-size, 20px);
+    border: 3px solid var(--spinner-track, rgba(0, 0, 0, 0.15));
+    border-top-color: var(--spinner-color, currentColor);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: loading 1.5s ease-in-out infinite;
+    border-radius: 0.375rem;
+}
+
+@keyframes loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.rotate-360 {
+    transform: rotate(360deg);
+}
+
+.battery-tooltip {
+    position: relative;
+    display: inline-flex;
+}
+
+.battery-tooltip .tooltip-content {
+    visibility: hidden;
+    position: absolute;
+    z-index: 1000;
+    bottom: 125%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #1f2937;
+    color: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+}
+
+.battery-tooltip .tooltip-content::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #1f2937;
+}
+
+.battery-tooltip:hover .tooltip-content {
+    visibility: visible;
+    opacity: 1;
+}

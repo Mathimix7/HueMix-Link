@@ -6,6 +6,7 @@
     <title>{% block title %}HueMix-Link{% endblock %}</title>
     <script src="{{ url_for('static', filename='tailwind.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='fontawesome.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/shared/ui.css') }}">
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
     {% block head %}{% endblock %}
 </head>
@@ -37,6 +38,7 @@
         {% block content %}{% endblock %}
     </main>
 
+    <script src="{{ url_for('static', filename='js/shared/toast.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

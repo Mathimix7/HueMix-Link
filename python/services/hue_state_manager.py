@@ -33,11 +33,12 @@ class HueStateManager:
     
     # Light State Management
     
-    def update_light(self, light_id: str, is_on: Optional[bool] = None, 
-                    brightness: Optional[float] = None, 
+    def update_light(self, light_id: str, is_on: Optional[bool] = None,
+                    brightness: Optional[float] = None,
                     room_id: Optional[str] = None, name: Optional[str] = None,
                     model_id: Optional[str] = None, xy: Optional[Dict] = None,
-                    ct: Optional[int] = None, color_mode: Optional[str] = None):
+                    ct: Optional[int] = None, color_mode: Optional[str] = None,
+                    supports_dimming: Optional[bool] = None):
         """
         Update the state of a specific light.
         
@@ -71,11 +72,18 @@ class HueStateManager:
                 state['ct'] = ct
             if color_mode is not None:
                 state['color_mode'] = color_mode
+            if supports_dimming is not None:
+                state['supports_dimming'] = supports_dimming
             
             existing_on = self._lights.get(light_id, {}).get('on') if light_id in self._lights else None
             final_on = state.get('on') if 'on' in state else existing_on
-            old_bri = self._lights.get(light_id, {}).get('brightness') if light_id in self._lights else False
-            if 'brightness' not in state and final_on is not None and (old_bri is None or old_bri == 0 or old_bri == 100):
+
+            existing_supports_dimming = self._lights.get(light_id, {}).get('supports_dimming') if light_id in self._lights else None
+            final_supports_dimming = state.get('supports_dimming') if 'supports_dimming' in state else existing_supports_dimming
+
+            # Only synthesize brightness for known non-dimmable devices.
+            # Dimmable lights can validly report 0% brightness while on.
+            if 'brightness' not in state and final_on is not None and final_supports_dimming is False:
                 state['brightness'] = 100 if final_on else 0
 
             # Skip empty updates
@@ -478,7 +486,8 @@ class HueStateManager:
             for light in lights_data:
                 light_id = light.get('id')
                 is_on = light.get('on', {}).get('on', False)
-                brightness = light.get('dimming', {}).get('brightness')
+                supports_dimming = isinstance(light.get('dimming'), dict)
+                brightness = light.get('dimming', {}).get('brightness') if supports_dimming else None
                 light_name = light.get('metadata', {}).get('name', f'Light {light_id[:8]}')
                 model_id = light_to_model.get(light_id, 'LCT001')  # Default to gamut C
                 
@@ -518,7 +527,8 @@ class HueStateManager:
                     model_id=model_id,
                     xy=xy_color,
                     ct=ct_color,
-                    color_mode=color_mode
+                    color_mode=color_mode,
+                    supports_dimming=supports_dimming
                 )
             
             # Process scenes

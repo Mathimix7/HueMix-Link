@@ -463,10 +463,10 @@ class HueSSEListener:
             # Extract light state - only include fields that are present
             is_on = None
             brightness = None
+            supports_dimming = None
             xy_color = None
             ct_color = None
             color_mode = None
-            
             on_data = data.get('on')
             if on_data is not None:
                 is_on = on_data.get('on')
@@ -474,6 +474,7 @@ class HueSSEListener:
             dimming_data = data.get('dimming')
             if dimming_data is not None:
                 brightness = dimming_data.get('brightness')
+                supports_dimming = True
             
             # Get XY color if present
             color_data = data.get('color')
@@ -499,7 +500,8 @@ class HueSSEListener:
                     brightness=brightness,
                     xy=xy_color,
                     ct=ct_color,
-                    color_mode=color_mode
+                    color_mode=color_mode,
+                    supports_dimming=supports_dimming
                 )
         
         except Exception as e:

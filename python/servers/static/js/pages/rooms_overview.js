@@ -6,15 +6,43 @@ let scrollPosition = 0;
     __roomTooltip.innerHTML = '<div class="title"></div><div class="meta"></div>';
     document.body.appendChild(__roomTooltip);
 
-    function __showRoomTooltip(target, pageX, pageY) {
+    function __positionRoomTooltip(clientX, clientY) {
+        const margin = 8;
+        const offset = 12;
+
+        // Start near cursor, then clamp inside viewport so tooltip never jumps off-screen.
+        let left = clientX + offset;
+        let top = clientY - offset;
+
+        const tooltipWidth = __roomTooltip.offsetWidth || 0;
+        const tooltipHeight = __roomTooltip.offsetHeight || 0;
+
+        if (left + tooltipWidth + margin > window.innerWidth) {
+            left = window.innerWidth - tooltipWidth - margin;
+        }
+        if (left < margin) {
+            left = margin;
+        }
+
+        if (top + tooltipHeight + margin > window.innerHeight) {
+            top = window.innerHeight - tooltipHeight - margin;
+        }
+        if (top < margin) {
+            top = margin;
+        }
+
+        __roomTooltip.style.left = left + 'px';
+        __roomTooltip.style.top = top + 'px';
+    }
+
+    function __showRoomTooltip(target, clientX, clientY) {
         const title = target.dataset.lightName || '';
         const colorName = target.dataset.colorName || '';
         const brightness = (typeof target.dataset.brightness !== 'undefined' && target.dataset.brightness !== '') ? target.dataset.brightness + '%' : '—';
         __roomTooltip.querySelector('.title').textContent = title;
         __roomTooltip.querySelector('.meta').textContent = `${colorName} · ${brightness}`;
-        __roomTooltip.style.left = (pageX + 12) + 'px';
-        __roomTooltip.style.top = (pageY - 12) + 'px';
         __roomTooltip.classList.add('visible');
+        __positionRoomTooltip(clientX, clientY);
     }
 
     function __hideRoomTooltip() {
@@ -24,12 +52,11 @@ let scrollPosition = 0;
     // Delegate mouse events to show/hide/update tooltip
     document.addEventListener('mouseover', (ev) => {
         const sw = ev.target.closest('.room-swatch');
-        if (sw) __showRoomTooltip(sw, ev.pageX, ev.pageY);
+        if (sw) __showRoomTooltip(sw, ev.clientX, ev.clientY);
     });
     document.addEventListener('mousemove', (ev) => {
         if (__roomTooltip.classList.contains('visible')) {
-            __roomTooltip.style.left = (ev.pageX + 12) + 'px';
-            __roomTooltip.style.top = (ev.pageY - 12) + 'px';
+            __positionRoomTooltip(ev.clientX, ev.clientY);
         }
     });
     document.addEventListener('mouseout', (ev) => {
@@ -39,6 +66,7 @@ let scrollPosition = 0;
     
     async function loadRoomsData() {
         try {
+            __hideRoomTooltip();
             const response = await fetch('/api/rooms-overview/data');
             const data = await response.json();
 

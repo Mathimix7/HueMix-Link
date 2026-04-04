@@ -16,8 +16,6 @@ from network.device_manager import device_manager
 from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, GITHUB_OWNER, GITHUB_REPO
 from network.network_server import network_server
 from services.config_manager import config_manager
-from dotenv import load_dotenv
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +29,12 @@ os.makedirs(FIRMWARE_DIR, exist_ok=True)
 LOCAL_FIRMWARE_META = os.path.join(FIRMWARE_DIR, 'local_firmwares.json')
 
 # GitHub repository for firmware updates
-token = os.getenv("GITHUB_TOKEN", "").strip()
 HEADERS = {
     "Accept": "application/vnd.github+json",
-    "Authorization": f"Bearer {token}",
     "X-GitHub-Api-Version": "2022-11-28"
 }
 HEADERS_ASSET = {
     "Accept": "application/octet-stream",
-    "Authorization": f"Bearer {token}",
     "X-GitHub-Api-Version": "2022-11-28"
 }
 
@@ -271,7 +266,7 @@ def check_updates():
                 
                 for asset in assets:
                     name = asset.get('name', '')
-                    download_url = asset.get('url', '')
+                    download_url = asset.get('browser_download_url', '')
 
                     # Dedicated serial-host radio firmware
                     match_radio_python = re.match(

@@ -1,6 +1,39 @@
 <h1 align="center">HueMix-Link</h1>
 <p align="center"><img src="images/logo.png" alt="HueMix-Link's logo", width="250" ></p>
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Project Overview](#project-overview)
+- [Screenshots](#screenshots)
+- [What Is In This Repository](#what-is-in-this-repository)
+- [System Overview](#system-overview)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [First-time Commissioning Workflow](#first-time-commissioning-workflow)
+- [ESP Firmware: Build and Flash](#esp-firmware-build-and-flash)
+- [Firmware Updates (OTA Page)](#firmware-updates-ota-page)
+- [Configuration and Data Storage](#configuration-and-data-storage)
+- [Networking and Ports](#networking-and-ports)
+- [How Automation Works](#how-automation-works)
+- [Devices](#devices)
+- [License](#license)
+
+## Quick Start
+
+1. Install the backend on a Linux host:
+
+ ```bash
+  git clone https://github.com/Mathimix7/HueMix-Link.git
+  cd HueMix-Link
+  sudo bash install.sh
+  ```
+
+2. Open the web UI at `http://huemixlink.local` or your server IP.
+2. Pair your Hue Bridge from the Bridge configuration page.
+3. Put an ESP device into pairing mode and add it from the Pairing page.
+4. Configure the device behavior, then verify it by triggering a button, motion sensor, or lightstrip sync.
+
 ## Project Overview
 
 HueMix-Link is a local smart home bridge that connects custom ESP-based devices (gateways, buttons, remotes, motion sensors, door sensors, and lightstrips) to Philips Hue rooms and scenes.
@@ -12,6 +45,32 @@ It provides:
 - Automation logic for buttons, remotes, and motion sensors
 - OTA firmware update workflows for all device types
 - Backup and restore tools for configuration data
+
+## Screenshots
+
+<table width="85%" align="center">
+  <tr>
+    <td colspan="2" align="center">
+      <img src="images/ui-dashboard.png" alt="Dashboard" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="images/ui-bridge.png" alt="Bridge configuration" width="100%">
+    </td>
+    <td width="50%" align="center">
+      <img src="images/ui-button.png" alt="Button configuration" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="images/ui-ota.png" alt="OTA page" width="100%">
+    </td>
+    <td width="50%" align="center">
+      <img src="images/ui-lightstrips.png" alt="Lightstrip configuration" width="100%">
+    </td>
+  </tr>
+</table>
 
 ## What Is In This Repository
 

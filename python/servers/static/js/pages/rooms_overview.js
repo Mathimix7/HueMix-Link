@@ -170,8 +170,8 @@ let scrollPosition = 0;
     // Initial load
     loadRoomsData();
 
-    // Auto-refresh every 3 seconds
+    // Auto-refresh every 2 seconds
     setInterval(() => {
         saveScrollPosition();
         loadRoomsData().then(restoreScrollPosition);
-    }, 3000);
+    }, 2000);

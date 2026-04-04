@@ -737,6 +737,21 @@ class AutomationEngine:
             pass
 
         return 300
+
+    @staticmethod
+    def _get_motion_warning_lead_seconds(after_duration: int) -> int:
+        """Get dim-warning lead time based on total after-duration.
+
+        Rules:
+        - >= 60s: warn 15s before
+        - >= 30s: warn 10s before
+        - < 30s: warn 5s before
+        """
+        if after_duration >= 60:
+            return 15
+        if after_duration >= 30:
+            return 10
+        return 5
     
     def handle_motion_event(self, sensor_mac: str, action: int, light_level: Optional[int] = None, battery_mv: Optional[int] = None):
         """Handle motion sensor event.
@@ -879,24 +894,30 @@ class AutomationEngine:
                 after_action = current_slot.get('after_action', 'off')
                 
                 if after_action != 'nothing' and after_duration > 0:
-                    # Check if we should use dim warning (for 'off' action with duration > 15s)
-                    use_dim_warning = (after_action == 'off' and after_duration > 15)
+                    # For OFF actions, always use a dim warning with dynamic lead time.
+                    use_dim_warning = (after_action == 'off' and after_duration > 5)
                     
                     if use_dim_warning:
-                        # Schedule dim warning 15 seconds before turn-off
-                        warning_delay = after_duration - 15
+                        warning_lead = self._get_motion_warning_lead_seconds(after_duration)
+                        warning_delay = max(0, after_duration - warning_lead)
                         timer = threading.Timer(
                             warning_delay,
                             self._execute_motion_dim_warning,
-                            args=(sensor_mac, room_id, after_action, current_slot)
+                            args=(sensor_mac, room_id, after_action, current_slot, warning_lead)
                         )
                         timer.daemon = True
                         timer.start()
                         self._motion_states[sensor_mac]['after_timer'] = timer
                         if action_executed:
-                            logger.debug(f"Scheduled dim warning for {sensor_mac} in {warning_delay}s (off in {after_duration}s)")
+                            logger.debug(
+                                f"Scheduled dim warning for {sensor_mac} in {warning_delay}s "
+                                f"(off in {after_duration}s, lead {warning_lead}s)"
+                            )
                         else:
-                            logger.debug(f"Restarted dim warning timer for {sensor_mac} ({warning_delay}s)")
+                            logger.debug(
+                                f"Restarted dim warning timer for {sensor_mac} "
+                                f"({warning_delay}s, lead {warning_lead}s)"
+                            )
                     else:
                         # Schedule normal after action
                         timer = threading.Timer(
@@ -1193,14 +1214,16 @@ class AutomationEngine:
         
         return None
     
-    def _execute_motion_dim_warning(self, sensor_mac: str, room_id: str, after_action: str, time_slot: Dict):
-        """Execute dim warning before turning off lights (15 seconds before off).
+    def _execute_motion_dim_warning(self, sensor_mac: str, room_id: str, after_action: str, time_slot: Dict,
+                                    warning_lead_seconds: int):
+        """Execute dim warning before turning off lights.
         
         Args:
             sensor_mac: Motion sensor MAC address
             room_id: Room ID
             after_action: 'off' (should always be 'off' for dim warning)
             time_slot: Time slot configuration
+            warning_lead_seconds: Delay between dim warning and final off action
         """
         try:
             # Set last_expected_clear_time BEFORE dimming to prevent timer cancellation
@@ -1209,21 +1232,24 @@ class AutomationEngine:
                     self._motion_states[sensor_mac]['last_expected_clear_time'] = time.time()
             
             # Dim lights to 50% as warning
-            logger.info(f"⚠️  Motion sensor {sensor_mac} dimming lights in room {room_id} (warning: off in 15s)")
+            logger.info(
+                f"⚠️  Motion sensor {sensor_mac} dimming lights in room {room_id} "
+                f"(warning: off in {warning_lead_seconds}s)"
+            )
             self._dim_room_brightness(room_id, dim_percentage=0.5)
             
-            # Schedule final off action in 15 seconds
+            # Schedule final off action using the configured warning lead.
             with self._motion_lock:
                 if sensor_mac in self._motion_states:
                     timer = threading.Timer(
-                        15,
+                        warning_lead_seconds,
                         self._execute_motion_after_action,
                         args=(sensor_mac, room_id, after_action, time_slot)
                     )
                     timer.daemon = True
                     timer.start()
                     self._motion_states[sensor_mac]['after_timer'] = timer
-                    logger.debug(f"Scheduled final off action for {sensor_mac} in 15s")
+                    logger.debug(f"Scheduled final off action for {sensor_mac} in {warning_lead_seconds}s")
                     
         except Exception as e:
             logger.error(f"Failed to execute dim warning for {sensor_mac}: {e}")
@@ -1231,7 +1257,7 @@ class AutomationEngine:
             with self._motion_lock:
                 if sensor_mac in self._motion_states:
                     timer = threading.Timer(
-                        15,
+                        warning_lead_seconds,
                         self._execute_motion_after_action,
                         args=(sensor_mac, room_id, after_action, time_slot)
                     )

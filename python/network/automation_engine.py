@@ -52,9 +52,19 @@ class AutomationEngine:
         self._button_states: Dict[str, Dict] = {}
         self._button_lock = threading.RLock()
         
-        # Motion sensor state tracking: mac -> {after_timer, room_id, expected_scene_id, last_expected_clear_time}
+        # Motion sensor state tracking: mac -> {after_timer, room_id, expected_scene_id,
+        # last_expected_scene_id, last_expected_clear_time, last_motion_activity_time}
         self._motion_states: Dict[str, Dict] = {}
         self._motion_lock = threading.RLock()
+        self._motion_expected_cooldown_seconds = 4.0
+        self._motion_room_change_grace_seconds = 3.0
+        self._manual_brightness_cancel_threshold = 4.0
+        # Sources that represent explicit non-motion manual/internal control changes.
+        # Motion-origin scene changes are evaluated separately and should not auto-cancel.
+        self._internal_timer_cancel_sources = {'button', 'web', 'remote', 'door'}
+
+        # Previous room snapshot for classifying room change events.
+        self._room_change_snapshots: Dict[str, Dict] = {}
 
         # Door sensor state tracking: mac -> {close_timer, close_timer_id}
         self._door_states: Dict[str, Dict] = {}
@@ -412,10 +422,10 @@ class AutomationEngine:
             
             if room_is_on:
                 logger.info(f"Remote toggle: Turning off room {room_id}")
-                self._turn_off_room(room_id)
+                self._turn_off_room(room_id, source='remote')
             else:
                 logger.info(f"Remote toggle: Turning on room {room_id}")
-                self._turn_on_room(room_id)
+                self._turn_on_room(room_id, source='remote')
         except Exception as e:
             logger.error(f"Failed to toggle room: {e}")
     
@@ -542,6 +552,10 @@ class AutomationEngine:
             scene_id: Scene ID to activate
             source: Source of activation ('button', 'motion', 'web', etc.)
         """
+        # Non-motion HuemixLink scene changes should immediately cancel motion timers.
+        if source != 'motion':
+            self._cancel_motion_timers_for_room(room_id)
+
         # Activate scene via API
         payload = {
             'recall': {'action': 'active'}
@@ -603,12 +617,17 @@ class AutomationEngine:
             logger.warning(f"Failed to query live room state for {room_id}: {e}")
             return bool(room_state.get('is_on', False)) if room_state else False
     
-    def _turn_off_room(self, room_id: str):
+    def _turn_off_room(self, room_id: str, source: str = 'button'):
         """Turn off all lights in a room.
         
         Args:
             room_id: Room ID
+            source: Source of turn-off action ('button', 'motion', 'door', etc.)
         """
+        # Non-motion HuemixLink room changes should immediately cancel motion timers.
+        if source != 'motion':
+            self._cancel_motion_timers_for_room(room_id)
+
         # Turn off room via grouped_light
         room_state = hue_state_manager.get_room_state(room_id)
         grouped_light_id = self._resolve_grouped_light_id(room_id)
@@ -621,16 +640,21 @@ class AutomationEngine:
 
         # Update state manager
         old_scene_id = room_state.get('current_scene_id') if room_state else None
-        hue_state_manager.set_room_scene(room_id, None, old_scene_id, source='button')
+        hue_state_manager.set_room_scene(room_id, None, old_scene_id, source=source)
         
         logger.info(f"Turned off room {room_id}")
     
-    def _turn_on_room(self, room_id: str):
+    def _turn_on_room(self, room_id: str, source: str = 'button'):
         """Turn on all lights in a room.
         
         Args:
             room_id: Room ID
+            source: Source of turn-on action ('button', 'remote', etc.)
         """
+        # Non-motion HuemixLink room changes should immediately cancel motion timers.
+        if source != 'motion':
+            self._cancel_motion_timers_for_room(room_id)
+
         # Turn on room via grouped_light
         grouped_light_id = self._resolve_grouped_light_id(room_id)
         if not grouped_light_id:
@@ -649,6 +673,10 @@ class AutomationEngine:
             room_id: Room ID
             direction: 1 for increase, -1 for decrease
         """
+        # Local brightness changes from buttons/remotes are explicit manual intent.
+        # Cancel pending motion timers immediately rather than waiting for SSE updates.
+        self._cancel_motion_timers_for_room(room_id)
+
         # Get room to find grouped_light
         room = self.hue.get_room(room_id)
         services = room.get('services', [])
@@ -888,6 +916,7 @@ class AutomationEngine:
                 
                 # Store room_id for timer cancellation
                 self._motion_states[sensor_mac]['room_id'] = room_id
+                self._motion_states[sensor_mac]['last_motion_activity_time'] = time.time()
                 
                 # Schedule after action
                 after_duration = self._get_motion_after_duration_seconds(current_slot)
@@ -1159,7 +1188,7 @@ class AutomationEngine:
                 self._activate_scene(room_id, scene_id, source='door')
             elif door_action == 'off':
                 logger.info(f"🚪 Door sensor {sensor_mac} {event_name}: turning off room {room_id}")
-                self._turn_off_room(room_id)
+                self._turn_off_room(room_id, source='door')
             else:
                 logger.warning(
                     f"Door sensor {sensor_mac} event {event_name}: unsupported action '{door_action}'"
@@ -1230,6 +1259,7 @@ class AutomationEngine:
             with self._motion_lock:
                 if sensor_mac in self._motion_states:
                     self._motion_states[sensor_mac]['last_expected_clear_time'] = time.time()
+                    self._motion_states[sensor_mac]['last_motion_activity_time'] = time.time()
             
             # Dim lights to 50% as warning
             logger.info(
@@ -1279,10 +1309,11 @@ class AutomationEngine:
             with self._motion_lock:
                 if sensor_mac in self._motion_states:
                     self._motion_states[sensor_mac]['last_expected_clear_time'] = time.time()
+                    self._motion_states[sensor_mac]['last_motion_activity_time'] = time.time()
             
             if after_action == 'off':
                 logger.info(f"🏃 Motion sensor {sensor_mac} turning off lights in room {room_id}")
-                self._turn_off_room(room_id)
+                self._turn_off_room(room_id, source='motion')
             elif after_action == 'scene':
                 after_scene_id = time_slot.get('after_scene_id')
                 if after_scene_id:
@@ -1318,6 +1349,115 @@ class AutomationEngine:
             
             if cancelled_count > 0:
                 logger.info(f"Cancelled {cancelled_count} motion timer(s) for room {room_id}")
+
+    def _room_has_active_motion_timer(self, room_id: str) -> bool:
+        """Check whether any motion sensor in the room has a live timer."""
+        with self._motion_lock:
+            for state in self._motion_states.values():
+                if state.get('room_id') != room_id:
+                    continue
+                timer = state.get('after_timer')
+                if timer and timer.is_alive():
+                    return True
+        return False
+
+    def _room_has_recent_motion_activity(self, room_id: str, window_seconds: float) -> bool:
+        """Check whether motion activity happened recently in a room."""
+        now = time.time()
+        with self._motion_lock:
+            for state in self._motion_states.values():
+                if state.get('room_id') != room_id:
+                    continue
+                last_activity = float(state.get('last_motion_activity_time', 0) or 0)
+                if now - last_activity < window_seconds:
+                    return True
+        return False
+
+    def _is_recent_expected_motion_change(self, room_id: str, scene_id: Optional[str] = None) -> bool:
+        """Check if room change is likely from motion-driven scene/timer activity.
+
+        Args:
+            room_id: Room to inspect
+            scene_id: Optional scene ID from a scene-change callback. When provided,
+                cooldown is only considered expected if scene_id matches the last
+                motion-expected scene.
+        """
+        now = time.time()
+        with self._motion_lock:
+            for sensor_mac, state in self._motion_states.items():
+                if state.get('room_id') != room_id:
+                    continue
+                expected_scene_id = state.get('expected_scene_id')
+                if expected_scene_id is not None:
+                    if scene_id is None or scene_id == expected_scene_id:
+                        return True
+                    continue
+                last_clear = float(state.get('last_expected_clear_time', 0) or 0)
+                if now - last_clear < self._motion_expected_cooldown_seconds:
+                    last_expected_scene_id = state.get('last_expected_scene_id')
+                    if (
+                        scene_id is not None
+                        and last_expected_scene_id is not None
+                        and scene_id != last_expected_scene_id
+                    ):
+                        logger.debug(
+                            f"Ignoring motion cooldown for {sensor_mac}: "
+                            f"scene {scene_id} != last expected {last_expected_scene_id}"
+                        )
+                        continue
+                    logger.debug(
+                        f"Room change within motion cooldown for {sensor_mac} "
+                        f"({now - last_clear:.2f}s ago)"
+                    )
+                    return True
+        return False
+    
+    def _get_brightness_change_percent(self, room_id: str) -> float:
+        """Calculate what percentage of lights in a room had their brightness change.
+        
+        Returns percentage (0-100). If < 50%, likely external noise rather than user intent.
+        Tracks lights that changed within the last 1 second to catch rapid SSE bursts.
+        """
+        room_state = hue_state_manager.get_room_state(room_id)
+        if not room_state:
+            return 0.0
+        
+        light_ids = room_state.get('lights', [])
+        if not light_ids:
+            return 0.0
+        
+        # Get previous snapshot if it exists
+        previous = self._room_change_snapshots.get(room_id, {})
+        previous_lights = previous.get('light_brightness_snapshot', {})
+        previous_time = float(previous.get('light_snapshot_time', 0) or 0)
+        
+        current_time = time.time()
+        lights_with_change = 0
+        lights_changed_recently = set()
+        
+        for light_id in light_ids:
+            current_light_state = hue_state_manager.get_light_state(light_id)
+            if not current_light_state:
+                continue
+            
+            current_brightness = current_light_state.get('brightness')
+            previous_brightness = previous_lights.get(light_id)
+            
+            # Check if this light's brightness changed
+            if previous_brightness is not None and current_brightness != previous_brightness:
+                lights_with_change += 1
+                lights_changed_recently.add(light_id)
+        
+        # Also include lights that changed in the last 1 second (rapid SSE burst)
+        recently_changed = set(previous.get('lights_changed_recently', []))
+        recently_changed.update(lights_changed_recently)
+        
+        # Clean up old entries (older than 1 second)
+        if current_time - previous_time > 1.0:
+            recently_changed.clear()
+        
+        percent = (len(recently_changed) / len(light_ids)) * 100.0 if light_ids else 0.0
+        return percent
     
     # ===== Lightstrip Synchronization =====
     
@@ -1329,30 +1469,148 @@ class AutomationEngine:
             room_state: New room state
         """
         logger.debug(f"Room state changed for {room_id}: is_on={room_state.get('is_on')}, brightness={room_state.get('avg_brightness')}")
+
+        previous = self._room_change_snapshots.get(room_id, {})
+        current_scene = room_state.get('current_scene_id')
+        current_brightness = room_state.get('avg_brightness')
+        current_is_on = bool(room_state.get('is_on'))
+        previous_scene = previous.get('current_scene_id')
+        previous_brightness = previous.get('avg_brightness')
+        previous_is_on = previous.get('is_on')
+
+        scene_changed = previous_scene != current_scene
+        brightness_changed = previous_brightness != current_brightness
+        onoff_changed = previous_is_on != current_is_on
+        brightness_only_change = brightness_changed and not scene_changed and not onoff_changed
+
+        brightness_delta = None
+        if isinstance(previous_brightness, (int, float)) and isinstance(current_brightness, (int, float)):
+            brightness_delta = abs(float(current_brightness) - float(previous_brightness))
+
+        is_confident_manual_brightness_change = (
+            brightness_only_change
+            and brightness_delta is not None
+            and brightness_delta >= self._manual_brightness_cancel_threshold
+        )
+
+        has_expected_scene = self._is_recent_expected_motion_change(room_id)
+        has_active_timer = self._room_has_active_motion_timer(room_id)
+        has_recent_motion_activity = self._room_has_recent_motion_activity(
+            room_id,
+            self._motion_room_change_grace_seconds,
+        )
+
+        brightness = current_brightness
+        is_on = current_is_on
+        transient_zero_while_on = (
+            has_active_timer
+            and is_on
+            and isinstance(brightness, (int, float))
+            and brightness <= 0.1
+        )
+
+        if transient_zero_while_on:
+            logger.debug(
+                f"Ignoring transient brightness=0 room update for {room_id} "
+                f"while motion timer is active"
+            )
+
+        # Calculate what percentage of lights in the room changed brightness
+        # (BEFORE updating the snapshot, so we compare against previous state)
+        lights_change_percent = self._get_brightness_change_percent(room_id)
         
-        # Check if there's any pending expected scene for this room OR recently cleared (within 1 second)
-        # (scene changes are handled in _on_hue_scene_changed, but brightness might change with scene)
-        has_expected_scene = False
-        with self._motion_lock:
-            current_time = time.time()
-            for sensor_mac, state in self._motion_states.items():
-                if state.get('room_id') == room_id:
-                    # Check if there's a pending expected scene
-                    if 'expected_scene_id' in state:
-                        has_expected_scene = True
-                        break
-                    # Check if an expected scene was recently cleared (within 2 seconds)
-                    # This handles race condition where room change fires after scene change
-                    last_clear = state.get('last_expected_clear_time', 0)
-                    if current_time - last_clear < 2.0:
-                        has_expected_scene = True
-                        logger.debug(f"Room change within cooldown period for {sensor_mac} ({current_time - last_clear:.2f}s ago)")
-                        break
+        # Now capture and update light brightness snapshot for next comparison
+        light_brightness_snapshot = {}
+        lights_changed_this_event = set()
+        light_ids = room_state.get('lights', [])
+        for light_id in light_ids:
+            light_state = hue_state_manager.get_light_state(light_id)
+            if light_state:
+                current_brightness = light_state.get('brightness')
+                light_brightness_snapshot[light_id] = current_brightness
+                
+                # Track which lights changed in this event
+                previous = self._room_change_snapshots.get(room_id, {})
+                previous_lights = previous.get('light_brightness_snapshot', {})
+                previous_brightness = previous_lights.get(light_id)
+                if previous_brightness is not None and current_brightness != previous_brightness:
+                    lights_changed_this_event.add(light_id)
         
-        # Only cancel motion timers if there's no expected scene pending or recently cleared
-        # This prevents cancellation when room brightness changes as part of scene activation
-        if not has_expected_scene:
-            self._cancel_motion_timers_for_room(room_id)
+        # Maintain set of recently changed lights
+        previous = self._room_change_snapshots.get(room_id, {})
+        recently_changed = set(previous.get('lights_changed_recently', []))
+        recently_changed.update(lights_changed_this_event)
+
+        self._room_change_snapshots[room_id] = {
+            'current_scene_id': current_scene,
+            'avg_brightness': current_brightness,
+            'is_on': current_is_on,
+            'light_brightness_snapshot': light_brightness_snapshot,
+            'lights_changed_recently': list(recently_changed),
+            'light_snapshot_time': time.time(),
+        }
+        
+        # Scene changes are evaluated in _on_hue_scene_changed where source is known.
+        should_cancel_motion_timers = False
+        if not scene_changed:
+            should_cancel_motion_timers = not (
+                has_expected_scene
+                or transient_zero_while_on
+                or (brightness_only_change and has_recent_motion_activity)
+                or (has_active_timer and has_recent_motion_activity)
+            )
+
+        # Evaluate brightness-only changes with stricter filtering
+        ignore_for_recent_motion = brightness_only_change and has_recent_motion_activity
+        # Only ignore for active timer if it's likely the timer's own action:
+        # - Few lights changed (SSE noise), OR
+        # - Recent motion activity (timer likely dimming)
+        ignore_for_active_timer = (
+            brightness_only_change 
+            and has_active_timer 
+            and (lights_change_percent < 50.0 or has_recent_motion_activity)
+        )
+        ignore_for_small_lights_change = brightness_only_change and lights_change_percent < 50.0
+        ignore_for_small_delta = (
+            brightness_only_change
+            and brightness_delta is not None
+            and brightness_delta < self._manual_brightness_cancel_threshold
+        )
+
+        logger.debug(
+            f"Brightness analysis for {room_id}: delta={brightness_delta:.2f}%, "
+            f"lights_changed={lights_change_percent:.1f}%, has_active_timer={has_active_timer}, "
+            f"has_recent_motion={has_recent_motion_activity}, ignore_motion={ignore_for_recent_motion}, "
+            f"ignore_active_timer={ignore_for_active_timer}, ignore_small_lights={ignore_for_small_lights_change}, "
+            f"ignore_small_delta={ignore_for_small_delta}"
+        )
+
+        if ignore_for_active_timer:
+            logger.debug(
+                f"Ignoring brightness-only room update for {room_id}: "
+                f"motion timer is active (likely from timer's own actions)"
+            )
+        elif ignore_for_recent_motion:
+            logger.debug(
+                f"Ignoring brightness-only room update for {room_id}: "
+                f"within {self._motion_room_change_grace_seconds}s of motion activity"
+            )
+        elif ignore_for_small_lights_change:
+            logger.debug(
+                f"Ignoring brightness-only room update for {room_id}: "
+                f"only {lights_change_percent:.1f}% of lights changed (likely external noise)"
+            )
+        elif ignore_for_small_delta:
+            logger.debug(
+                f"Ignoring minor brightness-only room update for {room_id}: "
+                f"delta={brightness_delta:.2f}% < {self._manual_brightness_cancel_threshold:.2f}%"
+            )
+
+        if should_cancel_motion_timers:
+            if ignore_for_active_timer or ignore_for_recent_motion or ignore_for_small_lights_change or ignore_for_small_delta:
+                should_cancel_motion_timers = False
+            else:
+                self._cancel_motion_timers_for_room(room_id)
         
         if not self.network_server:
             return
@@ -1392,33 +1650,65 @@ class AutomationEngine:
             source: Source of change
         """
         logger.info(f"Scene changed in room {room_id}: {scene_id} (from {source})")
+
+        if source in self._internal_timer_cancel_sources and source != 'sse':
+            logger.debug(
+                f"Scene source '{source}' is internal HuemixLink trigger; "
+                f"cancelling motion timers for room {room_id}"
+            )
+            self._cancel_motion_timers_for_room(room_id)
         
-        # Check if this scene change was expected from any motion sensor
-        # OR if an expected scene was recently cleared (within 2 seconds)
+        # Check if this scene change was expected from any motion sensor.
         is_expected = False
+        motion_scene_reference_ids = set()
         with self._motion_lock:
             current_time = time.time()
             for sensor_mac, state in self._motion_states.items():
-                if state.get('room_id') == room_id:
-                    # Check if there's a pending expected scene
-                    if state.get('expected_scene_id') == scene_id and scene_id is not None:
-                        # This scene change was expected, mark it as done
-                        state.pop('expected_scene_id', None)
-                        # Store timestamp to handle race condition with subsequent SSE events
-                        state['last_expected_clear_time'] = current_time
-                        is_expected = True
-                        logger.debug(f"Scene change to {scene_id} in {room_id} was expected from motion sensor {sensor_mac}")
-                        break
-                    # Check if an expected scene was recently cleared (within 2 seconds)
-                    # This handles the case where SSE event arrives after button event
-                    last_clear = state.get('last_expected_clear_time', 0)
-                    if current_time - last_clear < 2.0:
-                        is_expected = True
-                        logger.debug(f"Scene change within cooldown period for {sensor_mac} ({current_time - last_clear:.2f}s ago)")
-                        break
-        
-        # Only cancel motion timers if this was NOT an expected motion sensor action
+                if state.get('room_id') != room_id:
+                    continue
+
+                expected_scene = state.get('expected_scene_id')
+                if expected_scene:
+                    motion_scene_reference_ids.add(expected_scene)
+
+                last_expected_scene = state.get('last_expected_scene_id')
+                last_clear = float(state.get('last_expected_clear_time', 0) or 0)
+                timer = state.get('after_timer')
+                has_active_timer = bool(timer and timer.is_alive())
+                if last_expected_scene and (has_active_timer or (current_time - last_clear < self._motion_expected_cooldown_seconds)):
+                    motion_scene_reference_ids.add(last_expected_scene)
+
+                if state.get('expected_scene_id') == scene_id and scene_id is not None:
+                    state.pop('expected_scene_id', None)
+                    state['last_expected_scene_id'] = scene_id
+                    state['last_expected_clear_time'] = current_time
+                    state['last_motion_activity_time'] = current_time
+                    is_expected = True
+                    logger.debug(f"Scene change to {scene_id} in {room_id} was expected from motion sensor {sensor_mac}")
+                    break
+
         if not is_expected:
+            is_expected = self._is_recent_expected_motion_change(room_id, scene_id=scene_id)
+
+        has_recent_motion_activity = self._room_has_recent_motion_activity(
+            room_id,
+            self._motion_room_change_grace_seconds,
+        )
+
+        # For external SSE updates, cancel when scene diverges from the
+        # motion-owned scene reference; otherwise keep skepticism with motion timing.
+        should_cancel_for_sse = False
+        if source == 'sse':
+            if scene_id is not None and motion_scene_reference_ids and scene_id not in motion_scene_reference_ids:
+                should_cancel_for_sse = True
+                logger.debug(
+                    f"SSE scene {scene_id} differs from motion scene references "
+                    f"{sorted(motion_scene_reference_ids)} for room {room_id}; cancelling timer"
+                )
+            elif not is_expected and not has_recent_motion_activity:
+                should_cancel_for_sse = True
+
+        if should_cancel_for_sse:
             self._cancel_motion_timers_for_room(room_id)
         
         # Track manual turn-offs to prevent motion sensors from triggering immediately after

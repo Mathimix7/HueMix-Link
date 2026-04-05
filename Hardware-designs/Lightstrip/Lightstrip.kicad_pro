@@ -469,7 +469,7 @@
     "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "Lightstrip_m5_v1.kicad_pro",
+    "filename": "Lightstrip.kicad_pro",
     "version": 3
   },
   "net_settings": {
@@ -508,7 +508,7 @@
       "plot": "",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "Lightstrip_m5_v1.step",
+      "step": "Lightstrip.step",
       "svg": "",
       "vrml": ""
     },

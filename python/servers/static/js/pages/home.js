@@ -1,6 +1,7 @@
 // Load status information on page load
 window.addEventListener('DOMContentLoaded', function() {
     loadSystemStatus();
+    setInterval(loadSystemStatus, 1000);
 });
 
 function loadSystemStatus() {
@@ -59,32 +60,32 @@ function loadSystemStatus() {
             document.getElementById('udp-info').textContent = 'Unable to check status';
         });
 
-    // Check Automation Engine status
-    fetch('/api/status/automation')
+    // Check system metrics status
+    fetch('/api/status/system')
         .then(response => response.json())
         .then(data => {
-            const statusEl = document.getElementById('automation-status');
-            const infoEl = document.getElementById('automation-info');
+            const statusEl = document.getElementById('system-status');
+            const infoEl = document.getElementById('system-info');
 
-            if (data.initialized && data.running) {
+            if (data.success) {
+                const cpu = typeof data.cpu_percent === 'number' ? `${data.cpu_percent.toFixed(1)}%` : '--';
+                const ram = typeof data.ram_percent === 'number' ? `${data.ram_percent.toFixed(1)}%` : '--';
+                const temp = typeof data.temperature_c === 'number' ? `${data.temperature_c.toFixed(1)} C` : 'N/A';
+
                 statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-600';
-                statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>Running';
-                infoEl.textContent = data.info || 'Automation engine running';
-            } else if (data.initialized && !data.running) {
-                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-600';
-                statusEl.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i>Initialized';
-                infoEl.textContent = data.info || 'Initialized but stopped';
+                statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>Live';
+                infoEl.textContent = `CPU ${cpu} • RAM ${ram} • Temp ${temp}`;
             } else {
-                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-600';
-                statusEl.innerHTML = '<i class="fas fa-times-circle mr-1"></i>Inactive';
-                infoEl.textContent = data.info || 'Automation engine not initialized';
+                statusEl.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-600';
+                statusEl.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i>Unavailable';
+                infoEl.textContent = data.error || 'System metrics unavailable';
             }
         })
         .catch(err => {
-            console.error('Error loading automation engine status:', err);
-            document.getElementById('automation-status').className = 'px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600';
-            document.getElementById('automation-status').innerHTML = '<i class="fas fa-question-circle mr-1"></i>Unknown';
-            document.getElementById('automation-info').textContent = 'Unable to check status';
+            console.error('Error loading system metrics:', err);
+            document.getElementById('system-status').className = 'px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600';
+            document.getElementById('system-status').innerHTML = '<i class="fas fa-question-circle mr-1"></i>Unknown';
+            document.getElementById('system-info').textContent = 'Unable to check status';
         });
 }
 

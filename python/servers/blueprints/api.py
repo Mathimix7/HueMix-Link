@@ -9,12 +9,45 @@ from network.pairing_manager import pairing_manager
 from services.automation_service import automation_service
 import logging
 
+try:
+    import psutil  # type: ignore
+except Exception:
+    psutil = None
+
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 # Initialize bridge controller
 bridge_controller = BridgeController()
+
+
+def _get_cpu_temperature_c():
+    """Best-effort CPU temperature in Celsius. Returns None if unavailable."""
+    if not psutil:
+        return None
+
+    try:
+        temps = psutil.sensors_temperatures(fahrenheit=False)
+        if not temps:
+            return None
+
+        for key in ("coretemp", "cpu-thermal", "soc_thermal", "k10temp"):
+            entries = temps.get(key)
+            if entries:
+                current = getattr(entries[0], "current", None)
+                if current is not None:
+                    return round(float(current), 1)
+
+        for entries in temps.values():
+            if entries:
+                current = getattr(entries[0], "current", None)
+                if current is not None:
+                    return round(float(current), 1)
+    except Exception:
+        return None
+
+    return None
 
 
 @api_bp.route('/rooms', methods=['GET'])
@@ -525,6 +558,39 @@ def get_automation_status():
             "running": False,
             "info": str(e)
         }), 500
+
+
+@api_bp.route('/status/system', methods=['GET'])
+def get_system_status():
+    """Get host system metrics (CPU, RAM, temperature)."""
+    if not psutil:
+        return jsonify({
+            "success": False,
+            "error": "psutil is not available",
+            "cpu_percent": None,
+            "ram_percent": None,
+            "temperature_c": None
+        }), 200
+
+    try:
+        cpu_percent = round(float(psutil.cpu_percent(interval=0.1)), 1)
+        ram_percent = round(float(psutil.virtual_memory().percent), 1)
+        temperature_c = _get_cpu_temperature_c()
+
+        return jsonify({
+            "success": True,
+            "cpu_percent": cpu_percent,
+            "ram_percent": ram_percent,
+            "temperature_c": temperature_c
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "cpu_percent": None,
+            "ram_percent": None,
+            "temperature_c": None
+        }), 200
 
 
 # ===== Pairing Mode Endpoints =====

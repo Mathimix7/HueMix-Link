@@ -561,6 +561,136 @@ class HueStateManager:
             logger.error(f"Error initializing state manager from bridge: {e}")
             raise
     
+    def reconcile_with_bridge(self, hue_controller):
+        """
+        Periodic reconciliation: query bridge and sync local state.
+        Detects and logs any mismatches, then updates local state to match bridge.
+        Called after SSE reconnection to catch missed events.
+        
+        Args:
+            hue_controller: Instance of Hue controller to fetch current data from
+        """
+        try:
+            logger.info("Starting state reconciliation with bridge...")
+            
+            # Fetch current data from bridge
+            bridge_lights = hue_controller.get_lights()
+            bridge_rooms = hue_controller.get_rooms()
+            bridge_grouped_lights = hue_controller.get_grouped_lights()
+            bridge_scenes = hue_controller.get_scenes()
+
+            grouped_light_on_map = {
+                gl.get('id'): gl.get('on', {}).get('on', False)
+                for gl in bridge_grouped_lights
+                if gl.get('id')
+            }
+
+            bridge_active_scene_by_room = {}
+            for scene in bridge_scenes:
+                scene_id = scene.get('id')
+                room_id = scene.get('group', {}).get('rid')
+                is_active = scene.get('status', {}).get('active') != 'inactive'
+                if scene_id and room_id and is_active:
+                    bridge_active_scene_by_room[room_id] = scene_id
+
+            # Snapshot local state once, then reconcile outside the lock.
+            with self._lock:
+                local_lights = {lid: state.copy() for lid, state in self._lights.items()}
+                local_rooms = {rid: state.copy() for rid, state in self._rooms.items()}
+
+            mismatches = []
+
+            # Reconcile light states (on/brightness).
+            for bridge_light in bridge_lights:
+                light_id = bridge_light.get('id')
+                if not light_id:
+                    continue
+
+                bridge_on = bridge_light.get('on', {}).get('on', False)
+                supports_dimming = isinstance(bridge_light.get('dimming'), dict)
+                bridge_brightness = bridge_light.get('dimming', {}).get('brightness') if supports_dimming else None
+
+                local_light = local_lights.get(light_id, {})
+                local_on = local_light.get('on')
+                local_brightness = local_light.get('brightness')
+
+                on_mismatch = local_on != bridge_on
+                brightness_mismatch = (
+                    supports_dimming
+                    and bridge_brightness is not None
+                    and local_brightness is not None
+                    and abs(float(local_brightness) - float(bridge_brightness)) > 0.5
+                )
+
+                if on_mismatch or brightness_mismatch:
+                    mismatches.append(
+                        f"Light {light_id}: on local={local_on} bridge={bridge_on}, "
+                        f"brightness local={local_brightness} bridge={bridge_brightness}"
+                    )
+                    self.update_light(
+                        light_id=light_id,
+                        is_on=bridge_on,
+                        brightness=bridge_brightness
+                    )
+
+            # Reconcile room grouped state and grouped_light mapping.
+            for bridge_room in bridge_rooms:
+                room_id = bridge_room.get('id')
+                if not room_id:
+                    continue
+
+                grouped_light_id = None
+                for service in bridge_room.get('services', []):
+                    if service.get('rtype') == 'grouped_light':
+                        grouped_light_id = service.get('rid')
+                        break
+
+                bridge_room_on = grouped_light_on_map.get(grouped_light_id, False)
+                bridge_room_name = bridge_room.get('metadata', {}).get('name')
+
+                local_room = local_rooms.get(room_id, {})
+                local_room_on = local_room.get('is_on')
+                local_grouped_light_id = local_room.get('grouped_light_id')
+                local_room_name = local_room.get('name')
+
+                room_on_mismatch = local_room_on != bridge_room_on
+                grouped_id_mismatch = (grouped_light_id is not None and local_grouped_light_id != grouped_light_id)
+                name_mismatch = (bridge_room_name is not None and local_room_name != bridge_room_name)
+
+                if room_on_mismatch or grouped_id_mismatch or name_mismatch:
+                    mismatches.append(
+                        f"Room {room_id}: on local={local_room_on} bridge={bridge_room_on}, "
+                        f"grouped_light local={local_grouped_light_id} bridge={grouped_light_id}, "
+                        f"name local={local_room_name} bridge={bridge_room_name}"
+                    )
+                    self.update_room(
+                        room_id=room_id,
+                        is_on=bridge_room_on,
+                        name=bridge_room_name,
+                        grouped_light_id=grouped_light_id
+                    )
+
+            # Reconcile active scene per room.
+            reconciled_room_ids = {room.get('id') for room in bridge_rooms if room.get('id')}
+            for room_id in reconciled_room_ids:
+                bridge_scene_id = bridge_active_scene_by_room.get(room_id)
+                local_scene_id = local_rooms.get(room_id, {}).get('current_scene_id')
+                if local_scene_id != bridge_scene_id:
+                    mismatches.append(
+                        f"Room {room_id}: scene local={local_scene_id} bridge={bridge_scene_id}"
+                    )
+                    self.set_room_scene(room_id, bridge_scene_id, old_scene_id=local_scene_id, source='reconcile')
+
+            if mismatches:
+                logger.warning(f"State reconciliation found {len(mismatches)} mismatches:")
+                for mismatch in mismatches:
+                    logger.warning(f"  - {mismatch}")
+            else:
+                logger.info("State reconciliation complete: no mismatches found")
+        
+        except Exception as e:
+            logger.error(f"State reconciliation failed: {e}", exc_info=True)
+    
     def get_current_state_summary(self) -> Dict:
         """Get a summary of the current state."""
         with self._lock:

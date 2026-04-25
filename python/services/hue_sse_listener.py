@@ -28,6 +28,8 @@ class HueSSEListener:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._hue_controller = None  # Will be set during initialization
+        self._last_reconciliation_time = 0  # Track periodic reconciliation
+        self._reconciliation_interval = 300  # 5 minutes
         
         logger.info("HueSSEListener initialized")
     
@@ -67,9 +69,19 @@ class HueSSEListener:
     def _listen_loop(self):
         """Main loop for SSE connection with auto-reconnect."""
         retry_delay = 1
-        max_retry_delay = 60
+        max_retry_delay = 10  # Reduced from 60s to 10s to minimize missed updates during backoff
                 
         while self._running:
+            # Periodic reconciliation check (every 5 minutes)
+            now = time.time()
+            if self._hue_controller and (now - self._last_reconciliation_time) >= self._reconciliation_interval:
+                try:
+                    logger.info("Running periodic state reconciliation with bridge...")
+                    hue_state_manager.reconcile_with_bridge(self._hue_controller)
+                    self._last_reconciliation_time = now
+                except Exception as e:
+                    logger.warning(f"Periodic reconciliation failed: {e}")
+             
             try:
                 # Get bridge config
                 config = data_manager.read_json(FILE_BRIDGE, default={})
@@ -113,6 +125,13 @@ class HueSSEListener:
                 # Log reconnection success if this was a retry
                 if retry_delay > 1:
                     logger.debug(f"SSE connection re-established (status={response.status_code})")
+                    # Reconnected after disconnect - reconcile to catch any missed updates
+                    if self._hue_controller:
+                        try:
+                            logger.info("Triggering state reconciliation after reconnection...")
+                            hue_state_manager.reconcile_with_bridge(self._hue_controller)
+                        except Exception as reconcile_error:
+                            logger.warning(f"Failed to reconcile state after reconnection: {reconcile_error}")
                 else:
                     logger.info(f"SSE connection established (status={response.status_code})")
                 retry_delay = 1  # Reset retry delay on success

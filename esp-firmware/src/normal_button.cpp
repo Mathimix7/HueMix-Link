@@ -741,7 +741,7 @@ void sendPacket(uint8_t type, uint8_t action) {
         if(!esp_now_is_peer_exist(gateways.macs[i])) esp_now_add_peer(gateways.macs[i], WiFi.channel(), ESP_NOW_ROLE_COMBO, NULL, 0);
         if (esp_now_send(gateways.macs[i], (uint8_t*)&pkt, sizeof(pkt)) == 0) {
           unsigned long w = millis();
-          while(millis() - w < 75 && !ackReceived) delay(1);
+          while(millis() - w < 150 && !ackReceived) delay(1);
           if (ackReceived) { 
             Serial.println("[BTN]   ACK received!");
             sent = true; successfulGatewayIndex = i; break; 

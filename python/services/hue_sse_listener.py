@@ -113,7 +113,7 @@ class HueSSEListener:
                     headers=headers,
                     stream=True,
                     verify=False,  # Hue uses self-signed cert
-                    timeout=30
+                    timeout=(5, None)
                 )
                 
                 if response.status_code != 200:

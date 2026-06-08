@@ -43,6 +43,10 @@ enum PacketType {
   PKT_PING_DEVICE  = 0xFE
 };
 
+// Packet type range reserved for plugin-owned device event packets.
+#define PLUGIN_EVENT_PACKET_MIN 0x50
+#define PLUGIN_EVENT_PACKET_MAX 0x7F
+
 // --- DEVICE TYPES ---
 #define DEV_GATEWAY 1
 #define DEV_BUTTON  2

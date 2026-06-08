@@ -16,6 +16,7 @@ from network.device_manager import device_manager
 from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, GITHUB_OWNER, GITHUB_REPO
 from network.network_server import network_server
 from services.config_manager import config_manager
+from services.plugin_manager import plugin_manager
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,38 @@ def _is_serial_gateway(gateway: dict) -> bool:
     return (gateway.get('transport') == 'usb_serial') or (
         isinstance(endpoint, str) and endpoint.startswith('serial://')
     )
+def parse_github_url(url: str) -> tuple[str | None, str | None]:
+    """Parse GitHub URL to extract owner and repo names.
+    
+    Args:
+        url: GitHub URL (e.g., https://github.com/owner/repo)
+        
+    Returns:
+        Tuple of (owner, repo) or (None, None) if not parseable
+    """
+    match = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:\/|$)', url)
+    if match:
+        return match.group(1), match.group(2).rstrip('/')
+    return None, None
+
+
+def extract_version_from_filename(filename: str) -> str | None:
+    """Extract version string from firmware filename.
+    
+    Looks for patterns like -v1.2.3.bin or -v1.2.3.4.bin at end of filename.
+    
+    Args:
+        filename: Firmware filename
+        
+    Returns:
+        Version string or None
+    """
+    match = re.search(r'-v(\d+\.\d+\.\d+(?:\.\d+)?)\.bin$', filename)
+    if match:
+        return match.group(1)
+    return None
+
+
 def get_firmware_filename(device_type: int, version: str) -> str:
     """Generate firmware filename for device type and version.
     
@@ -306,6 +339,69 @@ def check_updates():
                         }
         except Exception as e:
             logger.warning(f"Failed to fetch GitHub releases: {e}")
+        
+        # Also check plugin repositories for firmware updates
+        try:
+            plugins = plugin_manager.list_registered_plugins()
+            for plugin_entry in plugins:
+                ota_entries = plugin_entry.get('ota', [])
+                if not ota_entries:
+                    continue
+
+                metadata = plugin_entry.get('metadata', {})
+                source_repo = metadata.get('source_repo', '')
+                if not source_repo:
+                    continue
+
+                owner, repo = parse_github_url(source_repo)
+                if not owner or not repo:
+                    continue
+
+                plugin_id = str(plugin_entry.get('plugin_id', '')).strip()
+                if not plugin_id:
+                    continue
+
+                try:
+                    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+                    resp = requests.get(url, timeout=10, headers=HEADERS)
+
+                    if resp.status_code == 200:
+                        release_data = resp.json()
+                        tag = release_data.get('tag_name', '')
+                        assets = release_data.get('assets', [])
+
+                        for ota_entry in ota_entries:
+                            dev_type = ota_entry.get('device_type')
+                            asset_pattern = str(ota_entry.get('name', '')).strip()
+                            if not asset_pattern or dev_type is None:
+                                continue
+
+                            for asset in assets:
+                                aname = asset.get('name', '')
+                                segments = aname.rsplit('.', 1)[0].split('-')
+                                if any(asset_pattern == seg for seg in segments):
+                                    version = extract_version_from_filename(aname)
+                                    if not version:
+                                        version = tag.lstrip('v')
+                                    if not version:
+                                        version = '0.0.0'
+
+                                    key = f"plugin_{plugin_id}_devtype_{dev_type}"
+                                    available_firmwares[key] = {
+                                        'version': version,
+                                        'firmware_type': key,
+                                        'download_url': asset.get('browser_download_url', ''),
+                                        'filename': aname,
+                                        'source': 'github',
+                                        'plugin_id': plugin_id,
+                                        'plugin_device_type': dev_type,
+                                        'source_repo': source_repo,
+                                    }
+                                    break
+                except Exception as e:
+                    logger.warning(f"Failed to check plugin {plugin_id} updates from {source_repo}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to iterate plugins for OTA check: {e}")
         
         # Load and merge locally uploaded firmwares
         local_firmwares = load_local_firmwares()
@@ -625,6 +721,19 @@ def start_ota(device_mac):
                 device = sensor
                 device_type = DEV_DOOR
         
+        # Check plugin devices
+        last_gateway_mac = None
+        if not device:
+            plugin_id_for_mac = plugin_manager.get_plugin_for_mac(device_mac)
+            if plugin_id_for_mac:
+                plugin_devices = plugin_manager.collect_plugin_ota_devices()
+                for pd in plugin_devices:
+                    if pd.get('mac_address', '').upper() == device_mac.upper():
+                        device = {'mac_address': device_mac, 'plugin_id': plugin_id_for_mac}
+                        device_type = pd.get('device_type', 0)
+                        last_gateway_mac = pd.get('last_gateway_mac')
+                        break
+        
         if not device:
             return jsonify({'success': False, 'error': 'Device not found'}), 404
 
@@ -689,8 +798,8 @@ def start_ota(device_mac):
                 'error': 'Unable to resolve device type for OTA'
             }), 400
         
-        # Start OTA update
-        success = network_server.start_ota_update(device_mac, device_type, firmware_path)
+        # Start OTA update (pass gateway preference for plugin devices)
+        success = network_server.start_ota_update(device_mac, device_type, firmware_path, gateway_preference=last_gateway_mac)
         
         if success:
             return jsonify({
@@ -880,6 +989,45 @@ def get_devices_with_versions():
                 'device_type': DEV_DOOR,
                 'version': sensor.get('version', '0.0.0'),
                 'platform': sensor.get('platform', 'esp32')
+            })
+        
+        # Collect plugin devices from loaded plugins
+        plugin_devices = plugin_manager.collect_plugin_ota_devices()
+        for pd in plugin_devices:
+            plugin_id = pd.get('plugin_id', '')
+            dev_type = pd.get('device_type', 0)
+            # Look up home_box color from plugin registry
+            home_box_color = '#6366f1'
+            home_box_icon = 'fa-puzzle-piece'
+            plugin_display_name = plugin_id
+            for entry in plugin_manager.list_registered_plugins():
+                eid = str(entry.get('plugin_id', '')).strip()
+                if eid == plugin_id:
+                    hb = entry.get('home_box')
+                    if isinstance(hb, dict):
+                        home_box_color = hb.get('color', home_box_color)
+                        home_box_icon = hb.get('icon', home_box_icon)
+                        plugin_display_name = hb.get('name', plugin_display_name)
+                    dev = entry.get('devices', [])
+                    for d in dev:
+                        if d.get('device_type') == dev_type:
+                            plugin_display_name = d.get('name', plugin_display_name)
+                            break
+                    break
+
+                
+            devices.append({
+                'mac_address': pd.get('mac_address'),
+                'name': pd.get('name', 'Plugin Device'),
+                'type': f"plugin_{plugin_id}_devtype_{dev_type}",
+                'device_type': dev_type,
+                'version': pd.get('version', '0.0.0'),
+                'platform': pd.get('platform', 'esp32'),
+                'plugin_id': plugin_id,
+                'is_plugin': True,
+                'home_box_color': home_box_color,
+                'home_box_icon': home_box_icon,
+                'plugin_display_name': plugin_display_name,
             })
         
         return jsonify({

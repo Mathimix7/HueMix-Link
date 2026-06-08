@@ -1,6 +1,9 @@
 """Main routes blueprint."""
 from flask import Blueprint, render_template, jsonify, request
 from services import config_manager
+from services.plugin_manager import plugin_manager
+import subprocess
+import threading
 
 main_bp = Blueprint('main', __name__)
 
@@ -8,7 +11,35 @@ main_bp = Blueprint('main', __name__)
 @main_bp.route('/')
 def index():
     """Render the main dashboard page."""
-    return render_template('home.html')
+    # Build plugin home boxes server-side for immediate render (no client delay)
+    boxes = []
+    loaded_ids = {
+        str(runtime.definition.plugin_id)
+        for runtime in getattr(plugin_manager, '_loaded_plugins', [])
+        if getattr(runtime, 'definition', None)
+    }
+    for raw_entry in plugin_manager.list_registered_plugins():
+        try:
+            plugin_id = str(raw_entry.get('plugin_id') or raw_entry.get('id') or '').strip()
+            if not raw_entry.get('enabled') or plugin_id not in loaded_ids:
+                continue
+            hb = raw_entry.get('home_box')
+            if not isinstance(hb, (dict, list)):
+                continue
+            for entry in (hb if isinstance(hb, list) else [hb]):
+                boxes.append({
+                    'plugin_id': raw_entry.get('plugin_id') or raw_entry.get('id'),
+                    'plugin_name': raw_entry.get('id'),
+                    'name': entry.get('name') or raw_entry.get('id'),
+                    'description': entry.get('description') or '',
+                    'icon': entry.get('icon') or '',
+                    'color': entry.get('color') or '',
+                    'link': entry.get('link') or '#'
+                })
+        except Exception:
+            pass
+
+    return render_template('home.html', plugin_home_boxes=boxes)
 
 
 @main_bp.route('/pairing')
@@ -79,4 +110,27 @@ def update_config_and_restart():
         "message": message,
         "config": config_manager.load_config(),
         "udp_restart_required": udp_port is not None and udp_port != current_udp_port,
+    })
+
+
+@main_bp.route('/api/server/restart', methods=['POST'])
+def restart_server():
+    """Restart the entire HueMix-Link systemd service."""
+    # Trigger full system restart in background thread
+    def restart_service():
+        try:
+            subprocess.run(
+                ["sudo", "systemctl", "restart", "huemix-link"],
+                check=True,
+                timeout=30
+            )
+        except Exception as e:
+            print(f"Service restart error: {e}")
+    
+    thread = threading.Thread(target=restart_service, daemon=True, name="ServiceRestart")
+    thread.start()
+    
+    return jsonify({
+        "success": True,
+        "message": "Server restart initiated...",
     })

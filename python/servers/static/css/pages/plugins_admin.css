@@ -1,0 +1,48 @@
+.plugin-card {
+    background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.plugin-card:hover {
+    border-color: #a7f3d0;
+    box-shadow: 0 12px 24px -18px rgba(16, 185, 129, 0.45);
+    transform: translateY(-1px);
+}
+
+.official-plugin-card {
+    background: #ffffff;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.official-plugin-card:hover {
+    border-color: #fbbf24;
+    box-shadow: 0 8px 20px -12px rgba(245, 158, 11, 0.35);
+}
+
+.official-plugin-card .install-official-btn {
+    transition: all 0.2s ease;
+}
+
+.official-plugin-card .install-official-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 9999px;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+#restart-section {
+    transition: opacity 0.3s ease;
+}
+
+@media (max-width: 767px) {
+    .plugin-card {
+        padding: 0.9rem;
+    }
+}

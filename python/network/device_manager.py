@@ -7,6 +7,7 @@ import logging
 from typing import Optional, List, Dict
 from datetime import datetime
 from services.data_manager import data_manager
+from services.battery import calculate_battery_percent
 from constants import (
     FILE_BUTTONS, FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS, FILE_DOOR_SENSORS,
     DEV_REMOTE, DEV_BUTTON,
@@ -335,7 +336,7 @@ class DeviceManager:
                     # Update battery if provided
                     if battery_mv is not None:
                         button['battery_mv'] = battery_mv
-                        button['battery_percent'] = self._calculate_battery_percent(battery_mv)
+                        button['battery_percent'] = calculate_battery_percent(battery_mv)
                         button['battery_last_updated'] = datetime.now().isoformat()
                     
                     # Update version if provided
@@ -355,71 +356,6 @@ class DeviceManager:
             return buttons
         
         data_manager.update_json(FILE_BUTTONS, update_func)
-    
-    def _calculate_battery_percent(self, voltage_mv: int, battery_type: str = 'li_ion') -> Optional[int]:
-        """Calculate battery percentage from voltage using chemistry-specific curves.
-
-        Args:
-            voltage_mv: Battery voltage in millivolts
-            battery_type: Battery chemistry ('li_ion' or 'cr123a')
-
-        Returns:
-            Battery percentage (0-100)
-        """
-        if voltage_mv == 0:
-            return None
-
-        normalized_type = (battery_type or 'li_ion').strip().lower()
-        if normalized_type == 'cr123a':
-            # CR123A primary lithium discharge profile (under load approximation).
-            curve = [
-                (2200, 0),
-                (2400, 5),
-                (2500, 10),
-                (2600, 20),
-                (2700, 35),
-                (2800, 50),
-                (2900, 65),
-                (3000, 80),
-                (3050, 92),
-                (3100, 100),
-            ]
-        else:
-            # Li-Ion discharge profile.
-            curve = [
-                (3000, 0),
-                (3300, 5),
-                (3400, 10),
-                (3500, 20),
-                (3600, 35),
-                (3700, 50),
-                (3800, 70),
-                (3900, 80),
-                (4000, 90),
-                (4100, 95),
-                (4200, 100),
-            ]
-
-        # Clamp extremes
-        if voltage_mv <= curve[0][0]:
-            return 0
-        if voltage_mv >= curve[-1][0]:
-            return 100
-
-        # Find nearest points and linearly interpolate between them
-        lower_v, lower_p = curve[0]
-        for upper_v, upper_p in curve[1:]:
-            if voltage_mv <= upper_v:
-                # voltage is between lower_v and upper_v
-                if upper_v == lower_v:
-                    return int(upper_p)
-                frac = (voltage_mv - lower_v) / (upper_v - lower_v)
-                percent = lower_p + frac * (upper_p - lower_p)
-                return max(0, min(100, int(round(percent))))
-            lower_v, lower_p = upper_v, upper_p
-
-        # Fallback
-        return 0
     
     def add_button(self, mac_address: str, name: str, device_type: int = DEV_BUTTON, button_count: Optional[int] = None) -> Optional[Dict]:
         """Add new button/remote to registry.
@@ -521,7 +457,7 @@ class DeviceManager:
                     # Update battery if provided
                     if battery_mv is not None:
                         sensor['battery_mv'] = battery_mv
-                        sensor['battery_percent'] = self._calculate_battery_percent(battery_mv)
+                        sensor['battery_percent'] = calculate_battery_percent(battery_mv)
                         sensor['battery_last_updated'] = datetime.now().isoformat()
                     
                     # Update light level if provided
@@ -653,7 +589,7 @@ class DeviceManager:
                     if battery_mv is not None:
                         active_battery_type = battery_type or sensor.get('battery_type', 'li_ion')
                         sensor['battery_mv'] = battery_mv
-                        sensor['battery_percent'] = self._calculate_battery_percent(battery_mv, active_battery_type)
+                        sensor['battery_percent'] = calculate_battery_percent(battery_mv, active_battery_type)
                         sensor['battery_last_updated'] = now_iso
 
                     # Update light level if provided

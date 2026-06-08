@@ -122,6 +122,13 @@ SerialState rxState = S_IDLE;
 uint16_t rxIndex = 0;
 uint8_t rxRawBuffer[sizeof(HueMixLinkPacket)];
 
+static bool shouldAckInboundPacket(uint8_t packetType) {
+  return packetType == PKT_BTN_EVENT ||
+         packetType == PKT_MOTION_EVENT ||
+         packetType == PKT_DOOR_EVENT ||
+         (packetType >= PLUGIN_EVENT_PACKET_MIN && packetType <= PLUGIN_EVENT_PACKET_MAX);
+}
+
 // --- OTA BUFFERING CONFIG ---
 #define OTA_BUFFER_MAX_CHUNKS 15
 #define CHUNK_PAYLOAD_SIZE 185
@@ -1214,7 +1221,7 @@ void loop() {
     SERIAL_COM.write(SERIAL_END);
     SERIAL_COM.flush();
     
-    if (bufferPkt.type == PKT_BTN_EVENT || bufferPkt.type == PKT_MOTION_EVENT || bufferPkt.type == PKT_DOOR_EVENT) {
+    if (shouldAckInboundPacket(bufferPkt.type)) {
       // Only send ACK if net node has WiFi connectivity
       if (netNodeHasWiFi) {
         HueMixLinkPacket ack; 

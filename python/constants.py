@@ -38,6 +38,7 @@ DEV_LIGHT = 3
 DEV_REMOTE = 4
 DEV_MOTION = 5
 DEV_DOOR = 6
+DEV_PLUGIN_MARKER = 0xFE  # Unpaired plugin device (sends with plugin UUID in HELLO)
 
 # ===== Button Action Codes =====
 ACT_CLICK = 1
@@ -120,6 +121,8 @@ FILE_BRIDGE = 'bridge.json'
 FILE_CONFIG = 'config.json'
 FILE_PAIRING_HISTORY = 'pairing_history.json'
 FILE_OTA_SESSIONS = 'ota_sessions.json'
+FILE_PLUGINS = 'plugins.json'
+FILE_PLUGIN_DEVICE_BINDINGS = 'plugin_device_bindings.json'
 
 # ===== Logging =====
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

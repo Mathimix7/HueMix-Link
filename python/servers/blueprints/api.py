@@ -6,6 +6,7 @@ from services.hue_state_manager import hue_state_manager
 from network.network_server import network_server
 from network.device_manager import device_manager
 from network.pairing_manager import pairing_manager
+from services.plugin_manager import plugin_manager
 from services.automation_service import automation_service
 import logging
 
@@ -625,7 +626,7 @@ def start_pairing():
                     "error": "Types must be an array"
                 }), 400
             
-            valid_types = ['gateway', 'button', 'light', 'motion', 'door']
+            valid_types = ['gateway', 'button', 'light', 'motion', 'door', 'plugin']
             for t in device_types:
                 if t not in valid_types:
                     return jsonify({
@@ -686,7 +687,7 @@ def get_pairing_status():
 
 @api_bp.route('/pairing/devices', methods=['GET'])
 def get_pairing_devices():
-    """Get last 5 paired devices."""
+    """Get last 5 paired devices with plugin metadata enrichment."""
     try:        
         paired_devices = pairing_manager.get_paired_devices()
         
@@ -701,7 +702,48 @@ def get_pairing_devices():
         }
         
         for device in paired_devices:
-            device['type_name'] = type_names.get(device.get('type'), 'Unknown')
+            device_type = device.get('type')
+            
+            # If device_type is a string like "0:plugin_id", it's a plugin device
+            if isinstance(device_type, str) and ':' in str(device_type):
+                try:
+                    parts = str(device_type).split(':')
+                    plugin_device_type = int(parts[0])
+                    plugin_id = ':'.join(parts[1:])
+                    
+                    # Look up manifest for this plugin
+                    plugin_manifest = None
+                    for raw_entry in plugin_manager.list_registered_plugins():
+                        manifest_plugin_id = raw_entry.get('plugin_id') or raw_entry.get('id')
+                        if manifest_plugin_id == plugin_id:
+                            plugin_manifest = raw_entry
+                            # Find device in manifest by plugin_device_type
+                            for manifest_device in (raw_entry.get('devices') or []):
+                                if int(manifest_device.get('device_type', -1)) == plugin_device_type:
+                                    device['icon'] = manifest_device.get('icon', '🔌')
+                                    device['type_name'] = manifest_device.get('name', 'Plugin Device')
+                                    break
+                            # Add plugin capabilities for this plugin
+                            device['device_capabilities'] = raw_entry.get('device_capabilities', {})
+                            break
+                    
+                    # Try to look up device ID from plugin data
+                    if plugin_manifest and not device.get('id'):
+                        device_id, device_name = _lookup_plugin_device_id(plugin_manifest, device.get('mac'))
+                        if device_id:
+                            device['id'] = device_id
+                            if device_name:
+                                device['name'] = device_name
+                    
+                except Exception as e:
+                    logger.debug(f"Error enriching plugin device {device.get('mac')}: {e}")
+                    device['type_name'] = 'Plugin Device'
+                    device['icon'] = '🔌'
+            else:
+                device['type_name'] = type_names.get(device_type, 'Unknown')
+                # Add icon for core devices
+                icons = {1: '🌐', 2: '🔘', 3: '💡', 4: '🎮', 5: '🏃', 6: '🚪'}
+                device['icon'] = icons.get(device_type, '📱')
         
         return jsonify({
             "success": True,
@@ -714,6 +756,40 @@ def get_pairing_devices():
             "error": str(e),
             "devices": []
         }), 500
+
+
+def _lookup_plugin_device_id(plugin_manifest: dict, device_mac: str) -> tuple[str | None, str | None]:
+    """Look up a device ID from a plugin's stored data.
+    
+    Args:
+        plugin_manifest: Plugin manifest entry from plugins.json
+        device_mac: MAC address of device to look up
+        
+    Returns:
+        Tuple of (device_id, device_name) if found, (None, None) otherwise
+    """
+    try:
+        # Try to find loaded plugin instance
+        loaded_plugins = plugin_manager._loaded_plugins
+        plugin_uuid = plugin_manifest.get('plugin_id') or plugin_manifest.get('id')
+        
+        for runtime in loaded_plugins:
+            if hasattr(runtime.definition, 'plugin_id') and str(runtime.definition.plugin_id) == plugin_uuid:
+                # Found the plugin instance
+                plugin_instance = runtime.instance
+                # Call plugin's method to find device by MAC
+                if hasattr(plugin_instance, '_find_sensor_by_id'):
+                    # For temperature plugin - try looking up by MAC address
+                    sensor = plugin_instance._find_sensor_by_id(device_mac)
+                    name = sensor.get('name', '') if sensor else ''
+                    if sensor:
+                        return sensor.get('id'), name
+                
+                break
+    except Exception as e:
+        logger.debug(f"Error looking up plugin device ID for {device_mac}: {e}")
+    
+    return None, None
 
 
 @api_bp.route('/pairing/devices/<mac_address>', methods=['DELETE'])

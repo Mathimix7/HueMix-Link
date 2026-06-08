@@ -68,6 +68,7 @@ class OTASession:
         self.last_bytes_sent = 0  # Bytes sent at last progress update
         self.failure_reason = None
         self.battery_mv = None
+        self.preferred_gateway_mac = None  # Best gateway for routing chunks to this device
         
         self.lock = threading.Lock()
     

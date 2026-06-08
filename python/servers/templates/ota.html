@@ -495,13 +495,34 @@ function renderDevicesTable() {
         
         const hasActiveOta = activeSessions[device.mac_address] || false;
         
+        // Plugin devices use home_box_color for styling
+        const pluginColor = device.is_plugin ? (device.home_box_color || '#6366f1') : null;
+        const typeColor = pluginColor ? null : getTypeColor(device.type);
+        
+        // Build icon/color HTML for plugin vs built-in devices
+        let iconHtml, badgeHtml;
+        if (device.is_plugin) {
+            const pluginIcon = device.home_box_icon || 'fa-puzzle-piece';
+            const pluginName = device.plugin_display_name || 'Plugin';
+            console.log(device)
+            iconHtml = `
+                <div class="flex-shrink-0 h-10 w-10 flex items-center justify-center rounded-full" style="background-color: ${pluginColor}20; color: ${pluginColor}">
+                    <i class="fas ${pluginIcon}"></i>
+                </div>`;
+            badgeHtml = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full" style="background-color: ${pluginColor}20; color: ${pluginColor}">${pluginName}</span>`;
+        } else {
+            iconHtml = `
+                <div class="flex-shrink-0 h-10 w-10 flex items-center justify-center bg-${typeColor}-100 rounded-full">
+                    <span class="text-${typeColor}-600">${getTypeIcon(device.type)}</span>
+                </div>`;
+            badgeHtml = `<span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-${typeColor}-100 text-${typeColor}-800">${formatDeviceType(device.type)}${platformLabel}</span>`;
+        }
+        
         return `
             <tr class="hover:bg-gray-50 ${device.hasUpdate ? 'bg-orange-50/30' : ''}">
                 <td class="px-6 py-4 whitespace-nowrap">
                     <div class="flex items-center">
-                        <div class="flex-shrink-0 h-10 w-10 flex items-center justify-center bg-${getTypeColor(device.type)}-100 rounded-full">
-                            <span class="text-${getTypeColor(device.type)}-600">${getTypeIcon(device.type)}</span>
-                        </div>
+                        ${iconHtml}
                         <div class="ml-4">
                             <div class="text-sm font-medium text-gray-900">${device.name}</div>
                             <div class="text-xs text-gray-500">${device.mac_address}</div>
@@ -510,9 +531,7 @@ function renderDevicesTable() {
                     </div>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">
-                    <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-${getTypeColor(device.type)}-100 text-${getTypeColor(device.type)}-800">
-                        ${formatDeviceType(device.type)}${platformLabel}
-                    </span>
+                    ${badgeHtml}
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${device.version}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm ${device.hasUpdate ? 'text-orange-600 font-semibold' : 'text-gray-500'}">${availableVersion}</td>
@@ -528,7 +547,7 @@ function renderDevicesTable() {
                                     class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-1.5 rounded transition">
                                 Update
                             </button>
-                        ` : (device.platform || device.model_id || device.type.startsWith('gateway_')) ? `
+                        ` : (device.platform || device.model_id || device.type.startsWith('gateway_') || device.is_plugin) ? `
                             <span class="text-gray-400">Up to date</span>
                         ` : `
                             <span class="text-yellow-600 text-xs">Platform unknown</span>

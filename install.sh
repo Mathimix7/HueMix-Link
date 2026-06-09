@@ -324,6 +324,21 @@ setup_permissions() {
   run find "$APP_DIR/data" -type f -exec chmod 640 {} + 2>/dev/null || true
 }
 
+setup_sudoers_restart() {
+  local SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-restart"
+  log "Configuring passwordless sudo for service restart"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "DRY-RUN: would write ${SUDOERS_FILE}"
+    return 0
+  fi
+  cat > "$SUDOERS_FILE" <<EOF
+# Allow ${SERVICE_USER} to restart the ${SERVICE_NAME} service without a password
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart ${SERVICE_NAME}
+EOF
+  chmod 440 "$SUDOERS_FILE"
+  success "Passwordless sudo configured for service restart"
+}
+
 install_systemd_unit() {
   if ! command -v systemctl >/dev/null 2>&1; then
     log "systemctl not found; skipping systemd unit installation"
@@ -545,6 +560,7 @@ uninstall() {
   run systemctl stop "${SERVICE_NAME}.service" || true
   run systemctl disable "${SERVICE_NAME}.service" || true
   run rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+  run rm -f "/etc/sudoers.d/${SERVICE_NAME}-restart"
   run systemctl daemon-reload || true
 
   cleanup_local_domain
@@ -608,6 +624,7 @@ main_install() {
   copy_files
   create_venv_and_deps
   setup_permissions
+  setup_sudoers_restart
   install_systemd_unit
   setup_https_cert
   setup_proxy

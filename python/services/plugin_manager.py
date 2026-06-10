@@ -12,7 +12,8 @@ from services.data_manager import data_manager
 
 logger = logging.getLogger(__name__)
 
-PLUGIN_SCHEMA_VERSION = 1
+PLUGIN_SCHEMA_VERSION = 2
+PLUGIN_API_VERSION = 1
 
 @dataclass
 class PluginDevice:
@@ -59,6 +60,8 @@ class PluginManifest:
     id: str  # Display id (from 'id' field in manifest)
     module: str
     enabled: bool
+    version: str = "0.0.0"
+    plugin_api_version: int = 1
     devices: list[PluginDevice] = field(default_factory=list)
     ota: list[PluginOTA] = field(default_factory=list)
     home_box: list[dict[str, Any]] | None = None
@@ -79,6 +82,8 @@ class PluginManifest:
             id=str(data.get("id", "unknown")).strip(),
             module=str(data.get("module", "")).strip(),
             enabled=bool(data.get("enabled", False)),
+            version=str(data.get("version", "0.0.0") or "0.0.0").strip(),
+            plugin_api_version=int(data.get("plugin_api_version", 1) or 1),
             devices=devices,
             ota=ota,
             home_box=home_box,
@@ -92,6 +97,8 @@ class PluginDefinition:
     plugin_id: str
     module: str
     enabled: bool = False
+    version: str = "0.0.0"
+    plugin_api_version: int = 1
     kind: str = "generic"
     capabilities: list[str] = field(default_factory=list)
     options: dict[str, Any] = field(default_factory=dict)
@@ -120,6 +127,8 @@ class PluginDefinition:
             plugin_id=plugin_id,
             module=module,
             enabled=bool(data.get("enabled", False)),
+            version=str(data.get("version", "0.0.0") or "0.0.0").strip(),
+            plugin_api_version=int(data.get("plugin_api_version", 1) or 1),
             kind=str(data.get("kind") or "generic").strip() or "generic",
             capabilities=[str(item).strip() for item in capabilities if str(item).strip()],
             options=options,
@@ -131,6 +140,8 @@ class PluginDefinition:
             "id": self.plugin_id,
             "module": self.module,
             "enabled": self.enabled,
+            "version": self.version,
+            "plugin_api_version": self.plugin_api_version,
             "kind": self.kind,
             "capabilities": list(self.capabilities),
             "options": dict(self.options),
@@ -214,10 +225,15 @@ class PluginManager:
             return self._default_registry()
 
         normalized = dict(registry)
-        normalized["schema_version"] = int(normalized.get("schema_version", PLUGIN_SCHEMA_VERSION) or PLUGIN_SCHEMA_VERSION)
+        normalized["schema_version"] = PLUGIN_SCHEMA_VERSION
         plugins = normalized.get("plugins", [])
         if not isinstance(plugins, list):
             plugins = []
+        # Migrate v1 entries: fill in default version fields
+        for entry in plugins:
+            if isinstance(entry, dict):
+                entry.setdefault("version", "0.0.0")
+                entry.setdefault("plugin_api_version", PLUGIN_API_VERSION)
         normalized["plugins"] = plugins
         return normalized
 
@@ -386,6 +402,13 @@ class PluginManager:
                 continue
 
             if not definition.enabled:
+                continue
+
+            if definition.plugin_api_version != PLUGIN_API_VERSION:
+                logger.warning(
+                    "Skipping plugin %s: plugin_api_version %d does not match core API version %d.",
+                    definition.plugin_id, definition.plugin_api_version, PLUGIN_API_VERSION,
+                )
                 continue
 
             try:

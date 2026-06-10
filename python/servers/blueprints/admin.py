@@ -176,6 +176,51 @@ def list_official_plugins():
     return jsonify({"success": True, "plugins": official})
 
 
+@admin_bp.route('/api/plugins/updates', methods=['GET'])
+def check_all_plugin_updates():
+    """Check all plugins for available updates."""
+    try:
+        results = plugin_install_service.check_all_plugins_for_updates()
+        return jsonify({
+            "success": True,
+            "results": results,
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "results": [],
+        }), 500
+
+
+@admin_bp.route('/api/plugins/update', methods=['POST'])
+def update_plugin():
+    """Update a plugin to its latest GitHub release version."""
+    try:
+        data = request.get_json(silent=True) or {}
+        plugin_identifier = str(data.get('plugin_id') or data.get('id') or '').strip()
+        release_tag = str(data.get('release_tag') or '').strip() or None
+
+        if not plugin_identifier:
+            return jsonify({
+                'success': False,
+                'error': 'plugin_id or id is required',
+            }), 400
+
+        result = plugin_install_service.update_plugin(plugin_identifier, release_tag=release_tag)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 400
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 500
+
+
 @admin_bp.route('/api/service/check', methods=['GET'])
 def check_service():
     """Check if the systemd service exists and can be restarted."""

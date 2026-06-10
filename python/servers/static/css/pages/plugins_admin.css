@@ -41,6 +41,44 @@
     transition: opacity 0.3s ease;
 }
 
+.update-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 9999px;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+.update-badge.latest {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.update-badge.available {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.update-badge.checking {
+    background: #e0f2fe;
+    color: #075985;
+}
+
+.update-badge.error {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+@keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.update-badge.checking {
+    animation: pulse-soft 1.5s ease-in-out infinite;
+}
+
 @media (max-width: 767px) {
     .plugin-card {
         padding: 0.9rem;

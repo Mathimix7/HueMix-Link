@@ -1,17 +1,19 @@
 let pendingConfirmAction = null;
 let pendingRestart = false;
 
-function refreshPlugins() {
+async function refreshPlugins() {
     const refreshIcon = document.getElementById('refresh-icon');
     refreshIcon.classList.add('rotate-360');
     setTimeout(() => {
         refreshIcon.classList.remove('rotate-360');
     }, 500);
-    loadPlugins();
+    await loadPlugins();
+    checkAllUpdates();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('refresh-plugins-btn').addEventListener('click', refreshPlugins);
+    document.getElementById('check-updates-btn').addEventListener('click', checkAllUpdates);
     document.getElementById('install-plugin-form').addEventListener('submit', onInstallSubmit);
     const restartButton = document.getElementById('restart-server-btn');
     if (restartButton) {
@@ -19,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     loadPlugins();
     loadOfficialPlugins();
+    setTimeout(checkAllUpdates, 500);
 });
 
 function showRestartBanner() {
@@ -202,13 +205,16 @@ function renderPluginCard(plugin) {
     const healthClass = plugin.package_exists ? 'text-emerald-700 bg-emerald-100' : 'text-red-700 bg-red-100';
     const healthLabel = plugin.package_exists ? 'Files OK' : 'Missing Files';
     const source = plugin.source_repo || 'Local / unknown source';
+    const version = plugin.version || '0.0.0';
+    const safeId = (plugin.plugin_id || plugin.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const updateId = 'update-' + safeId;
 
     return `
-        <article class="plugin-card border border-gray-200 rounded-xl p-4">
+        <article class="plugin-card border border-gray-200 rounded-xl p-4" id="plugin-${escapeAttr(plugin.plugin_id || plugin.id)}">
             <div class="flex items-start justify-between gap-4">
                 <div class="min-w-0">
                     <h3 class="text-lg font-semibold text-gray-900 truncate">${escapeHtml(plugin.name || plugin.id)}</h3>
-                    <p class="text-xs text-gray-500 mt-1">${escapeHtml(plugin.id)} • ${escapeHtml(plugin.module || '')}</p>
+                    <p class="text-xs text-gray-500 mt-1">${escapeHtml(plugin.id)} • ${escapeHtml(plugin.module || '')} • v${escapeHtml(version)}</p>
                     <div class="mt-3 text-xs text-gray-500 break-all">
                         <div><strong>Repo:</strong> ${escapeHtml(source)}</div>
                         <div><strong>Installed:</strong> ${escapeHtml(new Date(plugin.installed_at).toLocaleString() || '-')}</div>
@@ -217,7 +223,7 @@ function renderPluginCard(plugin) {
                 <div class="flex flex-col items-end gap-2">
                     <span class="badge ${enabled ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}">${enabled ? 'Enabled' : 'Disabled'}</span>
                     <span class="badge ${loaded ? 'bg-violet-100 text-violet-700' : 'bg-gray-100 text-gray-600'}">${loaded ? 'Loaded' : 'Not Loaded'}</span>
-                    <span class="badge ${healthClass}">${healthLabel}</span>
+                    <span id="${escapeAttr(updateId)}" class="update-badge" style="display:none"></span>
                 </div>
             </div>
 
@@ -230,6 +236,7 @@ function renderPluginCard(plugin) {
                         class="px-3 py-1.5 rounded-lg text-sm bg-red-600 hover:bg-red-700 text-white">
                     <i class="fas fa-trash mr-1"></i>Uninstall
                 </button>
+                <div id="update-actions-${safeId}" class="hidden"></div>
             </div>
         </article>
     `;
@@ -339,6 +346,142 @@ async function togglePlugin(pluginId, enabled) {
     } catch (error) {
         console.error('Toggle plugin failed:', error);
         showToast(error.message || 'Failed to update plugin', 'error');
+    }
+}
+
+// ── Update checking ─────────────────────────────────────────────────────
+
+async function checkAllUpdates() {
+    const btn = document.getElementById('check-updates-btn');
+    const icon = document.getElementById('check-updates-icon');
+    const textEl = document.getElementById('check-updates-text');
+    if (!btn || !icon || !textEl) return;
+    btn.disabled = true;
+    icon.className = 'fas fa-spinner fa-spin mr-2';
+    textEl.textContent = 'Checking...';
+
+    // Show checking state on all plugin cards
+    document.querySelectorAll('.update-badge').forEach(el => {
+        el.style.display = 'inline-flex';
+        el.className = 'update-badge checking';
+        el.textContent = 'Checking...';
+    });
+
+    try {
+        const resp = await fetch('/admin/api/plugins/updates');
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.error || 'Failed to check updates');
+
+        const results = Array.isArray(data.results) ? data.results : [];
+        for (const result of results) {
+            const pluginId = result.plugin_id;
+            const updateId = 'update-' + pluginId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const badge = document.getElementById(updateId);
+            if (!badge) continue;
+
+            badge.style.display = 'inline-flex';
+            if (result.error) {
+                badge.className = 'update-badge error';
+                badge.textContent = 'Error';
+                badge.title = result.error;
+            } else if (result.update_available) {
+                badge.className = 'update-badge available';
+                badge.textContent = 'v' + escapeHtml(result.latest_version) + ' available';
+                // Show update action
+                const actionsEl = document.getElementById('update-actions-' + pluginId.replace(/[^a-zA-Z0-9_-]/g, '_'));
+                if (actionsEl) {
+                    actionsEl.className = '';
+                    actionsEl.innerHTML = `
+                        <button onclick="applyPluginUpdate('${escapeAttr(pluginId)}')"
+                                class="px-3 py-1.5 rounded-lg text-sm bg-amber-600 hover:bg-amber-700 text-white">
+                            <i class="fas fa-download mr-1"></i>Update to v${escapeHtml(result.latest_version)}
+                        </button>
+                    `;
+                }
+            } else {
+                badge.className = 'update-badge latest';
+                badge.textContent = 'v' + escapeHtml(result.installed_version) + ' (latest)';
+            }
+        }
+        showToast('Update check completed', 'success');
+    } catch (error) {
+        console.error('Update check failed:', error);
+        showToast(error.message || 'Update check failed', 'error');
+        document.querySelectorAll('.update-badge.checking').forEach(el => {
+            el.className = 'update-badge error';
+            el.textContent = 'Check failed';
+        });
+    } finally {
+        btn.disabled = false;
+        icon.className = 'fas fa-cloud-arrow-down mr-2';
+        textEl.textContent = 'Check Updates';
+    }
+}
+
+async function applyPluginUpdate(pluginId) {
+    // Reuse the install progress modal for updates
+    openInstallProgressModal();
+    document.getElementById('install-progress-title').textContent = 'Updating Plugin';
+
+    try {
+        const resp = await fetch('/admin/api/plugins/update', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ plugin_id: pluginId }),
+        });
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.error || 'Update failed');
+
+        const sessionId = data.install_id;
+        await pollUpdateStatus(sessionId);
+    } catch (error) {
+        console.error('Update failed:', error);
+        const statusEl = document.getElementById('install-progress-status');
+        statusEl.textContent = 'Error: ' + (error.message || 'Update failed');
+        document.getElementById('install-progress-close').disabled = false;
+        showToast(error.message || 'Update failed', 'error');
+    }
+}
+
+async function pollUpdateStatus(sessionId) {
+    const statusEl = document.getElementById('install-progress-status');
+    const logEl = document.getElementById('install-progress-log');
+    try {
+        let finished = false;
+        while (!finished) {
+            const resp = await fetch('/admin/api/plugins/install/status/' + encodeURIComponent(sessionId));
+            const body = await resp.json();
+            if (!body.success) {
+                statusEl.textContent = 'Error: ' + (body.error || 'unknown');
+                finished = true;
+                break;
+            }
+            const s = body.status;
+            statusEl.textContent = (s.step || 'unknown') + (s.success === true ? ' — Done' : (s.success === false ? ' — Failed' : ''));
+            logEl.textContent = (Array.isArray(s.logs) ? s.logs.join('\n') : '');
+            logEl.scrollTop = logEl.scrollHeight;
+
+            if (s.success === true || s.success === false) {
+                finished = true;
+                document.getElementById('install-progress-close').disabled = false;
+                if (s.success === true) {
+                    showToast('Update completed', 'success');
+                    showRestartBanner();
+                    await loadPlugins();
+                    await loadOfficialPlugins();
+                } else {
+                    showToast('Update failed: ' + (s.error || 'See logs'), 'error');
+                }
+                document.getElementById('install-progress-title').textContent = 'Plugin Operation';
+                break;
+            }
+
+            await new Promise((r) => setTimeout(r, 1000));
+        }
+    } catch (err) {
+        statusEl.textContent = 'Error: ' + (err.message || err);
+        document.getElementById('install-progress-close').disabled = false;
+        document.getElementById('install-progress-title').textContent = 'Plugin Operation';
     }
 }
 

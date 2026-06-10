@@ -152,12 +152,14 @@ file at the root of the repository. The manifest is stored in the global registr
 | `id` | `string` | Human-readable identifier (e.g. `"temperature_tracking"`) |
 | `plugin_id` | `string` | UUID v4 that uniquely identifies this plugin. Must match the UUID compiled into supporting device firmware. |
 | `module` | `string` | Python import path: `"plugins.<package_name>.plugin"` |
+| `version` | `string` | Semantic version of the plugin code (e.g. `"1.2.0"`). Used for update checking. |
 
 ### Optional Fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `boolean` | `true` | Whether the plugin loads at startup |
+| `plugin_api_version` | `integer` | `1` | Plugin API version this plugin targets. The core rejects plugins with mismatched API versions. |
 | `kind` | `string` | `"generic"` | Plugin category |
 | `capabilities` | `string[]` | `[]` | Feature flags like `"devices"`, `"web_ui"`, `"ota"` |
 | `options` | `object` | `{}` | Free-form configuration passed to `create_plugin()` |
@@ -690,6 +692,89 @@ It demonstrates:
    ```
 
 3. Restart the HueMix-Link service.
+
+---
+
+## Plugin Versioning & Updates
+
+### Version Field
+
+Every plugin should declare a `version` field in its `plugin.json` manifest using
+[semantic versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`, e.g., `"1.2.0"`).
+
+- **MAJOR**: Breaking changes to the plugin's device protocol, API, or data storage.
+- **MINOR**: New features that are backward-compatible.
+- **PATCH**: Bug fixes and minor improvements.
+
+The version is stored in the registry at `python/data/plugins.json` and displayed
+in the admin plugin manager UI.
+
+### Plugin API Version
+
+The `plugin_api_version` field declares which version of the PluginHost API the
+plugin was built against. The current core API version is **1**.
+
+If the core's `PLUGIN_API_VERSION` does not match the plugin's declared
+`plugin_api_version`, the plugin is **skipped at load time** with a warning in
+the logs. This prevents plugins written for a different API from crashing at
+runtime.
+
+```json
+{
+  "id": "my_plugin",
+  "plugin_id": "550e8400-...",
+  "module": "plugins.my_plugin.plugin",
+  "version": "1.2.0",
+  "plugin_api_version": 1
+}
+```
+
+### How Updates Work
+
+The update mechanism uses **GitHub Releases**. When you check for updates:
+
+1. The system fetches the latest release from the plugin's `source_repo` via the
+   [GitHub Releases API](https://docs.github.com/en/rest/releases/releases).
+2. It compares the release tag (parsed as semver) against the installed version.
+3. If a newer version is found, an **Update** button appears in the admin UI.
+
+### Applying an Update
+
+When you click **Update**:
+
+1. The system clones the repository at the latest release tag.
+2. Validates the new manifest (`plugin.json`).
+3. Removes the old plugin package directory.
+4. Copies the new package files.
+5. Re-installs Python dependencies from `requirements.txt` (if present).
+6. Updates the registry entry with the new version and metadata — preserving
+   `enabled` state, device bindings, and plugin options.
+7. A **server restart** is required for the updated plugin code to load.
+
+### Release Workflow for Plugin Developers
+
+To make your plugin updatable via the admin UI:
+
+1. Tag each release with a semver tag: `v1.0.0`, `v1.1.0`, `v2.0.0`, etc.
+2. Create a **GitHub Release** from the tag. The release body is shown as
+   release notes in the admin UI.
+3. Update the `version` field in your `plugin.json` to match the release tag.
+
+The system automatically picks up the latest release. If no formal releases
+exist, it falls back to checking Git tags for the highest semver tag.
+
+### What Gets Preserved During an Update
+
+| Field | Preserved? |
+|-------|-----------|
+| `enabled` state | Yes |
+| Plugin `options` | Yes |
+| MAC → plugin device bindings | Yes |
+| Pairing history entries | Yes |
+| Device names and metadata | Yes |
+| `version` | Updated from new manifest |
+| `metadata.source_repo` | Yes |
+| `metadata.updated_at` | Set to current time |
 
 ---
 

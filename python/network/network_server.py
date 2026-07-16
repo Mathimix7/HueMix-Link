@@ -22,7 +22,7 @@ from constants import (
     DEFAULT_UDP_IP, DEFAULT_UDP_PORT, DEFAULT_GATEWAY_PORT,
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_GW_LIST_UPD, PKT_PING, PKT_PING_DEVICE, PKT_MOTION_EVENT, PKT_DOOR_EVENT,
     PKT_OTA_READY, PKT_OTA_CHUNK_ACK, PKT_OTA_ABORT,
-    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR,
+    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, DEV_PLUGIN_MARKER,
     MAX_GATEWAY_ATTEMPTS, GATEWAY_DELIVERY_TIMEOUT_SECONDS,
     TIMEOUT_SOCKET, OTA_READY_TIMEOUT, OTA_CHUNK_DATA_SIZE,
     OTA_CHUNK_ACK_TIMEOUT, OTA_CHUNK_MAX_RETRIES, OTA_CHECKPOINT_INTERVAL,
@@ -132,6 +132,7 @@ class NetworkServer:
         self._motion_event_handler = None
         self._door_event_handler = None
         self._pairing_handler = None
+        self._plugin_manager = None
         
         # Load persisted gateways
         self._load_gateways()
@@ -294,6 +295,42 @@ class NetworkServer:
             handler: Callable(device_mac, device_type, rssi) -> bool (accept pairing)
         """
         self._pairing_handler = handler
+
+    def set_plugin_manager(self, manager):
+        self._plugin_manager = manager
+
+    def send_pair_confirm(self, target_mac: str, sender_ip: str) -> bool:
+        """Public wrapper for pairing confirmation packets."""
+        try:
+            self._send_pair_confirm(target_mac, sender_ip)
+            return True
+        except Exception:
+            logger.exception("Failed to send pair confirm to %s", target_mac)
+            return False
+        
+    def get_message_id(self) -> int:
+        """Generate a new message ID for tracking deliveries."""
+        msg_id = 0
+        with self._delivery_lock:
+            msg_id = self._next_msg_id
+            self._next_msg_id = (self._next_msg_id + 1) % 256
+        return msg_id
+
+    def send_raw_packet_to_device(self, target_mac: str, packet: bytes, wait_for_delivery: bool = False, msg_id: int = None, gateway_preference: str = None) -> bool:
+        """Send a raw packet to a device with gateway fallback.
+
+        Args:
+            target_mac: Device MAC address
+            packet: Encoded packet bytes
+            wait_for_delivery: Whether to wait for delivery confirmation
+            msg_id: Optional message ID for delivery tracking
+            gateway_preference: Preferred gateway MAC address
+
+        Returns:
+            True if packet was sent successfully, False otherwise.
+        """
+
+        return self._send_with_fallback(target_mac, packet, wait_for_delivery, msg_id, gateway_preference)
 
     def set_automation_engine(self, engine):
         """Set reference to the automation engine.
@@ -1159,6 +1196,19 @@ class NetworkServer:
                         if not gateway_exists:
                             logger.info(f"🌐 Paired gateway {src_mac} not in config, requesting HELLO...")
                             self._send_pair_confirm(src_mac, sender_ip)
+
+        if self._plugin_manager:
+            gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
+            self._plugin_manager.dispatch_event('packet_received', {
+                'type': pkt_type,
+                'source_mac': src_mac,
+                'target_mac': packet['target_mac'],
+                'msg_id': packet['msg_id'],
+                'payload': payload,
+                'is_paired': is_paired,
+                'sender_ip': sender_ip,
+                'gateway_radio_mac': gateway_radio_mac,
+            })
                 
         # Handle packet by type
         if pkt_type == PKT_HELLO:
@@ -1211,7 +1261,12 @@ class NetworkServer:
         
         dev_type = hello_data['device_type']
         
-        # Handle by device type
+        # Handle plugin device (unpaired, sends with UUID marker)
+        if dev_type == DEV_PLUGIN_MARKER:
+            self._handle_plugin_hello(src_mac, hello_data, sender_ip, is_paired)
+            return
+        
+        # Handle core device types
         if dev_type == DEV_GATEWAY:
             self._handle_gateway_hello(src_mac, hello_data, sender_ip, is_paired)
         
@@ -1760,6 +1815,126 @@ class NetworkServer:
 
             logger.debug(f"Door sensor {sensor_mac} online (RSSI: {rssi} dBm)")
     
+    def _handle_plugin_hello(self, device_mac: str, hello_data: Dict, sender_ip: str, is_paired: bool):
+        """Handle HELLO from plugin device (0xFE marker).
+        
+        Plugin devices advertise with UUID marker for discovery. When unpaired, device sends:
+        - type=0xFE (DEV_PLUGIN_MARKER)
+        - plugin_uuid: 16-byte UUID identifying plugin
+        - plugin_device_type: Device type within plugin namespace (0-255)
+        
+        After pairing, MAC is bound to plugin_id for routing.
+        
+        Args:
+            device_mac: Plugin device MAC
+            hello_data: Parsed HELLO data with 'plugin_uuid' key
+            sender_ip: Gateway IP that forwarded
+            is_paired: Whether device is already paired
+        """
+        plugin_uuid = hello_data.get('plugin_uuid')
+        plugin_device_type = hello_data.get('plugin_device_type', 0)
+        rssi = hello_data.get('rssi', 0)
+
+        if not plugin_uuid:
+            logger.warning(f"Plugin HELLO from {device_mac} missing UUID")
+            return
+
+        # Lookup plugin by UUID
+        if not self._plugin_manager:
+            logger.warning(f"Plugin manager not available, cannot route plugin device {device_mac}")
+            return
+
+        plugin = self._plugin_manager.get_plugin_by_uuid(plugin_uuid)
+        if not plugin:
+            logger.warning(f"No plugin found for UUID {plugin_uuid}")
+            return
+
+        plugin_id = plugin.get('plugin_id', plugin_uuid)
+        logger.info(f"🔌 Plugin device {device_mac} UUID={plugin_uuid} type={plugin_device_type} plugin={plugin_id}")
+
+        # Check for pending OTA validation (device just rebooted after OTA)
+        session = ota_manager.get_session(device_mac)
+        if session and session.state == OTAState.VALIDATING:
+            expected_version = f"{session.version[0]}.{session.version[1]}.{session.version[2]}"
+            current_version = hello_data.get('version', '0.0.0')
+            if current_version == expected_version:
+                logger.info(f"✅ Plugin OTA validation SUCCESS: {device_mac} now running {current_version}")
+                ota_manager.update_session_state(device_mac, OTAState.COMPLETE, "Firmware validated successfully")
+            else:
+                error_msg = f"Version mismatch: expected {expected_version}, got {current_version}"
+                logger.error(f"❌ Plugin OTA validation FAILED: {device_mac} - {error_msg}")
+                ota_manager.update_session_state(device_mac, OTAState.FAILED, error_msg)
+
+        if not is_paired:
+            try:
+                pairing_mode_active = pairing_manager.is_pairing_allowed(device_mac, DEV_PLUGIN_MARKER, rssi)
+            except Exception:
+                pairing_mode_active = False
+
+            if rssi >= RSSI_AUTO_PAIR_THRESHOLD or pairing_mode_active:
+                # Confirm pairing to device via gateway
+                try:
+                    self._send_pair_confirm(device_mac, sender_ip)
+                except Exception:
+                    logger.exception(f"Failed to send pair confirm to {device_mac}")
+
+                # Bind MAC to plugin id for fast routing
+                try:
+                    self._plugin_manager.bind_mac_to_plugin(device_mac, plugin_id)
+                except Exception:
+                    logger.exception(f"Failed to bind {device_mac} to plugin {plugin_id}")
+
+                device_name = f"Plugin Device"
+                try:
+                    for device in (plugin.get('devices') or []):
+                        if int(device.get('device_type', -1)) == int(plugin_device_type):
+                            manifest_name = str(device.get('name') or '').strip()
+                            if manifest_name:
+                                device_name = manifest_name
+                            break
+                except Exception:
+                    logger.exception(f"Failed to resolve manifest device name for {device_mac}")
+
+                # Record device paired
+                try:
+                    mode = 'long_range' if pairing_mode_active else 'short_range'
+                    pairing_manager.record_device_paired(
+                        device_mac,
+                        f"{plugin_device_type}:{plugin_id}",
+                        f"{device_name} {device_mac[-8:]}",
+                        mode
+                    )
+                    is_paired = True
+                except Exception:
+                    logger.exception(f"Failed to record pairing for {device_mac}")
+            else:
+                logger.info(f"🔌 Plugin device {device_mac} RSSI too weak for auto-pairing: {rssi} dBm")
+        
+        else:
+            # For already paired plugin devices, ensure MAC is bound to plugin for routing
+            try:
+                self._plugin_manager.bind_mac_to_plugin(device_mac, plugin_id)
+            except Exception:
+                logger.exception(f"Failed to bind {device_mac} to plugin {plugin_id}")
+
+        # Dispatch to plugin for post-pairing actions (plugin may ignore unpaired)
+        try:
+            gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
+            self._plugin_manager.dispatch_event('plugin_hello', {
+                'device_mac': device_mac,
+                'plugin_uuid': plugin_uuid,
+                'plugin_device_type': plugin_device_type,
+                'plugin_id': plugin_id,
+                'rssi': rssi,
+                'version': hello_data.get('version'),
+                'platform': hello_data.get('platform'),
+                'sender_ip': sender_ip,
+                'gateway_radio_mac': gateway_radio_mac,
+                'is_paired': is_paired,
+            })
+        except Exception:
+            logger.exception(f"Failed to dispatch plugin_hello for {device_mac} to plugin {plugin_id}")
+    
     def _handle_button_event(self, button_mac: str, payload: bytes, sender_ip: str):
         """Handle button event.
         
@@ -2082,7 +2257,7 @@ class NetworkServer:
         if self._send_packet_to_gateway(gateway_ip, packet):
             logger.debug(f"Sent PAIR_CONFIRM to {target_mac} via {gateway_ip}")
     
-    def _send_with_fallback(self, target_mac: str, packet: bytes, wait_for_delivery: bool = True, msg_id: Optional[int] = None) -> bool:
+    def _send_with_fallback(self, target_mac: str, packet: bytes, wait_for_delivery: bool = True, msg_id: Optional[int] = None, gateway_preference: Optional[str] = None) -> bool:
         """Send packet to device with automatic gateway failover.
         
         Centralized function for all message sending with smart routing:
@@ -2125,12 +2300,13 @@ class NetworkServer:
         
         # Target is a device - use smart routing with fallback.
         # Prefer the last successful/seen gateway based on device type.
-        gateway_mac = None
+        gateway_mac = gateway_preference
 
         # Lightstrip routing preference
-        _, light_gateway_mac = device_manager.get_light_gateway(target_mac)
-        if light_gateway_mac:
-            gateway_mac = light_gateway_mac
+        if not gateway_mac:
+            _, light_gateway_mac = device_manager.get_light_gateway(target_mac)
+            if light_gateway_mac:
+                gateway_mac = light_gateway_mac
 
         # Button/remote routing preference
         if not gateway_mac:
@@ -2686,13 +2862,14 @@ class NetworkServer:
         except Exception as e:
             logger.error(f"Failed to parse ping device response: {e}")
     
-    def start_ota_update(self, device_mac: str, device_type: int, firmware_path: str) -> bool:
+    def start_ota_update(self, device_mac: str, device_type: int, firmware_path: str, gateway_preference: Optional[str] = None) -> bool:
         """Start OTA firmware update for a device.
         
         Args:
             device_mac: Target device MAC address
             device_type: Device type constant
             firmware_path: Path to firmware binary file
+            gateway_preference: Preferred gateway MAC (e.g., plugin device's last_seen_gateway)
             
         Returns:
             True if OTA initiated successfully, False otherwise
@@ -2702,6 +2879,9 @@ class NetworkServer:
         if not session:
             logger.error(f"Failed to create OTA session for {device_mac}")
             return False
+        
+        # Store gateway preference on session so chunk transfer can use it
+        session.preferred_gateway_mac = gateway_preference
         
         try:
             # Generate message ID
@@ -2741,8 +2921,8 @@ class NetworkServer:
                     ota_manager.update_session_state(device_mac, OTAState.FAILED, "Failed to send OTA_NOTIFY to gateway")
                     return False
             else:
-                # Send via gateway mesh (no delivery tracking - device responds with PKT_OTA_READY instead)
-                success = self._send_with_fallback(device_mac, packet, wait_for_delivery=False)
+                # Send via gateway mesh with last-known gateway preference (no delivery tracking)
+                success = self._send_with_fallback(device_mac, packet, wait_for_delivery=False, gateway_preference=gateway_preference)
                 if not success:
                     ota_manager.update_session_state(device_mac, OTAState.FAILED, "Failed to send OTA_NOTIFY")
                     return False
@@ -3015,6 +3195,10 @@ class NetworkServer:
                                 sensor = device_manager.get_door_sensor_by_mac(device_mac)
                                 if sensor:
                                     gateway_mac = sensor.get('last_seen_gateway')
+
+                            # Plugin device preferred gateway (stored in session)
+                            if not gateway_mac:
+                                gateway_mac = session.preferred_gateway_mac
 
                             if gateway_mac:
                                 with self._gateway_lock:

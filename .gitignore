@@ -70,6 +70,7 @@ data.old-*/
 data/
 release/
 **/.DS_Store
+plugins/
 
 # KiCad (Hardware-designs): ignore backups, autosaves, and local/cache files
 Hardware-designs/**/_autosave-*

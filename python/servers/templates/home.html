@@ -191,6 +191,22 @@
                 </div>
             </a>
 
+            {%- if plugin_home_boxes %}
+            {%- for box in plugin_home_boxes %}
+
+            <a href="{{ box.link }}" class="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border-2 border-transparent hover:border-[{{ box.color }}]">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-[{{ box.color }}]/15 to-transparent rounded-full transform translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-500"></div>
+                <div class="relative">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-[{{ box.color }}]/20 to-[{{ box.color }}]/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <i class="fas {{ box.icon }} text-2xl text-[{{ box.color }}]"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-900 mb-2">{{ box.name }}</h3>
+                    <p class="text-sm text-gray-500">{{ box.description }}</p>
+                </div>
+            </a>
+            {%- endfor %}
+            {%- endif %}
+
         </div>
     </div>
 

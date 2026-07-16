@@ -53,11 +53,23 @@ class PairingManager:
                     'motion': DEV_MOTION,
                     'door': DEV_DOOR
                 }
-                self._allowed_types = [type_map[t.lower()] for t in device_types if t.lower() in type_map]
+                allowed_types = []
+                for device_type in device_types:
+                    if isinstance(device_type, int):
+                        allowed_types.append(device_type)
+                        continue
+
+                    normalized_type = str(device_type).strip().lower()
+                    if normalized_type in type_map:
+                        allowed_types.append(type_map[normalized_type])
+                    elif normalized_type.isdigit():
+                        allowed_types.append(int(normalized_type))
+
+                self._allowed_types = allowed_types
             else:
                 self._allowed_types = []  # All types allowed
             
-            type_str = ', '.join(device_types) if device_types else 'all devices'
+            type_str = ', '.join(str(t) for t in device_types) if device_types else 'all devices'
             logger.info(f"Pairing mode started for {duration}s ({type_str})")
     
     def stop_pairing(self):
@@ -236,7 +248,7 @@ class PairingManager:
                 logger.info(f"Removed device {device_mac} from paired devices history")
                 return True
             else:
-                logger.warning(f"Device {device_mac} not found in paired devices history")
+                logger.debug(f"Device {device_mac} not found in paired devices history")
                 return False
     
     def _load_paired_devices(self):

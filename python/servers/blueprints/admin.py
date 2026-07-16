@@ -6,11 +6,13 @@ Also manages HOME_ID operations.
 
 from flask import Blueprint, request, jsonify, send_from_directory, render_template
 import os
+import subprocess
 import threading
 from werkzeug.utils import secure_filename
 from services.backup_manager import backup_manager
 from services.home_id_manager import home_id_manager
 from services.config_manager import config_manager
+from services.plugin_install_service import plugin_install_service
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -19,6 +21,236 @@ admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 def settings_page():
     """Render the settings page."""
     return render_template('settings.html')
+
+
+@admin_bp.route('/plugins')
+def plugins_page():
+    """Render plugin management dashboard."""
+    return render_template('admin_plugins.html')
+
+
+@admin_bp.route('/api/plugins', methods=['GET'])
+def list_plugins():
+    """List currently registered plugins with install metadata."""
+    try:
+        plugins = plugin_install_service.list_plugins()
+        return jsonify({
+            'success': True,
+            'plugins': plugins,
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'plugins': [],
+        }), 500
+
+
+@admin_bp.route('/api/plugins/install', methods=['POST'])
+def install_plugin_from_repo():
+    """Install a plugin from a GitHub repository URL."""
+    try:
+        data = request.get_json(silent=True) or {}
+        repo_url = str(data.get('repo_url') or '').strip()
+        branch = str(data.get('branch') or '').strip() or None
+
+        if not repo_url:
+            return jsonify({
+                'success': False,
+                'error': 'repo_url is required',
+            }), 400
+
+        # Start install in background and return an install id for polling
+        result = plugin_install_service.install_from_repo(repo_url=repo_url, branch=branch)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 400
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 500
+
+
+@admin_bp.route('/api/plugins/install/status/<install_id>', methods=['GET'])
+def install_status(install_id: str):
+    """Return status and logs for an ongoing or completed install session."""
+    try:
+        status = plugin_install_service.get_install_status(install_id)
+        return jsonify({
+            'success': True,
+            'status': status,
+        })
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 404
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 500
+
+
+@admin_bp.route('/api/plugins/uninstall', methods=['POST'])
+def uninstall_plugin():
+    """Uninstall a plugin and clean related registry/binding/history entries."""
+    try:
+        data = request.get_json(silent=True) or {}
+        plugin_identifier = str(data.get('plugin_id') or data.get('id') or '').strip()
+        if not plugin_identifier:
+            return jsonify({
+                'success': False,
+                'error': 'plugin_id or id is required',
+            }), 400
+
+        result = plugin_install_service.uninstall_plugin(plugin_identifier)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 400
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 500
+
+
+@admin_bp.route('/api/plugins/enable', methods=['POST'])
+def toggle_plugin_enabled():
+    """Enable/disable a plugin entry in plugins.json."""
+    try:
+        data = request.get_json(silent=True) or {}
+        plugin_identifier = str(data.get('plugin_id') or data.get('id') or '').strip()
+        enabled = bool(data.get('enabled', False))
+
+        if not plugin_identifier:
+            return jsonify({
+                'success': False,
+                'error': 'plugin_id or id is required',
+            }), 400
+
+        result = plugin_install_service.set_enabled(plugin_identifier, enabled)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 400
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 500
+
+@admin_bp.route('/api/plugins/official', methods=['GET'])
+def list_official_plugins():
+    """Return curated list of official plugins available for one-click install."""
+    official = [
+        {
+            "name": "Temperature Tracking",\
+            "id": "temperature_tracking",
+            "description": "Monitor and log temperature sensor data from your HueMix-Link devices.",
+            "repo_url": "https://github.com/Mathimix7/HueMixLink-Temperature",
+            "branch": "main",
+            "icon": "thermometer-half",
+            "color": "emerald",
+        }
+    ]
+    # Enrich with already-installed status
+    installed_ids = {
+        p.get("source_repo")
+        for p in plugin_install_service.list_plugins()
+    }
+
+    for plugin in official:
+        plugin["installed"] = any(
+            pid in installed_ids for pid in [plugin.get("repo_url")]
+        )
+    return jsonify({"success": True, "plugins": official})
+
+
+@admin_bp.route('/api/plugins/updates', methods=['GET'])
+def check_all_plugin_updates():
+    """Check all plugins for available updates."""
+    try:
+        results = plugin_install_service.check_all_plugins_for_updates()
+        return jsonify({
+            "success": True,
+            "results": results,
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "results": [],
+        }), 500
+
+
+@admin_bp.route('/api/plugins/update', methods=['POST'])
+def update_plugin():
+    """Update a plugin to its latest GitHub release version."""
+    try:
+        data = request.get_json(silent=True) or {}
+        plugin_identifier = str(data.get('plugin_id') or data.get('id') or '').strip()
+        release_tag = str(data.get('release_tag') or '').strip() or None
+
+        if not plugin_identifier:
+            return jsonify({
+                'success': False,
+                'error': 'plugin_id or id is required',
+            }), 400
+
+        result = plugin_install_service.update_plugin(plugin_identifier, release_tag=release_tag)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 400
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 500
+
+
+@admin_bp.route('/api/service/check', methods=['GET'])
+def check_service():
+    """Check if the systemd service exists and can be restarted."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "huemix-link"],
+            capture_output=True, text=True, timeout=10
+        )
+        stdout = (result.stdout or "").strip()
+        service_exists = stdout in ("active", "inactive", "failed") or result.returncode == 0
+        service_active = stdout == "active"
+        return jsonify({
+            "success": True,
+            "service_exists": service_exists,
+            "service_active": service_active,
+            "can_restart": service_exists,
+        })
+    except FileNotFoundError:
+        return jsonify({
+            "success": True,
+            "service_exists": False,
+            "service_active": False,
+            "can_restart": False,
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+        }), 500
+
 
 @admin_bp.route('/api/dev-mode', methods=['GET'])
 def get_dev_mode():

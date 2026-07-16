@@ -12,7 +12,7 @@ from constants import (
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_MOTION_EVENT,
     PKT_PING_DEVICE, PKT_PING,
     PKT_OTA_NOTIFY, PKT_OTA_READY, PKT_OTA_CHUNK, PKT_OTA_CHUNK_ACK, PKT_OTA_COMPLETE, PKT_OTA_ABORT, PKT_OTA_CHECKPOINT_REQ,
-    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR,
+    DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, DEV_PLUGIN_MARKER,
     FNV_OFFSET_BASIS, FNV_PRIME, FNV_MASK, OTA_CHUNK_DATA_SIZE
 )
 from services.home_id_manager import home_id_manager
@@ -549,8 +549,8 @@ class PacketDecoder:
         payload_for_hash = bytearray(payload)
         if pkt_type == PKT_HELLO:
             dev_type = struct.unpack("<B", payload[0:1])[0]
-            if dev_type in (DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR):
-                payload_for_hash[1] = 0  # Zero out RSSI byte for signature validation
+            if dev_type != DEV_GATEWAY:
+                payload_for_hash[1] = 0
         elif pkt_type == PKT_PING_DEVICE:
             payload_for_hash[0] = 0  # Zero out RSSI byte for signature validation
         
@@ -611,6 +611,25 @@ class PacketDecoder:
         dev_type = struct.unpack("<B", payload[0:1])[0]
         result = {'device_type': dev_type}
         
+        # Handle plugin device type marker (unpaired plugin device with UUID)
+        if dev_type == DEV_PLUGIN_MARKER and len(payload) >= 24:
+            # Plugin HELLO format:
+            # payload[0] = 0xFE (DEV_PLUGIN_MARKER)
+            # payload[1] = RSSI
+            # payload[2:18] = plugin_uuid (16 bytes)
+            # payload[18] = plugin_device_type (plugin-scoped, 0-255)
+            # payload[19:23] = version (major, minor, patch, build)
+            result['plugin_uuid'] = payload[2:18].hex()
+            result['plugin_device_type'] = struct.unpack("<B", payload[18:19])[0]
+            result['rssi'] = MACFormatter.parse_rssi(payload[1])
+            
+            if len(payload) >= 23:
+                major, minor, patch, build = struct.unpack("<BBBB", payload[19:23])
+                result['version'] = f"{major}.{minor}.{patch}"
+                result['platform'] = 'esp8266' if build == 1 else 'esp32'
+            
+            return result
+        
         if dev_type == DEV_GATEWAY and len(payload) >= 15:
             # Gateway: radio MAC at bytes 1-7, net version at bytes 7-11, radio version at bytes 11-15
             result['radio_mac'] = MACFormatter.to_string(payload[1:7])
@@ -655,7 +674,7 @@ class PacketDecoder:
             result['rssi'] = MACFormatter.parse_rssi(payload[1])
             result['platform'] = 'esp8266' if (platform_byte & 0x01) == 0x01 else 'esp32'
             result['battery_type'] = 'cr123a' if (platform_byte & 0x80) == 0x80 else 'li_ion'
-        
+
         elif dev_type == DEV_LIGHT and len(payload) >= 9:
             # Light: type(1) + RSSI(1) + RGBW(1) + LED_COUNT(2) + version(3) + platform(1) + model_id(2)
             result['rssi'] = MACFormatter.parse_rssi(payload[1])

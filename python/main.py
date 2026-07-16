@@ -5,9 +5,10 @@ from servers.flask_server import app
 from services import config_manager, data_manager
 from services.home_id_manager import home_id_manager
 from services.automation_service import automation_service
+from services.plugin_manager import plugin_manager
 from network.network_server import network_server
 from network.pairing_manager import pairing_manager
-from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY, DEFAULT_WEB_PORT, FILE_MOTION_SENSORS, FILE_DOOR_SENSORS
+from constants import FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_GATEWAYS, FILE_BRIDGE, FILE_PAIRING_HISTORY, DEFAULT_WEB_PORT, FILE_MOTION_SENSORS, FILE_DOOR_SENSORS, FILE_PLUGINS
 from waitress import serve
 from services.hue_config_sync import sync_device_configs_with_hue
 
@@ -25,6 +26,7 @@ if __name__ == '__main__':
             FILE_PAIRING_HISTORY: [],
             FILE_MOTION_SENSORS: [],
             FILE_DOOR_SENSORS: [],
+            FILE_PLUGINS: {'plugins': []},
         }
 
         for fname, default_content in defaults.items():
@@ -52,6 +54,7 @@ if __name__ == '__main__':
         network_server.set_pairing_handler(
             lambda mac, dev_type, rssi: pairing_manager.is_pairing_allowed(mac, dev_type, rssi)
         )
+        network_server.set_plugin_manager(plugin_manager)
         
         network_server.start()
         
@@ -66,6 +69,22 @@ if __name__ == '__main__':
             sync_device_configs_with_hue()
         except Exception as e:
             logger.error(f"Error during startup Hue config sync: {e}", exc_info=True)
+
+        # Load optional plugins after the core services are ready.
+        logger.info("Loading optional plugins...")
+        plugin_context = plugin_manager.create_host(
+            app=app,
+            config_manager=config_manager,
+            data_manager=data_manager,
+            pairing_manager=pairing_manager,
+            network_server=network_server,
+            packet_transport=network_server,
+            automation_service=automation_service,
+            home_id_manager=home_id_manager,
+            plugin_manager=plugin_manager,
+            logger=logger,
+        )
+        plugin_manager.load_enabled_plugins(plugin_context)
         
         # Start Flask web server (blocking) — bind to localhost only; proxy will expose externally
         logger.info(f"Starting Flask web server on port {DEFAULT_WEB_PORT} (127.0.0.1)...")
@@ -77,6 +96,11 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"Error starting servers: {e}", exc_info=True)
     finally:
+        try:
+            plugin_manager.stop_loaded_plugins(plugin_context if 'plugin_context' in locals() else None)
+        except Exception as e:
+            logger.error(f"Error stopping plugins: {e}")
+
         try:
             automation_service.stop()
         except Exception as e:

@@ -10,6 +10,7 @@ This package contains services that manage application state:
 - HueStateManager: Manages Hue bridge state
 - HueSSEListener: Listens to Hue bridge SSE events
 - AutomationService: Manages automation engine lifecycle
+- PluginManager: Loads optional plugins and their lifecycle hooks
 
 These are initialized as singletons and used throughout the application.
 """
@@ -21,6 +22,7 @@ from .hue_service import HueService, hue_service
 from .hue_state_manager import HueStateManager, hue_state_manager
 from .hue_sse_listener import HueSSEListener, hue_sse_listener
 from .automation_service import AutomationService, automation_service
+from .plugin_manager import PluginManager, plugin_manager
 
 # Export both classes and singleton instances
 __all__ = [
@@ -31,4 +33,5 @@ __all__ = [
     'HueStateManager', 'hue_state_manager',
     'HueSSEListener', 'hue_sse_listener',
     'AutomationService', 'automation_service',
+    'PluginManager', 'plugin_manager',
 ]

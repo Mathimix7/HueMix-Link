@@ -196,7 +196,8 @@ async function loadPairedDevices() {
                     5: '📡',  // Motion Sensor
                     6: '🚪'  // Door Sensor
                 };
-                const icon = typeIcons[device.type] || '❓';
+                // Use icon from API response if available (plugin devices), otherwise use type mapping
+                const icon = device.icon || typeIcons[device.type] || '❓';
                 
                 // Format date
                 const pairedDate = new Date(device.paired_date);
@@ -220,7 +221,12 @@ async function loadPairedDevices() {
                     5: '/motion-sensors', // Motion Sensor
                     6: '/door-sensors' // Door Sensor
                 };
-                const configUrl = configUrls[device.type] || '#';
+                let configUrl = configUrls[device.type] || '#';
+                
+                // For plugin devices with device_capabilities, extract plugin path
+                if (device.device_capabilities && device.device_capabilities.configure_endpoint) {
+                    configUrl = device.device_capabilities.configure_endpoint;
+                }
                 
                 return `
                     <div class="border border-gray-200 rounded-lg p-4 hover:border-green-300 transition">
@@ -242,18 +248,18 @@ async function loadPairedDevices() {
                                     <div class="text-xs text-gray-500">${timeStr}</div>
                                 </div>
                                 <div class="flex gap-2">
-                                    <button onclick="openRenameModal('${device.id || ''}', '${device.name.replace(/'/g, "\\'").replace(/"/g, '&quot;')}', ${device.type})" 
-                                            class="p-2 text-green-600 hover:bg-green-50 rounded-lg transition"
+                                    <button onclick="openRenameModal('${device.id || ''}', '${device.name.replace(/'/g, "\\'").replace(/"/g, '&quot;')}', '${device.type}')" 
+                                            class="p-2 ${configUrl === '#' ? 'text-green-600/50 cursor-not-allowed' : "text-green-600 hover:bg-green-50"} rounded-lg transition"
                                             title="Rename device">
                                         <i class="fas fa-edit"></i>
                                     </button>
-                                    <a href="${configUrl}" 
-                                       class="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                                    <a href="${configUrl === '#' ? "javascript:void(0);" : configUrl}" 
+                                       class="p-2 ${configUrl === '#' ? 'text-blue-600/50 cursor-not-allowed' : "text-blue-600 hover:bg-blue-50"} rounded-lg transition"
                                        title="Configure device">
                                         <i class="fas fa-cog"></i>
                                     </a>
-                                    <button onclick="deletePairedDevice('${device.id || ''}', '${device.mac}', '${device.name.replace(/'/g, "\\'").replace(/"/g, '&quot;')}', ${device.type})" 
-                                            class="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                                    <button onclick="deletePairedDevice('${device.id || ''}', '${device.mac}', '${device.name.replace(/'/g, "\\'").replace(/"/g, '&quot;')}', '${device.type}')" 
+                                            class="p-2 ${configUrl === '#' ? 'text-red-600/50 cursor-not-allowed' : "text-red-600 hover:bg-red-50"} rounded-lg transition"
                                             title="Delete device">
                                         <i class="fas fa-trash"></i>
                                     </button>
@@ -311,32 +317,46 @@ async function confirmRename() {
     }
     
     try {
-        // Determine the endpoint based on device type
+        // First, find the device object to check for plugin capabilities
+        const response = await fetch('/api/pairing/devices');
+        const data = await response.json();
+        let device = null;
+        
+        if (data.success && data.devices) {
+            device = data.devices.find(d => d.id === renameDeviceId);
+        }
+        
+        // Determine the endpoint based on device capabilities or type
         let endpoint = '';
         let method = 'POST';
         let body = {};
         
-        if (renameDeviceType === 1) { // Gateway
+        // Check if device has plugin capabilities
+        if (device && device.device_capabilities && device.device_capabilities.rename_endpoint) {
+            endpoint = device.device_capabilities.rename_endpoint.replace('{device_id}', renameDeviceId);
+            method = 'POST';
+            body = { name: newName };
+        } else if (renameDeviceType === '1') { // Gateway
             endpoint = `/gateways/api/gateways/${renameDeviceId}`;
             method = 'PUT';
             body = { name: newName };
-        } else if (renameDeviceType === 2) { // Button
+        } else if (renameDeviceType === '2') { // Button
             endpoint = `/buttons/api/devices/${renameDeviceId}/rename`;
             method = 'POST';
             body = { name: newName };
-        } else if (renameDeviceType === 3) { // Lightstrip
+        } else if (renameDeviceType === '3') { // Lightstrip
             endpoint = `/lightstrips/api/lightstrips/${renameDeviceId}`;
             method = 'PUT';
             body = { name: newName };
-        } else if (renameDeviceType === 4) { // Remote
+        } else if (renameDeviceType === '4') { // Remote
             endpoint = `/buttons/api/devices/${renameDeviceId}/rename`;
             method = 'POST';
             body = { name: newName };
-        } else if (renameDeviceType === 5) { // Motion Sensor
+        } else if (renameDeviceType === '5') { // Motion Sensor
             endpoint = `/motion-sensors/api/devices/${renameDeviceId}/rename`;
             method = 'POST';
             body = { name: newName };
-        } else if (renameDeviceType === 6) { // Door Sensor
+        } else if (renameDeviceType === '6') { // Door Sensor
             endpoint = `/door-sensors/api/devices/${renameDeviceId}/rename`;
             method = 'POST';
             body = { name: newName };
@@ -345,20 +365,20 @@ async function confirmRename() {
             return;
         }
         
-        const response = await fetch(endpoint, {
+        const renameResponse = await fetch(endpoint, {
             method: method,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
         
-        const data = await response.json();
+        const renameData = await renameResponse.json();
         
-        if (data.success) {
+        if (renameData.success) {
             showToast('Success', `Device renamed to "${newName}"`, 'success');
             closeRenameModal();
             loadPairedDevices();
         } else {
-            showToast('Error', 'Failed to rename device: ' + (data.error || 'Unknown error'), 'error');
+            showToast('Error', 'Failed to rename device: ' + (renameData.error || 'Unknown error'), 'error');
         }
     } catch (error) {
         console.error('Error renaming device:', error);
@@ -393,19 +413,32 @@ async function confirmDelete() {
     }
     
     try {
-        // Determine the endpoint based on device type
+        // First, find the device object to check for plugin capabilities
+        const response = await fetch('/api/pairing/devices');
+        const data = await response.json();
+        let device = null;
+        
+        if (data.success && data.devices) {
+            device = data.devices.find(d => d.id === deleteDeviceId);
+        }
+        
+        // Determine the endpoint based on device capabilities or type
         let endpoint = '';
-        if (deleteDeviceType === 1) { // Gateway
+        
+        // Check if device has plugin capabilities
+        if (device && device.device_capabilities && device.device_capabilities.delete_endpoint) {
+            endpoint = device.device_capabilities.delete_endpoint.replace('{device_id}', deleteDeviceId);
+        } else if (deleteDeviceType === '1') { // Gateway
             endpoint = `/gateways/api/gateways/${deleteDeviceId}`;
-        } else if (deleteDeviceType === 2) { // Button
+        } else if (deleteDeviceType === '2') { // Button
             endpoint = `/buttons/api/devices/${deleteDeviceId}`;
-        } else if (deleteDeviceType === 3) { // Lightstrip
+        } else if (deleteDeviceType === '3') { // Lightstrip
             endpoint = `/lightstrips/api/lightstrips/${deleteDeviceId}`;
-        } else if (deleteDeviceType === 4) { // Remote
+        } else if (deleteDeviceType === '4') { // Remote
             endpoint = `/buttons/api/devices/${deleteDeviceId}`;
-        } else if (deleteDeviceType === 5) { // Motion Sensor
+        } else if (deleteDeviceType === '5') { // Motion Sensor
             endpoint = `/motion-sensors/api/devices/${deleteDeviceId}`;
-        } else if (deleteDeviceType === 6) { // Door Sensor
+        } else if (deleteDeviceType === '6') { // Door Sensor
             endpoint = `/door-sensors/api/devices/${deleteDeviceId}`;
         } else {
             showToast('Error', `Unsupported device type: ${deleteDeviceType}`, 'error');
@@ -413,14 +446,14 @@ async function confirmDelete() {
             return;
         }
         
-        const response = await fetch(endpoint, {
+        const deleteResponse = await fetch(endpoint, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' }
         });
         
-        const data = await response.json();
+        const deleteData = await deleteResponse.json();
         
-        if (data.success) {
+        if (deleteData.success) {
             // Also remove from pairing history
             if (deleteDeviceMac) {
                 try {
@@ -438,7 +471,7 @@ async function confirmDelete() {
             // Reload the list
             loadPairedDevices();
         } else {
-            showToast('Error', 'Failed to delete device: ' + (data.error || 'Unknown error'), 'error');
+            showToast('Error', 'Failed to delete device: ' + (deleteData.error || 'Unknown error'), 'error');
             closeDeleteModal();
         }
     } catch (error) {

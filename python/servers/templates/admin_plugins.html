@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block title %}Plugins - HueMix-Link{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/plugins_admin.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="mb-8">
+        <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-emerald-700 to-cyan-600 bg-clip-text text-transparent mb-1">
+                    Plugin Manager
+                </h1>
+                <p class="text-gray-600">Install and manage external plugin repositories for HueMix-Link core.</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <button type="button" id="check-updates-btn" class="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors inline-flex items-center">
+                    <i id="check-updates-icon" class="fas fa-cloud-arrow-down mr-2"></i><span id="check-updates-text">Check Updates</span>
+                </button>
+                <button type="button" id="refresh-plugins-btn" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors inline-flex items-center">
+                    <i id="refresh-icon" class="fas fa-sync-alt mr-2 transition-transform duration-500"></i>Refresh
+                </button>
+                <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                    <i class="fas fa-arrow-left mr-2"></i>Back to Home
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div class="xl:col-span-2 space-y-6">
+            <section class="bg-white rounded-xl shadow-md p-6">
+                <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-200">
+                    <i class="fas fa-puzzle-piece text-emerald-600 mr-2"></i>Installed Plugins
+                </h2>
+                <div id="plugins-empty" class="hidden py-12 text-center text-gray-500">
+                    <i class="fas fa-box-open text-3xl mb-3 text-gray-300"></i>
+                    <p>No plugins installed yet.</p>
+                </div>
+                <div id="plugins-list" class="space-y-3"></div>
+            </section>
+
+            <section class="bg-white rounded-xl shadow-md p-6">
+                <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-200">
+                    <i class="fas fa-star text-amber-500 mr-2"></i>Official Plugins
+                </h2>
+                <p class="text-sm text-gray-600 mb-4">One-click install of curated HueMix-Link plugins.</p>
+                <div id="official-plugins-list" class="space-y-3">
+                    <div class="p-4 text-sm text-gray-500">Loading official plugins...</div>
+                </div>
+            </section>
+        </div>
+
+        <div class="space-y-6">
+            <section class="bg-white rounded-xl shadow-md p-6">
+                <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-200">
+                    <i class="fas fa-download text-emerald-600 mr-2"></i>Install From GitHub
+                </h2>
+                <form id="install-plugin-form" class="space-y-4">
+                    <div>
+                        <label for="repo-url" class="block text-sm font-medium text-gray-700 mb-1">Repository URL</label>
+                        <input id="repo-url" type="url" placeholder="https://github.com/owner/repo"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent" required>
+                    </div>
+                    <div>
+                        <label for="repo-branch" class="block text-sm font-medium text-gray-700 mb-1">Branch (optional)</label>
+                        <input id="repo-branch" type="text" placeholder="main"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent">
+                    </div>
+                    <button type="submit" id="install-plugin-btn"
+                            class="w-full px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium">
+                        <i class="fas fa-plus mr-2"></i>Install Plugin
+                    </button>
+                </form>
+            </section>
+
+            <section id="restart-section" class="bg-white rounded-xl shadow-md p-6 border border-amber-200 hidden">
+                <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-amber-200">
+                    <i class="fas fa-rotate-right text-amber-600 mr-2"></i>Restart Required
+                </h2>
+                <div class="flex items-start gap-3 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                    <i class="fas fa-exclamation-triangle text-amber-500 mt-0.5"></i>
+                    <p class="text-sm text-amber-800">
+                        Plugin changes will not take effect until the service is reloaded. Restart the server to apply all pending changes.
+                    </p>
+                </div>
+                <div id="restart-service-info" class="hidden mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <div class="flex items-start gap-3">
+                        <i class="fas fa-times-circle text-red-500 mt-0.5"></i>
+                        <div>
+                            <p class="text-sm font-medium text-red-800">Unable to restart automatically</p>
+                            <p class="text-sm text-red-700 mt-1">The systemd service was not detected. Please manually restart the HueMix-Link service or the server machine.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex flex-wrap gap-3">
+                    <button type="button" id="restart-server-btn" class="px-4 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-medium inline-flex items-center">
+                        <i class="fas fa-rotate-right mr-2"></i>Restart Server
+                    </button>
+                </div>
+            </section>
+        </div>
+    </div>
+</div>
+
+<div id="confirm-modal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen px-4">
+        <div class="fixed inset-0 transition-opacity bg-gray-900/60" onclick="closeConfirmModal()"></div>
+        <div class="relative bg-white rounded-lg overflow-hidden shadow-xl sm:max-w-lg sm:w-full z-10">
+            <div class="px-5 pt-5 pb-4">
+                <h3 class="text-lg font-semibold text-gray-900" id="confirm-title">Confirm</h3>
+                <p class="text-sm text-gray-600 mt-2" id="confirm-message"></p>
+            </div>
+            <div class="bg-gray-50 px-5 py-3 flex justify-end gap-2">
+                <button type="button" onclick="closeConfirmModal()" class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
+                    Cancel
+                </button>
+                <button type="button" id="confirm-action-btn" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="install-progress-modal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen px-4">
+        <div class="fixed inset-0 transition-opacity bg-gray-900/60" onclick="closeInstallProgressModal()"></div>
+        <div class="relative bg-white rounded-lg overflow-hidden shadow-xl sm:max-w-2xl sm:w-full z-10">
+            <div class="px-5 pt-5 pb-4">
+                <h3 class="text-lg font-semibold text-gray-900" id="install-progress-title">Plugin Operation</h3>
+                <p class="text-sm text-gray-600 mt-2" id="install-progress-status">Starting...</p>
+            </div>
+            <div class="px-5 pb-4">
+                <pre id="install-progress-log" class="h-56 overflow-auto text-xs p-3 bg-gray-100 rounded-md"></pre>
+            </div>
+            <div class="bg-gray-50 px-5 py-3 flex justify-end gap-2">
+                <button type="button" onclick="closeInstallProgressModal()" id="install-progress-close" class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/plugins_admin.js') }}"></script>
+{% endblock %}

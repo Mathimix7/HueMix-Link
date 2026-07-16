@@ -1578,7 +1578,7 @@ class AutomationEngine:
         )
 
         logger.debug(
-            f"Brightness analysis for {room_id}: delta={brightness_delta:.2f}%, "
+            f"Brightness analysis for {room_id}: delta={f'{brightness_delta:.2f}' if brightness_delta is not None else 'N/A'}%, "
             f"lights_changed={lights_change_percent:.1f}%, has_active_timer={has_active_timer}, "
             f"has_recent_motion={has_recent_motion_activity}, ignore_motion={ignore_for_recent_motion}, "
             f"ignore_active_timer={ignore_for_active_timer}, ignore_small_lights={ignore_for_small_lights_change}, "
@@ -1603,7 +1603,7 @@ class AutomationEngine:
         elif ignore_for_small_delta:
             logger.debug(
                 f"Ignoring minor brightness-only room update for {room_id}: "
-                f"delta={brightness_delta:.2f}% < {self._manual_brightness_cancel_threshold:.2f}%"
+                f"delta={f'{brightness_delta:.2f}' if brightness_delta is not None else 'N/A'}% < {self._manual_brightness_cancel_threshold:.2f}%"
             )
 
         if should_cancel_motion_timers:

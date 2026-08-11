@@ -321,6 +321,56 @@ function testBridge() {
     });
 }
 
+let touchlinkCooldownInterval = null;
+
+function enableTouchlink() {
+    const button = document.getElementById('touchlink-button');
+    if (button.disabled) return;
+
+    startTouchlinkCooldown(button);
+
+    fetch('/bridge/api/bridge/touchlink', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Touchlink Enabled!', data.message || 'Touchlink is now active for 30 seconds. Bring the lamp close to the bridge.', 'success');
+        } else {
+            showToast('Touchlink Failed', data.error || 'Unable to enable touchlink', 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Touchlink error:', err);
+        showToast('Touchlink Failed', 'Connection error occurred', 'error');
+    });
+}
+
+function startTouchlinkCooldown(button) {
+    const originalHtml = button.innerHTML;
+    let remaining = 30;
+
+    button.disabled = true;
+    button.classList.add('opacity-50', 'cursor-not-allowed');
+    button.innerHTML = '<i class="fas fa-bolt mr-2"></i>Enable Touchlink <span id="touchlink-cooldown">30</span>s';
+
+    touchlinkCooldownInterval = setInterval(() => {
+        remaining--;
+        const countdownEl = document.getElementById('touchlink-cooldown');
+        if (countdownEl) {
+            countdownEl.textContent = remaining;
+        }
+
+        if (remaining <= 0) {
+            clearInterval(touchlinkCooldownInterval);
+            touchlinkCooldownInterval = null;
+            button.disabled = false;
+            button.classList.remove('opacity-50', 'cursor-not-allowed');
+            button.innerHTML = originalHtml;
+        }
+    }, 1000);
+}
+
 function showReconfigureModal() {
     document.getElementById('reconfigure-modal').classList.remove('hidden');
 }

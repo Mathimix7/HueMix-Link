@@ -190,3 +190,40 @@ class BridgeController:
                 }
         except requests.exceptions.RequestException as e:
             return {'success': False, 'error': f'Connection failed: {str(e)}'}
+    
+    def enable_touchlink(self, timeout=10):
+        """Enable Touchlink on the Hue bridge (adds the closest lamp to the network)"""
+        if not self.config:
+            return {'success': False, 'error': 'Bridge not configured'}
+        
+        try:
+            response = requests.put(
+                f"https://{self.config['ip']}/api/{self.config['username']}/config",
+                json={'touchlink': True},
+                timeout=timeout,
+                verify=False
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                if isinstance(result, list) and len(result) > 0:
+                    first_result = result[0]
+                    
+                    if 'success' in first_result:
+                        return {
+                            'success': True,
+                            'message': 'Touchlink enabled! Bring the lamp close to the bridge within 30 seconds.'
+                        }
+                    
+                    elif 'error' in first_result:
+                        error = first_result['error']
+                        return {
+                            'success': False,
+                            'error': error.get('description', 'Unknown error')
+                        }
+            
+            return {'success': False, 'error': 'Unexpected response from bridge'}
+        
+        except requests.exceptions.RequestException as e:
+            return {'success': False, 'error': f'Connection failed: {str(e)}'}

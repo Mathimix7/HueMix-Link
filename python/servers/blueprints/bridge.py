@@ -90,3 +90,9 @@ def test_bridge():
     """Test the bridge connection"""
     result = bridge_controller.test_connection()
     return jsonify(result)
+
+@bridge_bp.route('/api/bridge/touchlink', methods=['POST'])
+def enable_touchlink():
+    """Enable Touchlink on the Hue bridge"""
+    result = bridge_controller.enable_touchlink()
+    return jsonify(result)

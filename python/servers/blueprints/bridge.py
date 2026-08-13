@@ -28,13 +28,6 @@ def verify_bridge():
         return jsonify({'success': False, 'error': 'IP address required'})
     
     result = bridge_controller.verify_bridge(ip)
-    result = {
-                    'success': True,
-                    'bridge': {
-                        'ip': ip,
-                        'verified': True
-                    }
-                }
     return jsonify(result)
 
 @bridge_bp.route('/api/bridge/pair', methods=['POST'])

@@ -149,6 +149,110 @@ def get_room_scenes(room_id):
         }), 200
 
 
+@api_bp.route('/groups', methods=['GET'])
+def get_groups():
+    """Get all rooms and zones from state manager with their scenes.
+
+    Used by device configuration pages to let devices target either a room or a zone.
+    """
+    config = bridge_controller.load_config()
+    
+    if not config or not config.get('ip'):
+        return jsonify({
+            "success": False,
+            "error": "Hue Bridge not configured",
+            "needs_config": True,
+            "groups": []
+        }), 200
+    
+    try:
+        # Get rooms and zones from state manager
+        all_rooms = hue_state_manager.get_all_rooms()
+        all_zones = hue_state_manager.get_all_zones()
+        
+        # Get all scenes from Hue Bridge
+        hue = hue_service.get_controller()
+        all_scenes = hue.get_scenes() if hue else []
+        
+        # Format groups for frontend
+        groups = []
+        for group_type, group_states in (('room', all_rooms), ('zone', all_zones)):
+            for group_id, group_state in group_states.items():
+                light_count = len(group_state.get('lights', []))
+                
+                # Get scenes for this group
+                group_scenes = [
+                    {
+                        "id": scene["id"],
+                        "name": scene["metadata"]["name"]
+                    }
+                    for scene in all_scenes
+                    if scene.get("group", {}).get("rid") == group_id
+                ]
+                
+                groups.append({
+                    "id": group_id,
+                    "name": group_state.get('name', 'Unknown'),
+                    "type": group_type,
+                    "light_count": light_count,
+                    "is_on": group_state.get('is_on', False),
+                    "scenes": group_scenes
+                })
+        
+        # Sort by type, then name
+        groups.sort(key=lambda x: (x['type'], x['name'].lower()))
+        
+        return jsonify({
+            "success": True,
+            "groups": groups
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Failed to fetch groups: {str(e)}",
+            "groups": []
+        }), 200
+
+
+@api_bp.route('/groups/<group_id>/scenes', methods=['GET'])
+def get_group_scenes(group_id):
+    """Get scenes for a specific room or zone from Hue Bridge."""
+    hue = hue_service.get_controller()
+    
+    if not hue:
+        return jsonify({
+            "success": False,
+            "error": "Hue Bridge not configured",
+            "needs_config": True,
+            "scenes": []
+        }), 200
+    
+    try:
+        all_scenes = hue.get_scenes()
+        
+        # Filter scenes for this group (works identically for rooms and zones)
+        group_scenes = [
+            {
+                "id": scene["id"],
+                "name": scene["metadata"]["name"],
+                "group_id": group_id
+            }
+            for scene in all_scenes
+            if scene.get("group", {}).get("rid") == group_id
+        ]
+        
+        return jsonify({"success": True, "scenes": group_scenes})
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Failed to fetch scenes: {str(e)}",
+            "needs_config": True,
+            "scenes": []
+        }), 200
+
+
 @api_bp.route('/scenes/all', methods=['GET'])
 def get_all_scenes():
     """Get all scenes from state manager with room names."""
@@ -173,6 +277,10 @@ def get_all_scenes():
         # Format scenes with room names
         scenes = []
         for scene_id, scene_data in all_scenes.items():
+            # Only surface room scenes here; zone-targeted scenes are handled
+            # by device configuration flows (zones are not part of the overview UI).
+            if scene_data.get('group_type', 'room') != 'room':
+                continue
             room_id = scene_data.get('room_id')
             scenes.append({
                 "id": scene_id,

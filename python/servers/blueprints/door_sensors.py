@@ -146,7 +146,7 @@ def save_door_sensor_config(device_id, config):
     for sensor in sensors:
         if sensor['id'] == device_id:
             sensor['config'] = config
-            sensor['configured'] = bool(config.get('room_id'))
+            sensor['configured'] = bool(config.get('target_id') or config.get('room_id'))
             updated = sensor
             break
 
@@ -237,14 +237,18 @@ def configure_door_sensor():
         return jsonify({'success': False, 'error': str(exc)}), 400
 
     room_id = data.get('room_id') or None
+    target_id = data.get('target_id') or room_id
+    target_type = data.get('target_type', 'room')
+    if target_type not in ('room', 'zone'):
+        target_type = 'room'
     has_action_slots = any(
         slot.get('open_action') != 'nothing' or slot.get('close_action') != 'nothing'
         for slot in time_slots
     )
-    if has_action_slots and not room_id:
-        return jsonify({'success': False, 'error': 'Room assignment is required for door time-slot actions'}), 400
+    if has_action_slots and not target_id:
+        return jsonify({'success': False, 'error': 'Room/zone assignment is required for door time-slot actions'}), 400
 
-    room_name = (data.get('room_name') or '') if room_id else ''
+    room_name = (data.get('room_name') or '') if target_id else ''
 
     enabled = bool(data.get('enabled', True))
 
@@ -254,8 +258,10 @@ def configure_door_sensor():
         return jsonify({'success': False, 'error': str(exc)}), 400
 
     config = {
-        'room_id': room_id,
+        'room_id': target_id,
         'room_name': room_name,
+        'target_id': target_id,
+        'target_type': target_type,
         'enabled': enabled,
         'light_sensitivity': light_sensitivity,
         'time_slots': time_slots,

@@ -112,6 +112,8 @@ def configure_motion_sensor():
     
     config = {
         'room_id': data.get('room_id'),
+        'target_id': data.get('target_id') or data.get('room_id'),
+        'target_type': data.get('target_type', 'room'),
         'cooldown_seconds': data.get('cooldown_seconds', 60),
         'light_sensitivity': data.get('light_sensitivity', 5),
         'time_slots': data.get('time_slots', []),

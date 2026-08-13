@@ -157,6 +157,8 @@ def configure_button():
     config = {
         'device_id': device_id,
         'room_id': data.get('room_id'),
+        'target_id': data.get('target_id') or data.get('room_id'),
+        'target_type': data.get('target_type', 'room'),
         'scenes': data.get('scenes', []),
     }
     

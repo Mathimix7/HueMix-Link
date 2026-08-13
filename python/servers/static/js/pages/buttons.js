@@ -1,5 +1,5 @@
 let devices = [];
-let rooms = [];
+let groups = [];
 let currentDeviceId = null;
 let selectedScenes = [];
 let draggedElement = null;
@@ -142,9 +142,11 @@ function copyDeviceConfig(deviceId) {
 
     clipboardConfig = {
         room_id: device.config.room_id || null,
+        target_id: device.config.target_id || device.config.room_id || null,
+        target_type: device.config.target_type || 'room',
         scenes: (device.config.scenes || []).slice()
     };
-    showToast('Copied', 'Room and scenes copied to clipboard', 'success');
+    showToast('Copied', 'Room/zone and scenes copied to clipboard', 'success');
 }
 
     function openRemoteCopyMenu(deviceId, anchorEventOrElem) {
@@ -186,7 +188,7 @@ function copyDeviceConfig(deviceId) {
             const buttonName = getButtonName(displayIndex, buttonCount);
             item.textContent = `${buttonName} — ${getActionTypeLabel(btn.action_type || btn.action || 'normal')}`;
             item.addEventListener('click', (e) => {
-                clipboardConfig = { room_id: btn.room_id || null, scenes: (btn.scenes || []).slice() };
+                clipboardConfig = { room_id: btn.room_id || null, target_id: btn.target_id || btn.room_id || null, target_type: btn.target_type || 'room', scenes: (btn.scenes || []).slice() };
                 showToast('Copied', `${buttonName} copied`, 'success');
                 menu.remove();
             });
@@ -220,19 +222,20 @@ function pasteConfigToModal() {
     const roomSelect = document.getElementById('room-select');
     if (!roomSelect) return;
 
-    roomSelect.value = clipboardConfig.room_id || '';
+    roomSelect.value = clipboardConfig.target_id || clipboardConfig.room_id || '';
     loadScenesForRoom();
 
     // Apply scenes after scenes are loaded (best-effort timing)
     setTimeout(() => {
-        if (!clipboardConfig || !clipboardConfig.room_id) return;
-        const room = rooms.find(r => r.id === clipboardConfig.room_id);
-        if (!room || !room.scenes) return;
+        if (!clipboardConfig || !(clipboardConfig.target_id || clipboardConfig.room_id)) return;
+        const groupId = clipboardConfig.target_id || clipboardConfig.room_id;
+        const group = groups.find(g => g.id === groupId);
+        if (!group || !group.scenes) return;
 
-        // Map scene ids to scene objects available for the room
+        // Map scene ids to scene objects available for the group
         selectedScenes = [];
         clipboardConfig.scenes.forEach(sid => {
-            const sceneObj = room.scenes.find(s => s.id === sid);
+            const sceneObj = group.scenes.find(s => s.id === sid);
             if (sceneObj) selectedScenes.push(sceneObj);
         });
 
@@ -252,6 +255,8 @@ function copyRemoteButtonConfig(buttonIndex) {
     
     clipboardConfig = {
         room_id: btn.room_id || null,
+        target_id: btn.target_id || btn.room_id || null,
+        target_type: btn.target_type || 'room',
         scenes: (btn.scenes || []).slice()
     };
     showToast('Copied', `${buttonName} scenes copied`, 'success');
@@ -261,14 +266,17 @@ function pasteToRemoteButton(index) {
     if (!clipboardConfig) return showToast('Nothing to Paste', 'Clipboard is empty', 'warning');
 
     remoteConfig.buttons[index].room_id = clipboardConfig.room_id || null;
+    remoteConfig.buttons[index].target_id = clipboardConfig.target_id || clipboardConfig.room_id || null;
+    remoteConfig.buttons[index].target_type = clipboardConfig.target_type || 'room';
     // Set scenes from clipboard (will be filtered by loadRemoteRoomScenes)
     remoteConfig.buttons[index].scenes = (clipboardConfig.scenes || []).slice();
     renderRemoteButtonConfig(index);
 
     // Reload room scenes so the available scene cards reflect the selected state
-    if (clipboardConfig.room_id) {
+    const pastedGroupId = clipboardConfig.target_id || clipboardConfig.room_id;
+    if (pastedGroupId) {
         setTimeout(() => {
-            loadRemoteRoomScenes(clipboardConfig.room_id, index);
+            loadRemoteRoomScenes(pastedGroupId, index);
             const validCount = remoteConfig.buttons[index].scenes ? remoteConfig.buttons[index].scenes.length : 0;
             const device = devices.find(d => d.id === remoteDeviceId);
             const buttonCount = device ? (device.button_count || 4) : 4;
@@ -511,21 +519,15 @@ function loadRooms() {
     errorState.classList.add('hidden');
     roomSelect.disabled = true;
     
-    fetch('/api/rooms')
+    fetch('/api/groups')
         .then(response => response.json())
         .then(data => {
             loadingState.classList.add('hidden');
             roomSelect.disabled = false;
             
             if (data.success) {
-                rooms = data.rooms;
-                roomSelect.innerHTML = '<option value="">-- Select a room --</option>';
-                rooms.forEach(room => {
-                    const option = document.createElement('option');
-                    option.value = room.id;
-                    option.textContent = room.name;
-                    roomSelect.appendChild(option);
-                });
+                groups = data.groups;
+                populateRoomSelect();
             } else if (data.needs_config) {
                 // Show error state
                 errorState.classList.remove('hidden');
@@ -541,13 +543,46 @@ function loadRooms() {
             }
         })
         .catch(err => {
-            console.error('Error loading rooms:', err);
+            console.error('Error loading groups:', err);
             loadingState.classList.add('hidden');
             errorState.classList.remove('hidden');
             document.getElementById('room-error-message').textContent = 
                 'Failed to connect to server. Please check your connection.';
             roomSelect.disabled = true;
         });
+}
+
+function populateRoomSelect() {
+    const roomSelect = document.getElementById('room-select');
+    roomSelect.innerHTML = '<option value="">-- Select a room or zone --</option>';
+    
+    const roomOptgroup = document.createElement('optgroup');
+    roomOptgroup.label = 'Rooms';
+    const zoneOptgroup = document.createElement('optgroup');
+    zoneOptgroup.label = 'Zones';
+    
+    groups.forEach(group => {
+        const option = document.createElement('option');
+        option.value = group.id;
+        option.dataset.type = group.type;
+        option.textContent = group.name;
+        if (group.type === 'zone') {
+            zoneOptgroup.appendChild(option);
+        } else {
+            roomOptgroup.appendChild(option);
+        }
+    });
+    
+    roomSelect.appendChild(roomOptgroup);
+    roomSelect.appendChild(zoneOptgroup);
+}
+
+function getConfigTarget(config) {
+    const type = (config.target_type || 'room') === 'zone' ? 'zone' : 'room';
+    return {
+        id: config.target_id || config.room_id || '',
+        type: type
+    };
 }
 
 function refreshDevices() {
@@ -608,15 +643,9 @@ function openConfigModal(deviceId) {
     const device = devices.find(d => d.id === deviceId);
     document.getElementById('config-device-name').textContent = device.name;
     
-    // Populate room select
+    // Populate room/zone select
     const roomSelect = document.getElementById('room-select');
-    roomSelect.innerHTML = '<option value="">-- Select a room --</option>';
-    rooms.forEach(room => {
-        const option = document.createElement('option');
-        option.value = room.id;
-        option.textContent = room.name;
-        roomSelect.appendChild(option);
-    });
+    populateRoomSelect();
 
     document.getElementById('config-modal').classList.remove('hidden');
     document.getElementById('scenes-section').classList.add('hidden');
@@ -642,11 +671,12 @@ function loadExistingConfig(deviceId) {
             if (data.success) {
                 const config = data.config;
                 
-                // Set the room
-                document.getElementById('room-select').value = config.room_id;
+                // Set the room/zone
+                const target = getConfigTarget(config);
+                document.getElementById('room-select').value = target.id;
                 
-                // Load scenes for that room
-                fetch(`/api/rooms/${config.room_id}/scenes`)
+                // Load scenes for that room/zone
+                fetch(`/api/groups/${target.id}/scenes`)
                     .then(response => response.json())
                     .then(scenesData => {
                         if (scenesData.success) {
@@ -703,10 +733,10 @@ function loadScenesForRoom() {
         return;
     }
 
-    // Clear selected scenes when changing rooms
+    // Clear selected scenes when changing rooms/zones
     selectedScenes = [];
 
-    fetch(`/api/rooms/${roomId}/scenes`)
+    fetch(`/api/groups/${roomId}/scenes`)
         .then(response => response.json())
         .then(data => {
             if (data.success) {
@@ -1023,9 +1053,14 @@ function saveConfiguration() {
         return;
     }
 
+    const roomSelect = document.getElementById('room-select');
+    const targetType = roomSelect.options[roomSelect.selectedIndex]?.dataset.type || 'room';
+
     const config = {
         device_id: currentDeviceId,
         room_id: roomId,
+        target_id: roomId,
+        target_type: targetType,
         scenes: selectedScenes.map(s => s.id)
     };
 
@@ -1088,10 +1123,10 @@ function confirmDelete() {
 let remoteDeviceId = null;
 let remoteConfig = {
     buttons: [
-        { index: 0, action_type: 'toggle', room_id: '', scenes: [] },
-        { index: 1, action_type: 'brightness_up', room_id: '', scenes: [] },
-        { index: 2, action_type: 'brightness_down', room_id: '', scenes: [] },
-        { index: 3, action_type: 'scene_cycle', room_id: '', scenes: [] }
+        { index: 0, action_type: 'toggle', room_id: '', target_id: '', target_type: 'room', scenes: [] },
+        { index: 1, action_type: 'brightness_up', room_id: '', target_id: '', target_type: 'room', scenes: [] },
+        { index: 2, action_type: 'brightness_down', room_id: '', target_id: '', target_type: 'room', scenes: [] },
+        { index: 3, action_type: 'scene_cycle', room_id: '', target_id: '', target_type: 'room', scenes: [] }
     ]
 };
 
@@ -1142,6 +1177,8 @@ function openRemoteConfigModal(deviceId) {
             index: idx,
             action_type: getDefaultActionType(idx, buttonCount),
             room_id: '',
+            target_id: '',
+            target_type: 'room',
             scenes: []
         }))
     };
@@ -1160,6 +1197,8 @@ function openRemoteConfigModal(deviceId) {
                         index: btn.index,
                         action_type: btn.action_type || 'normal',
                         room_id: btn.room_id || '',
+                        target_id: btn.target_id || btn.room_id || '',
+                        target_type: (btn.target_type || 'room') === 'zone' ? 'zone' : 'room',
                         scenes: Array.isArray(btn.scenes) ? btn.scenes : []
                     }));
                 
@@ -1170,6 +1209,8 @@ function openRemoteConfigModal(deviceId) {
                             index: idx,
                             action_type: getDefaultActionType(idx, buttonCount),
                             room_id: '',
+                            target_id: '',
+                            target_type: 'room',
                             scenes: []
                         });
                     }
@@ -1206,28 +1247,28 @@ function openRemoteConfigModal(deviceId) {
 }
 
 function loadRemoteRooms() {
-    // Fetch rooms and populate the global rooms array
-    fetch('/api/rooms')
+    // Fetch rooms/zones and populate the global groups array
+    fetch('/api/groups')
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                rooms = data.rooms;
-                console.log('Loaded rooms with scenes:', rooms);
-                // Now render the UI after rooms are loaded
+                groups = data.groups;
+                console.log('Loaded groups with scenes:', groups);
+                // Now render the UI after groups are loaded
                 renderRemoteConfigTabs();
                 // Select first button by default
                 selectRemoteButton(0);
             } else {
-                console.error('Failed to load rooms:', data.error);
-                rooms = [];
+                console.error('Failed to load groups:', data.error);
+                groups = [];
                 renderRemoteConfigTabs();
                 selectRemoteButton(0);
                 showToast('Error', 'Failed to load rooms', 'error');
             }
         })
         .catch(err => {
-            console.error('Error loading rooms:', err);
-            rooms = [];
+            console.error('Error loading groups:', err);
+            groups = [];
             renderRemoteConfigTabs();
             selectRemoteButton(0);
             showToast('Error', 'Failed to load rooms', 'error');
@@ -1469,22 +1510,31 @@ function renderRemoteButtonConfig(index) {
             <!-- Room Selection -->
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">
-                    <i class="fas fa-door-open mr-2 text-blue-500"></i>Select Room
+                    <i class="fas fa-door-open mr-2 text-blue-500"></i>Select Room or Zone
                 </label>
                 <select id="remote-room-select" onchange="updateRemoteButtonRoom(${index})" 
                     class="w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-pink-500 focus:border-pink-500">
-                    <option value="">-- Select a room --</option>
-                    ${rooms.map(room => `
-                        <option value="${room.id}" ${button.room_id === room.id ? 'selected' : ''}>
-                            ${room.name}
-                        </option>
-                    `).join('')}
+                    <option value="">-- Select a room or zone --</option>
+                    <optgroup label="Rooms">
+                        ${groups.filter(g => g.type !== 'zone').map(group => `
+                            <option value="${group.id}" data-type="room" ${(button.target_id || button.room_id) === group.id ? 'selected' : ''}>
+                                ${group.name}
+                            </option>
+                        `).join('')}
+                    </optgroup>
+                    <optgroup label="Zones">
+                        ${groups.filter(g => g.type === 'zone').map(group => `
+                            <option value="${group.id}" data-type="zone" ${(button.target_id || button.room_id) === group.id ? 'selected' : ''}>
+                                ${group.name}
+                            </option>
+                        `).join('')}
+                    </optgroup>
                 </select>
             </div>
             
             <!-- Scenes Selection (for normal or scene_cycle action types) - hidden until a room is selected -->
             ${(button.action_type === 'normal' || button.action_type === 'scene_cycle') ? `
-                <div id="remote-scenes-block" class="${button.room_id ? '' : 'hidden'}">
+                <div id="remote-scenes-block" class="${(button.target_id || button.room_id) ? '' : 'hidden'}">
                     <label class="block text-sm font-medium text-gray-700 mb-2">
                         <i class="fas fa-palette mr-2 text-purple-500"></i>Select Scenes (drag to reorder)
                     </label>
@@ -1506,33 +1556,33 @@ function renderRemoteButtonConfig(index) {
     `;
     
     // Load available scenes for this button's room if applicable
-    if ((button.action_type === 'normal' || button.action_type === 'scene_cycle') && button.room_id) {
+    if ((button.action_type === 'normal' || button.action_type === 'scene_cycle') && (button.target_id || button.room_id)) {
         // Use setTimeout to ensure DOM is ready
         setTimeout(() => {
-            loadRemoteRoomScenes(button.room_id, index);
+            loadRemoteRoomScenes(button.target_id || button.room_id, index);
         }, 0);
     }
 }
 
 function loadRemoteRoomScenes(roomId, buttonIndex) {
-    const room = rooms.find(r => r.id === roomId);
+    const group = groups.find(g => g.id === roomId);
     
-    console.log(`Loading scenes for room ${roomId}, button ${buttonIndex}. Room:`, room);
+    console.log(`Loading scenes for group ${roomId}, button ${buttonIndex}. Group:`, group);
     
-    if (!room) {
-        console.warn(`Room ${roomId} not found in rooms array`);
+    if (!group) {
+        console.warn(`Group ${roomId} not found in groups array`);
         const availableScenesDiv = document.getElementById('remote-available-scenes');
-        if (availableScenesDiv) availableScenesDiv.innerHTML = '<p class="text-red-400 text-center py-4">Room not found</p>';
+        if (availableScenesDiv) availableScenesDiv.innerHTML = '<p class="text-red-400 text-center py-4">Room/zone not found</p>';
         return;
     }
     
-    if (!room.scenes || room.scenes.length === 0) {
-        // Clear scenes display if room has no scenes
+    if (!group.scenes || group.scenes.length === 0) {
+        // Clear scenes display if group has no scenes
         const availableScenesDiv = document.getElementById('remote-available-scenes');
         const selectedScenesDiv = document.getElementById('remote-selected-scenes');
-        if (availableScenesDiv) availableScenesDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes available in this room</p>';
+        if (availableScenesDiv) availableScenesDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes available in this room/zone</p>';
         if (selectedScenesDiv) selectedScenesDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No scenes selected</p>';
-        console.log(`Room ${roomId} has no scenes or scenes property`);
+        console.log(`Group ${roomId} has no scenes or scenes property`);
         return;
     }
     
@@ -1544,18 +1594,18 @@ function loadRemoteRoomScenes(roomId, buttonIndex) {
         return;
     }
     
-    console.log(`Rendering ${room.scenes.length} scenes for room ${roomId}`);
+    console.log(`Rendering ${group.scenes.length} scenes for group ${roomId}`);
     
     // Store scenes in window scope for drag/drop handlers
     window.remoteCurrentScenes = {
         buttonIndex: buttonIndex,
         roomId: roomId,
-        scenes: room.scenes
+        scenes: group.scenes
     };
     
     // Render available scenes
     availableScenesDiv.innerHTML = '';
-    room.scenes.forEach(scene => {
+    group.scenes.forEach(scene => {
         const isSelected = button.scenes.includes(scene.id);
         const sceneCard = document.createElement('div');
         sceneCard.className = `border-2 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors remote-scene-card ${
@@ -1668,9 +1718,11 @@ function updateRemoteButtonRoom(index) {
     const newRoomId = roomSelect.value;
     console.log(`Updating room for button ${index} to ${newRoomId}`);
     
-    // Only reset scenes if the room actually changed
-    if (newRoomId !== remoteConfig.buttons[index].room_id) {
+    // Only reset scenes if the room/zone actually changed
+    if (newRoomId !== (remoteConfig.buttons[index].target_id || remoteConfig.buttons[index].room_id)) {
         remoteConfig.buttons[index].room_id = newRoomId;
+        remoteConfig.buttons[index].target_id = newRoomId;
+        remoteConfig.buttons[index].target_type = roomSelect.options[roomSelect.selectedIndex]?.dataset.type || 'room';
         remoteConfig.buttons[index].scenes = [];
     }
     
@@ -1723,12 +1775,12 @@ function toggleRemoteScene(buttonIndex, sceneId) {
     }
     
     // Re-render the entire available scenes section to update icons
-    const room = rooms.find(r => r.id === button.room_id);
-    if (room) {
+    const group = groups.find(g => g.id === (button.target_id || button.room_id));
+    if (group) {
         const availableScenesDiv = document.getElementById('remote-available-scenes');
         if (availableScenesDiv) {
             availableScenesDiv.innerHTML = '';
-            room.scenes.forEach(scene => {
+            group.scenes.forEach(scene => {
                 const isSelected = button.scenes.includes(scene.id);
                 const sceneCard = document.createElement('div');
                 sceneCard.className = `border-2 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors remote-scene-card ${
@@ -1760,12 +1812,12 @@ function removeRemoteScene(buttonIndex, sceneIndex) {
     
     // Re-render available scenes to update icons
     const button = remoteConfig.buttons[buttonIndex];
-    const room = rooms.find(r => r.id === button.room_id);
-    if (room) {
+    const group = groups.find(g => g.id === (button.target_id || button.room_id));
+    if (group) {
         const availableScenesDiv = document.getElementById('remote-available-scenes');
         if (availableScenesDiv) {
             availableScenesDiv.innerHTML = '';
-            room.scenes.forEach(scene => {
+            group.scenes.forEach(scene => {
                 const isSelected = button.scenes.includes(scene.id);
                 const sceneCard = document.createElement('div');
                 sceneCard.className = `border-2 rounded-lg p-3 cursor-pointer hover:border-pink-500 transition-colors remote-scene-card ${

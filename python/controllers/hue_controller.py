@@ -128,6 +128,12 @@ class Hue:
     def set_zone(self, zone_id: str, payload: Dict) -> dict:
         return self._put_resource("zone", zone_id, payload)
     
+    def get_group(self, group_id: str, group_type: str = 'room') -> dict:
+        """Get a room or zone resource based on group_type."""
+        if group_type == 'zone':
+            return self.get_zone(group_id)
+        return self.get_room(group_id)
+    
     def get_scenes(self) -> List[dict]:
         return self._get_resource("scene")
     
@@ -162,10 +168,23 @@ class Hue:
         Returns:
             True if any light in the room is on, False otherwise
         """
+        return self.is_group_on(room_id, 'room')
+    
+    def is_group_on(self, group_id: str, group_type: str = 'room') -> bool:
+        """
+        Check if any lights in a group (room or zone) are currently on.
+        
+        Args:
+            group_id: The room/zone ID to check
+            group_type: 'room' or 'zone'
+            
+        Returns:
+            True if any light in the group is on, False otherwise
+        """
         try:
-            room = self.get_room(room_id)
-            # Check the grouped_light service for the room
-            services = room.get('services', [])
+            group = self.get_group(group_id, group_type)
+            # Check the grouped_light service for the group
+            services = group.get('services', [])
             for service in services:
                 if service.get('rtype') == 'grouped_light':
                     grouped_light_id = service.get('rid')
@@ -174,7 +193,7 @@ class Hue:
                         return grouped_light.get('on', {}).get('on', False)
             return False
         except Exception as e:
-            raise Exception(f"Failed to check room status: {e}")
+            raise Exception(f"Failed to check group status: {e}")
 
     def get_device_power(self, device_id: str) -> dict:
         return self._get_resource("device_power", device_id)

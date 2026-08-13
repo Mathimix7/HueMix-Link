@@ -70,8 +70,8 @@ class AutomationEngine:
         self._door_states: Dict[str, Dict] = {}
         self._door_lock = threading.RLock()
         
-        # Room manual turn-off tracking: room_id -> timestamp (to prevent motion triggers after manual off)
-        self._room_manual_off_times: Dict[str, float] = {}
+        # Group manual turn-off tracking: group_id -> timestamp (to prevent motion triggers after manual off)
+        self._group_manual_off_times: Dict[str, float] = {}
         
         # Scene cycling timeout
         self.scene_timeout = TIMEOUT_SCENE_CYCLE
@@ -97,6 +97,41 @@ class AutomationEngine:
         """
         self.network_server = network_server
     
+    @staticmethod
+    def _get_target(config: Dict) -> Tuple[str, str]:
+        """Extract (target_id, target_type) from a device config.
+
+        Supports the generic target format (target_id/target_type) with a legacy
+        fallback to room_id/room_name (treated as a room target).
+
+        Args:
+            config: Device configuration dict
+
+        Returns:
+            Tuple of (target_id, target_type). target_type is 'room' or 'zone'.
+        """
+        target_id = config.get('target_id') or config.get('room_id')
+        target_type = config.get('target_type', 'room')
+        if target_type not in ('room', 'zone'):
+            target_type = 'room'
+        return target_id, target_type
+    
+    @staticmethod
+    def _get_group_state(group_id: str, group_type: str) -> Optional[Dict]:
+        """Get cached state for a room or zone."""
+        if group_type == 'zone':
+            return hue_state_manager.get_zone_state(group_id)
+        return hue_state_manager.get_room_state(group_id)
+    
+    @staticmethod
+    def _set_group_scene(group_id: str, group_type: str, scene_id: Optional[str],
+                         old_scene_id: Optional[str] = None, source: str = 'button'):
+        """Set the active scene on a room or zone."""
+        if group_type == 'zone':
+            hue_state_manager.set_zone_scene(group_id, scene_id, old_scene_id, source=source)
+        else:
+            hue_state_manager.set_room_scene(group_id, scene_id, old_scene_id, source=source)
+    
     def start(self):
         """Start the automation engine."""
         if self.running:
@@ -108,6 +143,7 @@ class AutomationEngine:
         # Subscribe to Hue state changes
         hue_state_manager.subscribe_scene_changes(self._on_hue_scene_changed)
         hue_state_manager.subscribe_room_changes(self._on_hue_room_changed)
+        hue_state_manager.subscribe_zone_changes(self._on_hue_zone_changed)
         
         logger.info("AutomationEngine started")
     
@@ -118,6 +154,7 @@ class AutomationEngine:
         # Unsubscribe from state changes
         hue_state_manager.unsubscribe_scene_changes(self._on_hue_scene_changed)
         hue_state_manager.unsubscribe_room_changes(self._on_hue_room_changed)
+        hue_state_manager.unsubscribe_zone_changes(self._on_hue_zone_changed)
 
         # Cancel pending delayed door close actions
         with self._door_lock:
@@ -157,21 +194,21 @@ class AutomationEngine:
             self._handle_remote_button_event(button_mac, button, button_index, action)
             return
         
-        room_id = config.get('room_id')
+        target_id, target_type = self._get_target(config)
         
-        if not room_id:
-            logger.warning(f"Button {button_mac} has no room configured")
+        if not target_id:
+            logger.warning(f"Button {button_mac} has no room or zone configured")
             return
         
         # Handle by action type
         if action == ACT_CLICK:
-            self._handle_button_click(button_mac, button, room_id)
+            self._handle_button_click(button_mac, button, target_id, target_type)
         
         elif action == ACT_HOLDING:
-            self._handle_button_hold(button_mac, button, room_id)
+            self._handle_button_hold(button_mac, button, target_id, target_type)
         
         elif action == ACT_RELEASE:
-            self._handle_button_release(button_mac, button, room_id)
+            self._handle_button_release(button_mac, button, target_id, target_type)
     
     def _handle_remote_button_event(self, remote_mac: str, remote: Dict, button_index: int, action: int):
         """Handle remote button press.
@@ -197,45 +234,45 @@ class AutomationEngine:
             return
         
         action_type = button_config.get('action_type', None)
-        room_id = button_config.get('room_id')
+        target_id, target_type = self._get_target(button_config)
         
         action_str = {ACT_CLICK: "CLICK", ACT_HOLDING: "HOLDING", ACT_RELEASE: "RELEASE", ACT_SYNC: "SYNC"}.get(action, f"UNKNOWN({action})")
-        logger.info(f"Remote {remote_mac} button {button_index}: {action_str} -> {action_type} action in room {room_id}")
+        logger.info(f"Remote {remote_mac} button {button_index}: {action_str} -> {action_type} action in {target_type} {target_id}")
         
-        if not room_id:
-            logger.warning(f"Remote {remote_mac} button {button_index} has no room configured")
+        if not target_id:
+            logger.warning(f"Remote {remote_mac} button {button_index} has no room or zone configured")
             return
         
         # Handle different action types
         if action_type == REMOTE_ACTION_NORMAL:
             # CLICK = scene cycle, HOLDING = brightness adjust, RELEASE = toggle direction
             if action == ACT_CLICK:
-                self._handle_remote_normal_action_click(remote_mac, button_config, room_id)
+                self._handle_remote_normal_action_click(remote_mac, button_config, target_id, target_type)
             elif action == ACT_HOLDING:
-                self._handle_remote_normal_action_holding(remote_mac, button_config, room_id)
+                self._handle_remote_normal_action_holding(remote_mac, button_config, target_id, target_type)
             elif action == ACT_RELEASE:
                 self._handle_remote_normal_action_release(remote_mac, button_config)
 
         elif action_type == REMOTE_ACTION_SCENE_CYCLE:
             # Click cycles scenes but never turns the room off on timeout
             if action == ACT_CLICK:
-                self._handle_remote_scene_cycle_click(remote_mac, button_config, room_id)
+                self._handle_remote_scene_cycle_click(remote_mac, button_config, target_id, target_type)
             elif action == ACT_HOLDING:
                 # Preserve brightness hold behavior
-                self._handle_remote_normal_action_holding(remote_mac, button_config, room_id)
+                self._handle_remote_normal_action_holding(remote_mac, button_config, target_id, target_type)
             elif action == ACT_RELEASE:
                 self._handle_remote_normal_action_release(remote_mac, button_config)
         
         elif action_type == REMOTE_ACTION_TOGGLE:
             # Only respond to CLICK, ignore HOLDING
             if action == ACT_CLICK:
-                self._handle_remote_toggle_action(room_id)
+                self._handle_remote_toggle_action(target_id, target_type)
         
         elif action_type == REMOTE_ACTION_BRIGHTNESS_UP:
             # Both CLICK and HOLDING do the same - increase brightness
             if action in (ACT_CLICK, ACT_HOLDING):
                 try:
-                    self._adjust_room_brightness(room_id, 1)
+                    self._adjust_group_brightness(target_id, target_type, 1)
                 except Exception as e:
                     logger.error(f"Failed to increase brightness: {e}")
         
@@ -243,17 +280,18 @@ class AutomationEngine:
             # Both CLICK and HOLDING do the same - decrease brightness
             if action in (ACT_CLICK, ACT_HOLDING):
                 try:
-                    self._adjust_room_brightness(room_id, -1)
+                    self._adjust_group_brightness(target_id, target_type, -1)
                 except Exception as e:
                     logger.error(f"Failed to decrease brightness: {e}")
     
-    def _handle_remote_normal_action_click(self, remote_mac: str, button_config: Dict, room_id: str):
+    def _handle_remote_normal_action_click(self, remote_mac: str, button_config: Dict, target_id: str, target_type: str = 'room'):
         """Handle normal remote button CLICK action (scene cycling).
         
         Args:
             remote_mac: Remote MAC address
             button_config: Button configuration
-            room_id: Room ID to control
+            target_id: Room/zone ID to control
+            target_type: 'room' or 'zone'
         """
         scenes = button_config.get('scenes', [])
         
@@ -282,11 +320,11 @@ class AutomationEngine:
             
             if time_since_last > self.scene_timeout:
                 # Timeout expired - turn off room
-                room_is_on = self._is_room_currently_on(room_id)
+                room_is_on = self._is_group_currently_on(target_id, target_type)
                 
                 if room_is_on:
-                    logger.info(f"Remote {remote_mac}: Timeout expired, turning off room {room_id}")
-                    self._turn_off_room(room_id)
+                    logger.info(f"Remote {remote_mac}: Timeout expired, turning off {target_type} {target_id}")
+                    self._turn_off_group(target_id, target_type)
                     state['scene_index'] = 0
                     state['last_press'] = now
                     return
@@ -305,17 +343,18 @@ class AutomationEngine:
         
         # Activate scene
         try:
-            self._activate_scene(room_id, scene_id)
+            self._activate_scene(target_id, scene_id, target_type=target_type)
         except Exception as e:
             logger.error(f"Failed to activate scene {scene_id}: {e}")
 
-    def _handle_remote_scene_cycle_click(self, remote_mac: str, button_config: Dict, room_id: str):
+    def _handle_remote_scene_cycle_click(self, remote_mac: str, button_config: Dict, target_id: str, target_type: str = 'room'):
         """Handle scene-cycle-only remote CLICK action (cycle scenes but never turn off).
 
         Args:
             remote_mac: Remote MAC address
             button_config: Button configuration
-            room_id: Room ID to control
+            target_id: Room/zone ID to control
+            target_type: 'room' or 'zone'
         """
         scenes = button_config.get('scenes', [])
 
@@ -353,17 +392,18 @@ class AutomationEngine:
             logger.info(f"Remote {remote_mac} button {button_index}: Activating scene {scene_id} (scene-cycle only)")
 
         try:
-            self._activate_scene(room_id, scene_id)
+            self._activate_scene(target_id, scene_id, target_type=target_type)
         except Exception as e:
             logger.error(f"Failed to activate scene {scene_id}: {e}")
     
-    def _handle_remote_normal_action_holding(self, remote_mac: str, button_config: Dict, room_id: str):
+    def _handle_remote_normal_action_holding(self, remote_mac: str, button_config: Dict, target_id: str, target_type: str = 'room'):
         """Handle normal remote button HOLDING action (brightness adjustment).
         
         Args:
             remote_mac: Remote MAC address
             button_config: Button configuration
-            room_id: Room ID to control
+            target_id: Room/zone ID to control
+            target_type: 'room' or 'zone'
         """
         # Use remote_mac + button_index as state key
         button_index = button_config.get('index', 0)
@@ -382,7 +422,7 @@ class AutomationEngine:
         
         # Adjust brightness
         try:
-            self._adjust_room_brightness(room_id, state['brightness_direction'])
+            self._adjust_group_brightness(target_id, target_type, state['brightness_direction'])
         except Exception as e:
             logger.error(f"Failed to adjust brightness: {e}")
     
@@ -411,31 +451,33 @@ class AutomationEngine:
             direction_str = 'UP' if state['brightness_direction'] > 0 else 'DOWN'
             logger.info(f"Remote {remote_mac} button {button_index}: Brightness direction toggled to {direction_str}")
     
-    def _handle_remote_toggle_action(self, room_id: str):
-        """Handle toggle action - turn room on/off.
+    def _handle_remote_toggle_action(self, target_id: str, target_type: str = 'room'):
+        """Handle toggle action - turn room/zone on/off.
         
         Args:
-            room_id: Room ID to toggle
+            target_id: Room/zone ID to toggle
+            target_type: 'room' or 'zone'
         """
         try:
-            room_is_on = self._is_room_currently_on(room_id)
+            room_is_on = self._is_group_currently_on(target_id, target_type)
             
             if room_is_on:
-                logger.info(f"Remote toggle: Turning off room {room_id}")
-                self._turn_off_room(room_id, source='remote')
+                logger.info(f"Remote toggle: Turning off {target_type} {target_id}")
+                self._turn_off_group(target_id, target_type, source='remote')
             else:
-                logger.info(f"Remote toggle: Turning on room {room_id}")
-                self._turn_on_room(room_id, source='remote')
+                logger.info(f"Remote toggle: Turning on {target_type} {target_id}")
+                self._turn_on_group(target_id, target_type, source='remote')
         except Exception as e:
-            logger.error(f"Failed to toggle room: {e}")
+            logger.error(f"Failed to toggle {target_type}: {e}")
     
-    def _handle_button_click(self, button_mac: str, button: Dict, room_id: str):
+    def _handle_button_click(self, button_mac: str, button: Dict, target_id: str, target_type: str = 'room'):
         """Handle button click - cycle scenes or turn off.
         
         Args:
             button_mac: Button MAC address
             button: Button configuration
-            room_id: Room ID to control
+            target_id: Room/zone ID to control
+            target_type: 'room' or 'zone'
         """
         config = button.get('config', {})
         scenes = config.get('scenes', [])
@@ -462,12 +504,12 @@ class AutomationEngine:
             
             if time_since_last > self.scene_timeout:
                 # Timeout expired - check if room is on using state manager
-                room_is_on = self._is_room_currently_on(room_id)
+                room_is_on = self._is_group_currently_on(target_id, target_type)
                 
                 if room_is_on:
                     # Turn off room
-                    logger.info(f"Button {button_mac}: Timeout expired, turning off room {room_id}")
-                    self._turn_off_room(room_id)
+                    logger.info(f"Button {button_mac}: Timeout expired, turning off {target_type} {target_id}")
+                    self._turn_off_group(target_id, target_type)
                     state['scene_index'] = 0
                     state['last_press'] = now
                     state['brightness_direction'] = -1
@@ -486,21 +528,22 @@ class AutomationEngine:
             state['last_press'] = now
             state['brightness_direction'] = -1
             
-            logger.info(f"Button {button_mac}: Activating scene {scene_id} in room {room_id}")
+            logger.info(f"Button {button_mac}: Activating scene {scene_id} in {target_type} {target_id}")
         
         # Activate scene
         try:
-            self._activate_scene(room_id, scene_id)
+            self._activate_scene(target_id, scene_id, target_type=target_type)
         except Exception as e:
             logger.error(f"Failed to activate scene {scene_id}: {e}")
     
-    def _handle_button_hold(self, button_mac: str, button: Dict, room_id: str):
+    def _handle_button_hold(self, button_mac: str, button: Dict, target_id: str, target_type: str = 'room'):
         """Handle button hold - adjust brightness.
         
         Args:
             button_mac: Button MAC address
             button: Button configuration
-            room_id: Room ID to control
+            target_id: Room/zone ID to control
+            target_type: 'room' or 'zone'
         """
         with self._button_lock:
             if button_mac not in self._button_states:
@@ -513,20 +556,21 @@ class AutomationEngine:
             state = self._button_states[button_mac]
             direction = state['brightness_direction']
         
-        logger.info(f"Button {button_mac}: Adjusting brightness {'up' if direction > 0 else 'down'} in room {room_id}")
+        logger.info(f"Button {button_mac}: Adjusting brightness {'up' if direction > 0 else 'down'} in {target_type} {target_id}")
         
         try:
-            self._adjust_room_brightness(room_id, direction)
+            self._adjust_group_brightness(target_id, target_type, direction)
         except Exception as e:
             logger.error(f"Failed to adjust brightness: {e}")
     
-    def _handle_button_release(self, button_mac: str, button: Dict, room_id: str):
+    def _handle_button_release(self, button_mac: str, button: Dict, target_id: str, target_type: str = 'room'):
         """Handle button release - toggle brightness direction.
         
         Args:
             button_mac: Button MAC address
             button: Button configuration
-            room_id: Room ID to control
+            target_id: Room/zone ID to control
+            target_type: 'room' or 'zone'
         """
         with self._button_lock:
             if button_mac not in self._button_states:
@@ -544,17 +588,18 @@ class AutomationEngine:
     
     # ===== Hue Control =====
     
-    def _activate_scene(self, room_id: str, scene_id: str, source: str = 'button'):
-        """Activate a scene in a room.
+    def _activate_scene(self, group_id: str, scene_id: str, source: str = 'button', target_type: str = 'room'):
+        """Activate a scene in a room or zone.
         
         Args:
-            room_id: Room ID
+            group_id: Room/zone ID
             scene_id: Scene ID to activate
             source: Source of activation ('button', 'motion', 'web', etc.)
+            target_type: 'room' or 'zone'
         """
         # Non-motion HuemixLink scene changes should immediately cancel motion timers.
         if source != 'motion':
-            self._cancel_motion_timers_for_room(room_id)
+            self._cancel_motion_timers_for_group(group_id)
 
         # Activate scene via API
         payload = {
@@ -563,123 +608,136 @@ class AutomationEngine:
         self.hue.set_scene(scene_id, payload)
         
 
-        room_state = hue_state_manager.get_room_state(room_id)
-        old_scene_id = room_state.get('current_scene_id') if room_state else None
-        hue_state_manager.set_room_scene(room_id, scene_id, old_scene_id, source=source)
+        group_state = self._get_group_state(group_id, target_type)
+        old_scene_id = group_state.get('current_scene_id') if group_state else None
+        self._set_group_scene(group_id, target_type, scene_id, old_scene_id, source=source)
         
-        logger.info(f"Activated scene {scene_id} in room {room_id}")
+        logger.info(f"Activated scene {scene_id} in {target_type} {group_id}")
 
-    def _resolve_grouped_light_id(self, room_id: str) -> Optional[str]:
-        """Resolve grouped_light ID for a room, hydrating state manager on cache miss."""
-        room_state = hue_state_manager.get_room_state(room_id)
-        if room_state:
-            grouped_light_id = room_state.get('grouped_light_id')
+    def _resolve_grouped_light_id(self, group_id: str, target_type: str = 'room') -> Optional[str]:
+        """Resolve grouped_light ID for a room/zone, hydrating state manager on cache miss."""
+        group_state = self._get_group_state(group_id, target_type)
+        if group_state:
+            grouped_light_id = group_state.get('grouped_light_id')
             if grouped_light_id:
                 return grouped_light_id
 
         try:
-            room = self.hue.get_room(room_id)
+            group = self.hue.get_group(group_id, target_type)
         except Exception as e:
-            logger.error(f"Failed to fetch room {room_id} while resolving grouped_light: {e}")
+            logger.error(f"Failed to fetch {target_type} {group_id} while resolving grouped_light: {e}")
             return None
 
-        room_name = room.get('metadata', {}).get('name')
+        group_name = group.get('metadata', {}).get('name')
         grouped_light_id = None
-        for service in room.get('services', []):
+        for service in group.get('services', []):
             if service.get('rtype') == 'grouped_light':
                 grouped_light_id = service.get('rid')
                 break
 
         if not grouped_light_id:
-            logger.error(f"No grouped_light found for room {room_id}")
+            logger.error(f"No grouped_light found for {target_type} {group_id}")
             return None
 
-        hue_state_manager.update_room(
-            room_id=room_id,
-            name=room_name,
-            grouped_light_id=grouped_light_id,
-        )
+        if target_type == 'zone':
+            hue_state_manager.update_zone(
+                zone_id=group_id,
+                name=group_name,
+                grouped_light_id=grouped_light_id,
+            )
+        else:
+            hue_state_manager.update_room(
+                room_id=group_id,
+                name=group_name,
+                grouped_light_id=grouped_light_id,
+            )
         return grouped_light_id
 
-    def _is_room_currently_on(self, room_id: str) -> bool:
-        """Get room on/off state, falling back to live bridge query when cache is incomplete."""
-        room_state = hue_state_manager.get_room_state(room_id)
-        has_mapping = bool(room_state and room_state.get('grouped_light_id'))
+    def _is_group_currently_on(self, group_id: str, target_type: str = 'room') -> bool:
+        """Get room/zone on/off state, falling back to live bridge query when cache is incomplete."""
+        group_state = self._get_group_state(group_id, target_type)
+        has_mapping = bool(group_state and group_state.get('grouped_light_id'))
 
-        if has_mapping and room_state.get('is_on') is not None:
-            return bool(room_state.get('is_on'))
+        if has_mapping and group_state.get('is_on') is not None:
+            return bool(group_state.get('is_on'))
 
         try:
-            is_on = self.hue.is_room_on(room_id)
-            hue_state_manager.update_room(room_id=room_id, is_on=is_on)
+            is_on = self.hue.is_group_on(group_id, target_type)
+            if target_type == 'zone':
+                hue_state_manager.update_zone(zone_id=group_id, is_on=is_on)
+            else:
+                hue_state_manager.update_room(room_id=group_id, is_on=is_on)
             return bool(is_on)
         except Exception as e:
-            logger.warning(f"Failed to query live room state for {room_id}: {e}")
-            return bool(room_state.get('is_on', False)) if room_state else False
+            logger.warning(f"Failed to query live {target_type} state for {group_id}: {e}")
+            return bool(group_state.get('is_on', False)) if group_state else False
     
-    def _turn_off_room(self, room_id: str, source: str = 'button'):
-        """Turn off all lights in a room.
+    def _turn_off_group(self, group_id: str, target_type: str = 'room', source: str = 'button'):
+        """Turn off all lights in a room or zone.
         
         Args:
-            room_id: Room ID
+            group_id: Room/zone ID
+            target_type: 'room' or 'zone'
             source: Source of turn-off action ('button', 'motion', 'door', etc.)
         """
-        # Non-motion HuemixLink room changes should immediately cancel motion timers.
+        # Non-motion HuemixLink changes should immediately cancel motion timers.
         if source != 'motion':
-            self._cancel_motion_timers_for_room(room_id)
+            self._cancel_motion_timers_for_group(group_id)
 
-        # Turn off room via grouped_light
-        room_state = hue_state_manager.get_room_state(room_id)
-        grouped_light_id = self._resolve_grouped_light_id(room_id)
+        # Turn off group via grouped_light
+        group_state = self._get_group_state(group_id, target_type)
+        grouped_light_id = self._resolve_grouped_light_id(group_id, target_type)
         if not grouped_light_id:
-            logger.error(f"Cannot turn off room {room_id}: grouped_light could not be resolved")
+            logger.error(f"Cannot turn off {target_type} {group_id}: grouped_light could not be resolved")
             return
 
         payload = {'on': {'on': False}}
         self.hue._put_resource('grouped_light', grouped_light_id, payload)
 
         # Update state manager
-        old_scene_id = room_state.get('current_scene_id') if room_state else None
-        hue_state_manager.set_room_scene(room_id, None, old_scene_id, source=source)
+        old_scene_id = group_state.get('current_scene_id') if group_state else None
+        self._set_group_scene(group_id, target_type, None, old_scene_id, source=source)
         
-        logger.info(f"Turned off room {room_id}")
+        logger.info(f"Turned off {target_type} {group_id}")
     
-    def _turn_on_room(self, room_id: str, source: str = 'button'):
-        """Turn on all lights in a room.
+    def _turn_on_group(self, group_id: str, target_type: str = 'room', source: str = 'button'):
+        """Turn on all lights in a room or zone.
         
         Args:
-            room_id: Room ID
+            group_id: Room/zone ID
+            target_type: 'room' or 'zone'
             source: Source of turn-on action ('button', 'remote', etc.)
         """
-        # Non-motion HuemixLink room changes should immediately cancel motion timers.
+        # Non-motion HuemixLink changes should immediately cancel motion timers.
         if source != 'motion':
-            self._cancel_motion_timers_for_room(room_id)
+            self._cancel_motion_timers_for_group(group_id)
 
-        # Turn on room via grouped_light
-        grouped_light_id = self._resolve_grouped_light_id(room_id)
+        # Turn on group via grouped_light
+        grouped_light_id = self._resolve_grouped_light_id(group_id, target_type)
         if not grouped_light_id:
-            logger.error(f"Cannot turn on room {room_id}: grouped_light could not be resolved")
+            logger.error(f"Cannot turn on {target_type} {group_id}: grouped_light could not be resolved")
             return
 
         payload = {'on': {'on': True}}
         self.hue._put_resource('grouped_light', grouped_light_id, payload)
         
-        logger.info(f"Turned on room {room_id}")
+        logger.info(f"Turned on {target_type} {group_id}")
     
-    def _adjust_room_brightness(self, room_id: str, direction: int):
-        """Adjust room brightness.
+    def _adjust_group_brightness(self, group_id: str, target_type: str, direction: int):
+        """Adjust room/zone brightness.
         
         Args:
-            room_id: Room ID
+            group_id: Room/zone ID
+            target_type: 'room' or 'zone'
             direction: 1 for increase, -1 for decrease
         """
         # Local brightness changes from buttons/remotes are explicit manual intent.
         # Cancel pending motion timers immediately rather than waiting for SSE updates.
-        self._cancel_motion_timers_for_room(room_id)
+        self._cancel_motion_timers_for_group(group_id)
 
-        # Get room to find grouped_light
-        room = self.hue.get_room(room_id)
-        services = room.get('services', [])
+        # Get group to find grouped_light
+        group = self.hue.get_group(group_id, target_type)
+        services = group.get('services', [])
         
         grouped_light_id = None
         for service in services:
@@ -688,7 +746,7 @@ class AutomationEngine:
                 break
         
         if not grouped_light_id:
-            raise ValueError(f"No grouped_light found for room {room_id}")
+            raise ValueError(f"No grouped_light found for {target_type} {group_id}")
         
         # Get current brightness
         grouped_light = self.hue.get_grouped_light(grouped_light_id)
@@ -704,18 +762,19 @@ class AutomationEngine:
         }
         self.hue._put_resource('grouped_light', grouped_light_id, payload)
         
-        logger.debug(f"Room {room_id} brightness: {current_brightness:.1f}% -> {new_brightness:.1f}%")
+        logger.debug(f"{target_type.capitalize()} {group_id} brightness: {current_brightness:.1f}% -> {new_brightness:.1f}%")
     
-    def _dim_room_brightness(self, room_id: str, dim_percentage: float = 0.5):
-        """Dim room brightness by a percentage.
+    def _dim_group_brightness(self, group_id: str, target_type: str, dim_percentage: float = 0.5):
+        """Dim room/zone brightness by a percentage.
         
         Args:
-            room_id: Room ID
+            group_id: Room/zone ID
+            target_type: 'room' or 'zone'
             dim_percentage: Percentage to dim (0.5 = 50% brightness)
         """
-        # Get room to find grouped_light
-        room = self.hue.get_room(room_id)
-        services = room.get('services', [])
+        # Get group to find grouped_light
+        group = self.hue.get_group(group_id, target_type)
+        services = group.get('services', [])
         
         grouped_light_id = None
         for service in services:
@@ -724,7 +783,7 @@ class AutomationEngine:
                 break
         
         if not grouped_light_id:
-            raise ValueError(f"No grouped_light found for room {room_id}")
+            raise ValueError(f"No grouped_light found for {target_type} {group_id}")
         
         # Get current brightness
         grouped_light = self.hue.get_grouped_light(grouped_light_id)
@@ -739,7 +798,7 @@ class AutomationEngine:
         }
         self.hue._put_resource('grouped_light', grouped_light_id, payload)
         
-        logger.info(f"Room {room_id} dimmed: {current_brightness:.1f}% -> {new_brightness:.1f}%")
+        logger.info(f"{target_type.capitalize()} {group_id} dimmed: {current_brightness:.1f}% -> {new_brightness:.1f}%")
     
     # ===== Motion Sensor Event Handling =====
 
@@ -813,17 +872,17 @@ class AutomationEngine:
             logger.debug(f"Motion sensor {sensor_mac} is disabled, ignoring event")
             return
         
-        # Get room_id from config (needed for timer check)
-        room_id = config.get('room_id')
-        if not room_id:
-            logger.debug(f"Motion sensor {sensor_mac} has no room assigned")
+        # Get target (room or zone) from config (needed for timer check)
+        target_id, target_type = self._get_target(config)
+        if not target_id:
+            logger.debug(f"Motion sensor {sensor_mac} has no room or zone assigned")
             return
         
         # Check if lights were manually turned off recently (within last 10 seconds)
         # Send one-time sleep command to prevent sensor from wasting its cooldown period
         with self._motion_lock:
-            if room_id in self._room_manual_off_times:
-                time_since_manual_off = time.time() - self._room_manual_off_times[room_id]
+            if target_id in self._group_manual_off_times:
+                time_since_manual_off = time.time() - self._group_manual_off_times[target_id]
                 if time_since_manual_off < 10.0:
                     # Calculate remaining sleep time (round up to nearest second)
                     remaining_seconds = int(10.0 - time_since_manual_off) + 1
@@ -865,8 +924,8 @@ class AutomationEngine:
         # Check "Do Not Disturb" mode
         if current_slot.get('do_not_disturb', False):
             # Don't activate if lights are already on
-            room_state = hue_state_manager.get_room_state(room_id)
-            if room_state and room_state.get('is_on', False):
+            group_state = self._get_group_state(target_id, target_type)
+            if group_state and group_state.get('is_on', False):
                 if has_active_timer:
                     logger.debug(f"Motion sensor {sensor_mac} DND mode: lights already on, but restarting existing timer")
                 else:
@@ -880,7 +939,7 @@ class AutomationEngine:
         if motion_action == 'scene':
             scene_id = current_slot.get('scene_id')
             if scene_id:
-                logger.info(f"🏃 Motion sensor {sensor_mac} activating scene {scene_id} in room {room_id}")
+                logger.info(f"🏃 Motion sensor {sensor_mac} activating scene {scene_id} in {target_type} {target_id}")
                 
                 # Store expected scene before activation
                 with self._motion_lock:
@@ -889,7 +948,7 @@ class AutomationEngine:
                     self._motion_states[sensor_mac]['expected_scene_id'] = scene_id
                 
                 try:
-                    self._activate_scene(room_id, scene_id, source='motion')
+                    self._activate_scene(target_id, scene_id, source='motion', target_type=target_type)
                     action_executed = True
                 except Exception as e:
                     logger.error(f"Failed to activate scene {scene_id}: {e}")
@@ -914,8 +973,9 @@ class AutomationEngine:
                         if not action_executed:
                             logger.debug(f"Restarting existing timer for {sensor_mac} due to continued motion")
                 
-                # Store room_id for timer cancellation
-                self._motion_states[sensor_mac]['room_id'] = room_id
+                # Store target for timer cancellation
+                self._motion_states[sensor_mac]['target_id'] = target_id
+                self._motion_states[sensor_mac]['target_type'] = target_type
                 self._motion_states[sensor_mac]['last_motion_activity_time'] = time.time()
                 
                 # Schedule after action
@@ -932,7 +992,7 @@ class AutomationEngine:
                         timer = threading.Timer(
                             warning_delay,
                             self._execute_motion_dim_warning,
-                            args=(sensor_mac, room_id, after_action, current_slot, warning_lead)
+                            args=(sensor_mac, target_id, target_type, after_action, current_slot, warning_lead)
                         )
                         timer.daemon = True
                         timer.start()
@@ -952,7 +1012,7 @@ class AutomationEngine:
                         timer = threading.Timer(
                             after_duration,
                             self._execute_motion_after_action,
-                            args=(sensor_mac, room_id, after_action, current_slot)
+                            args=(sensor_mac, target_id, target_type, after_action, current_slot)
                         )
                         timer.daemon = True
                         timer.start()
@@ -993,9 +1053,9 @@ class AutomationEngine:
             logger.debug(f"Door sensor {sensor_mac} is disabled, ignoring event")
             return
 
-        room_id = config.get('room_id')
-        if not room_id:
-            logger.debug(f"Door sensor {sensor_mac} has no room assigned")
+        target_id, target_type = self._get_target(config)
+        if not target_id:
+            logger.debug(f"Door sensor {sensor_mac} has no room or zone assigned")
             return
 
         if action == ACT_DOOR_OPENED:
@@ -1046,8 +1106,8 @@ class AutomationEngine:
             return
 
         if door_action == 'scene' and current_slot.get('do_not_disturb', False):
-            room_state = hue_state_manager.get_room_state(room_id)
-            if room_state and room_state.get('is_on', False):
+            group_state = self._get_group_state(target_id, target_type)
+            if group_state and group_state.get('is_on', False):
                 logger.debug(
                     f"Door sensor {sensor_mac} DND mode: lights already on, skipping scene activation"
                 )
@@ -1063,14 +1123,15 @@ class AutomationEngine:
         if action == ACT_DOOR_CLOSED and close_delay_seconds > 0:
             self._schedule_delayed_door_close_action(
                 sensor_mac,
-                room_id,
+                target_id,
+                target_type,
                 door_action,
                 scene_id,
                 close_delay_seconds,
             )
             return
 
-        self._execute_door_slot_action(sensor_mac, room_id, event_name, door_action, scene_id)
+        self._execute_door_slot_action(sensor_mac, target_id, target_type, event_name, door_action, scene_id)
 
     @staticmethod
     def _normalize_close_delay_seconds(raw_delay: object) -> int:
@@ -1107,7 +1168,8 @@ class AutomationEngine:
     def _schedule_delayed_door_close_action(
         self,
         sensor_mac: str,
-        room_id: str,
+        target_id: str,
+        target_type: str,
         door_action: str,
         scene_id: Optional[str],
         delay_seconds: int,
@@ -1126,7 +1188,7 @@ class AutomationEngine:
             timer = threading.Timer(
                 delay_seconds,
                 self._execute_delayed_door_close_action,
-                args=(sensor_mac, timer_id, room_id, door_action, scene_id, delay_seconds),
+                args=(sensor_mac, timer_id, target_id, target_type, door_action, scene_id, delay_seconds),
             )
             timer.daemon = True
             timer.start()
@@ -1135,20 +1197,21 @@ class AutomationEngine:
         if door_action == 'scene' and scene_id:
             action_desc = f"activate scene {scene_id}"
         elif door_action == 'off':
-            action_desc = "turn off room"
+            action_desc = "turn off lights"
         else:
             action_desc = door_action
 
         logger.info(
             f"🚪 Door sensor {sensor_mac} closed: scheduled action '{action_desc}' "
-            f"in room {room_id} after {delay_seconds}s"
+            f"in {target_type} {target_id} after {delay_seconds}s"
         )
 
     def _execute_delayed_door_close_action(
         self,
         sensor_mac: str,
         timer_id: int,
-        room_id: str,
+        target_id: str,
+        target_type: str,
         door_action: str,
         scene_id: Optional[str],
         delay_seconds: int,
@@ -1163,7 +1226,7 @@ class AutomationEngine:
         logger.info(
             f"🚪 Door sensor {sensor_mac} closed: executing delayed action after {delay_seconds}s"
         )
-        self._execute_door_slot_action(sensor_mac, room_id, 'closed (delayed)', door_action, scene_id)
+        self._execute_door_slot_action(sensor_mac, target_id, target_type, 'closed (delayed)', door_action, scene_id)
 
         with self._door_lock:
             state = self._door_states.get(sensor_mac)
@@ -1173,7 +1236,8 @@ class AutomationEngine:
     def _execute_door_slot_action(
         self,
         sensor_mac: str,
-        room_id: str,
+        target_id: str,
+        target_type: str,
         event_name: str,
         door_action: str,
         scene_id: Optional[str],
@@ -1183,12 +1247,12 @@ class AutomationEngine:
             if door_action == 'scene':
                 logger.info(
                     f"🚪 Door sensor {sensor_mac} {event_name}: "
-                    f"activating scene {scene_id} in room {room_id}"
+                    f"activating scene {scene_id} in {target_type} {target_id}"
                 )
-                self._activate_scene(room_id, scene_id, source='door')
+                self._activate_scene(target_id, scene_id, source='door', target_type=target_type)
             elif door_action == 'off':
-                logger.info(f"🚪 Door sensor {sensor_mac} {event_name}: turning off room {room_id}")
-                self._turn_off_room(room_id, source='door')
+                logger.info(f"🚪 Door sensor {sensor_mac} {event_name}: turning off {target_type} {target_id}")
+                self._turn_off_group(target_id, target_type, source='door')
             else:
                 logger.warning(
                     f"Door sensor {sensor_mac} event {event_name}: unsupported action '{door_action}'"
@@ -1243,13 +1307,14 @@ class AutomationEngine:
         
         return None
     
-    def _execute_motion_dim_warning(self, sensor_mac: str, room_id: str, after_action: str, time_slot: Dict,
+    def _execute_motion_dim_warning(self, sensor_mac: str, target_id: str, target_type: str, after_action: str, time_slot: Dict,
                                     warning_lead_seconds: int):
         """Execute dim warning before turning off lights.
         
         Args:
             sensor_mac: Motion sensor MAC address
-            room_id: Room ID
+            target_id: Room/zone ID
+            target_type: 'room' or 'zone'
             after_action: 'off' (should always be 'off' for dim warning)
             time_slot: Time slot configuration
             warning_lead_seconds: Delay between dim warning and final off action
@@ -1263,10 +1328,10 @@ class AutomationEngine:
             
             # Dim lights to 50% as warning
             logger.info(
-                f"⚠️  Motion sensor {sensor_mac} dimming lights in room {room_id} "
+                f"⚠️  Motion sensor {sensor_mac} dimming lights in {target_type} {target_id} "
                 f"(warning: off in {warning_lead_seconds}s)"
             )
-            self._dim_room_brightness(room_id, dim_percentage=0.5)
+            self._dim_group_brightness(target_id, target_type, dim_percentage=0.5)
             
             # Schedule final off action using the configured warning lead.
             with self._motion_lock:
@@ -1274,7 +1339,7 @@ class AutomationEngine:
                     timer = threading.Timer(
                         warning_lead_seconds,
                         self._execute_motion_after_action,
-                        args=(sensor_mac, room_id, after_action, time_slot)
+                        args=(sensor_mac, target_id, target_type, after_action, time_slot)
                     )
                     timer.daemon = True
                     timer.start()
@@ -1289,18 +1354,19 @@ class AutomationEngine:
                     timer = threading.Timer(
                         warning_lead_seconds,
                         self._execute_motion_after_action,
-                        args=(sensor_mac, room_id, after_action, time_slot)
+                        args=(sensor_mac, target_id, target_type, after_action, time_slot)
                     )
                     timer.daemon = True
                     timer.start()
                     self._motion_states[sensor_mac]['after_timer'] = timer
     
-    def _execute_motion_after_action(self, sensor_mac: str, room_id: str, after_action: str, time_slot: Dict):
+    def _execute_motion_after_action(self, sensor_mac: str, target_id: str, target_type: str, after_action: str, time_slot: Dict):
         """Execute the after action for a motion sensor.
         
         Args:
             sensor_mac: Motion sensor MAC address
-            room_id: Room ID
+            target_id: Room/zone ID
+            target_type: 'room' or 'zone'
             after_action: 'off', 'scene', or 'nothing'
             time_slot: Time slot configuration
         """
@@ -1312,13 +1378,13 @@ class AutomationEngine:
                     self._motion_states[sensor_mac]['last_motion_activity_time'] = time.time()
             
             if after_action == 'off':
-                logger.info(f"🏃 Motion sensor {sensor_mac} turning off lights in room {room_id}")
-                self._turn_off_room(room_id, source='motion')
+                logger.info(f"🏃 Motion sensor {sensor_mac} turning off lights in {target_type} {target_id}")
+                self._turn_off_group(target_id, target_type, source='motion')
             elif after_action == 'scene':
                 after_scene_id = time_slot.get('after_scene_id')
                 if after_scene_id:
-                    logger.info(f"🏃 Motion sensor {sensor_mac} activating after-scene {after_scene_id} in room {room_id}")
-                    self._activate_scene(room_id, after_scene_id, source='motion')
+                    logger.info(f"🏃 Motion sensor {sensor_mac} activating after-scene {after_scene_id} in {target_type} {target_id}")
+                    self._activate_scene(target_id, after_scene_id, source='motion', target_type=target_type)
         except Exception as e:
             logger.error(f"Failed to execute after action for {sensor_mac}: {e}")
         finally:
@@ -1327,57 +1393,57 @@ class AutomationEngine:
                 if sensor_mac in self._motion_states:
                     self._motion_states[sensor_mac]['after_timer'] = None
     
-    def _cancel_motion_timers_for_room(self, room_id: str):
-        """Cancel all pending motion sensor after-action timers for a specific room.
+    def _cancel_motion_timers_for_group(self, group_id: str):
+        """Cancel all pending motion sensor after-action timers for a specific room/zone.
         
-        This is called when lights in a room are manually changed to prevent
+        This is called when lights in a group are manually changed to prevent
         automatic actions from interfering with user intent.
         
         Args:
-            room_id: Room ID to cancel timers for
+            group_id: Room/zone ID to cancel timers for
         """
         with self._motion_lock:
             cancelled_count = 0
             for sensor_mac, state in self._motion_states.items():
-                if state.get('room_id') == room_id and 'after_timer' in state:
+                if state.get('target_id') == group_id and 'after_timer' in state:
                     timer = state['after_timer']
                     if timer and timer.is_alive():
                         timer.cancel()
                         state['after_timer'] = None
                         cancelled_count += 1
-                        logger.debug(f"Cancelled motion timer for sensor {sensor_mac} (room {room_id} was manually changed)")
+                        logger.debug(f"Cancelled motion timer for sensor {sensor_mac} ({group_id} was manually changed)")
             
             if cancelled_count > 0:
-                logger.info(f"Cancelled {cancelled_count} motion timer(s) for room {room_id}")
+                logger.info(f"Cancelled {cancelled_count} motion timer(s) for {group_id}")
 
-    def _room_has_active_motion_timer(self, room_id: str) -> bool:
-        """Check whether any motion sensor in the room has a live timer."""
+    def _group_has_active_motion_timer(self, group_id: str) -> bool:
+        """Check whether any motion sensor in the room/zone has a live timer."""
         with self._motion_lock:
             for state in self._motion_states.values():
-                if state.get('room_id') != room_id:
+                if state.get('target_id') != group_id:
                     continue
                 timer = state.get('after_timer')
                 if timer and timer.is_alive():
                     return True
         return False
 
-    def _room_has_recent_motion_activity(self, room_id: str, window_seconds: float) -> bool:
-        """Check whether motion activity happened recently in a room."""
+    def _group_has_recent_motion_activity(self, group_id: str, window_seconds: float) -> bool:
+        """Check whether motion activity happened recently in a room/zone."""
         now = time.time()
         with self._motion_lock:
             for state in self._motion_states.values():
-                if state.get('room_id') != room_id:
+                if state.get('target_id') != group_id:
                     continue
                 last_activity = float(state.get('last_motion_activity_time', 0) or 0)
                 if now - last_activity < window_seconds:
                     return True
         return False
 
-    def _is_recent_expected_motion_change(self, room_id: str, scene_id: Optional[str] = None) -> bool:
-        """Check if room change is likely from motion-driven scene/timer activity.
+    def _is_recent_expected_motion_change(self, group_id: str, scene_id: Optional[str] = None) -> bool:
+        """Check if group change is likely from motion-driven scene/timer activity.
 
         Args:
-            room_id: Room to inspect
+            group_id: Room/zone to inspect
             scene_id: Optional scene ID from a scene-change callback. When provided,
                 cooldown is only considered expected if scene_id matches the last
                 motion-expected scene.
@@ -1385,7 +1451,7 @@ class AutomationEngine:
         now = time.time()
         with self._motion_lock:
             for sensor_mac, state in self._motion_states.items():
-                if state.get('room_id') != room_id:
+                if state.get('target_id') != group_id:
                     continue
                 expected_scene_id = state.get('expected_scene_id')
                 if expected_scene_id is not None:
@@ -1412,22 +1478,22 @@ class AutomationEngine:
                     return True
         return False
     
-    def _get_brightness_change_percent(self, room_id: str) -> float:
-        """Calculate what percentage of lights in a room had their brightness change.
+    def _get_brightness_change_percent(self, group_id: str, group_type: str = 'room') -> float:
+        """Calculate what percentage of lights in a room/zone had their brightness change.
         
         Returns percentage (0-100). If < 50%, likely external noise rather than user intent.
         Tracks lights that changed within the last 1 second to catch rapid SSE bursts.
         """
-        room_state = hue_state_manager.get_room_state(room_id)
-        if not room_state:
+        group_state = self._get_group_state(group_id, group_type)
+        if not group_state:
             return 0.0
         
-        light_ids = room_state.get('lights', [])
+        light_ids = group_state.get('lights', [])
         if not light_ids:
             return 0.0
         
         # Get previous snapshot if it exists
-        previous = self._room_change_snapshots.get(room_id, {})
+        previous = self._room_change_snapshots.get(group_id, {})
         previous_lights = previous.get('light_brightness_snapshot', {})
         previous_time = float(previous.get('light_snapshot_time', 0) or 0)
         
@@ -1461,19 +1527,38 @@ class AutomationEngine:
     
     # ===== Lightstrip Synchronization =====
     
-    def _on_hue_room_changed(self, room_id: str, room_state: Dict):
+    def _on_hue_room_changed(self, group_id: str, group_state: Dict):
         """Handle room state change (on/off, brightness) - sync lightstrips with short debounce.
         
         Args:
-            room_id: Room that changed
-            room_state: New room state
+            group_id: Room that changed
+            group_state: New room state
         """
-        logger.debug(f"Room state changed for {room_id}: is_on={room_state.get('is_on')}, brightness={room_state.get('avg_brightness')}")
+        self._on_group_state_changed(group_id, group_state, 'room')
+    
+    def _on_hue_zone_changed(self, group_id: str, group_state: Dict):
+        """Handle zone state change (on/off, brightness) - sync lightstrips with short debounce.
+        
+        Args:
+            group_id: Zone that changed
+            group_state: New zone state
+        """
+        self._on_group_state_changed(group_id, group_state, 'zone')
+    
+    def _on_group_state_changed(self, group_id: str, group_state: Dict, group_type: str = 'room'):
+        """Handle room/zone state change (on/off, brightness) - sync lightstrips with short debounce.
+        
+        Args:
+            group_id: Room/zone that changed
+            group_state: New room/zone state
+            group_type: 'room' or 'zone'
+        """
+        logger.debug(f"{group_type.capitalize()} state changed for {group_id}: is_on={group_state.get('is_on')}, brightness={group_state.get('avg_brightness')}")
 
-        previous = self._room_change_snapshots.get(room_id, {})
-        current_scene = room_state.get('current_scene_id')
-        current_brightness = room_state.get('avg_brightness')
-        current_is_on = bool(room_state.get('is_on'))
+        previous = self._room_change_snapshots.get(group_id, {})
+        current_scene = group_state.get('current_scene_id')
+        current_brightness = group_state.get('avg_brightness')
+        current_is_on = bool(group_state.get('is_on'))
         previous_scene = previous.get('current_scene_id')
         previous_brightness = previous.get('avg_brightness')
         previous_is_on = previous.get('is_on')
@@ -1493,10 +1578,10 @@ class AutomationEngine:
             and brightness_delta >= self._manual_brightness_cancel_threshold
         )
 
-        has_expected_scene = self._is_recent_expected_motion_change(room_id)
-        has_active_timer = self._room_has_active_motion_timer(room_id)
-        has_recent_motion_activity = self._room_has_recent_motion_activity(
-            room_id,
+        has_expected_scene = self._is_recent_expected_motion_change(group_id)
+        has_active_timer = self._group_has_active_motion_timer(group_id)
+        has_recent_motion_activity = self._group_has_recent_motion_activity(
+            group_id,
             self._motion_room_change_grace_seconds,
         )
 
@@ -1511,18 +1596,18 @@ class AutomationEngine:
 
         if transient_zero_while_on:
             logger.debug(
-                f"Ignoring transient brightness=0 room update for {room_id} "
+                f"Ignoring transient brightness=0 {group_type} update for {group_id} "
                 f"while motion timer is active"
             )
 
-        # Calculate what percentage of lights in the room changed brightness
+        # Calculate what percentage of lights in the group changed brightness
         # (BEFORE updating the snapshot, so we compare against previous state)
-        lights_change_percent = self._get_brightness_change_percent(room_id)
+        lights_change_percent = self._get_brightness_change_percent(group_id, group_type)
         
         # Now capture and update light brightness snapshot for next comparison
         light_brightness_snapshot = {}
         lights_changed_this_event = set()
-        light_ids = room_state.get('lights', [])
+        light_ids = group_state.get('lights', [])
         for light_id in light_ids:
             light_state = hue_state_manager.get_light_state(light_id)
             if light_state:
@@ -1530,18 +1615,18 @@ class AutomationEngine:
                 light_brightness_snapshot[light_id] = current_brightness
                 
                 # Track which lights changed in this event
-                previous = self._room_change_snapshots.get(room_id, {})
+                previous = self._room_change_snapshots.get(group_id, {})
                 previous_lights = previous.get('light_brightness_snapshot', {})
                 previous_brightness = previous_lights.get(light_id)
                 if previous_brightness is not None and current_brightness != previous_brightness:
                     lights_changed_this_event.add(light_id)
         
         # Maintain set of recently changed lights
-        previous = self._room_change_snapshots.get(room_id, {})
+        previous = self._room_change_snapshots.get(group_id, {})
         recently_changed = set(previous.get('lights_changed_recently', []))
         recently_changed.update(lights_changed_this_event)
 
-        self._room_change_snapshots[room_id] = {
+        self._room_change_snapshots[group_id] = {
             'current_scene_id': current_scene,
             'avg_brightness': current_brightness,
             'is_on': current_is_on,
@@ -1578,7 +1663,7 @@ class AutomationEngine:
         )
 
         logger.debug(
-            f"Brightness analysis for {room_id}: delta={f'{brightness_delta:.2f}' if brightness_delta is not None else 'N/A'}%, "
+            f"Brightness analysis for {group_id}: delta={f'{brightness_delta:.2f}' if brightness_delta is not None else 'N/A'}%, "
             f"lights_changed={lights_change_percent:.1f}%, has_active_timer={has_active_timer}, "
             f"has_recent_motion={has_recent_motion_activity}, ignore_motion={ignore_for_recent_motion}, "
             f"ignore_active_timer={ignore_for_active_timer}, ignore_small_lights={ignore_for_small_lights_change}, "
@@ -1587,22 +1672,22 @@ class AutomationEngine:
 
         if ignore_for_active_timer:
             logger.debug(
-                f"Ignoring brightness-only room update for {room_id}: "
+                f"Ignoring brightness-only {group_type} update for {group_id}: "
                 f"motion timer is active (likely from timer's own actions)"
             )
         elif ignore_for_recent_motion:
             logger.debug(
-                f"Ignoring brightness-only room update for {room_id}: "
+                f"Ignoring brightness-only {group_type} update for {group_id}: "
                 f"within {self._motion_room_change_grace_seconds}s of motion activity"
             )
         elif ignore_for_small_lights_change:
             logger.debug(
-                f"Ignoring brightness-only room update for {room_id}: "
+                f"Ignoring brightness-only {group_type} update for {group_id}: "
                 f"only {lights_change_percent:.1f}% of lights changed (likely external noise)"
             )
         elif ignore_for_small_delta:
             logger.debug(
-                f"Ignoring minor brightness-only room update for {room_id}: "
+                f"Ignoring minor brightness-only {group_type} update for {group_id}: "
                 f"delta={f'{brightness_delta:.2f}' if brightness_delta is not None else 'N/A'}% < {self._manual_brightness_cancel_threshold:.2f}%"
             )
 
@@ -1610,53 +1695,56 @@ class AutomationEngine:
             if ignore_for_active_timer or ignore_for_recent_motion or ignore_for_small_lights_change or ignore_for_small_delta:
                 should_cancel_motion_timers = False
             else:
-                self._cancel_motion_timers_for_room(room_id)
+                self._cancel_motion_timers_for_group(group_id)
         
         if not self.network_server:
             return
         
-        # Get current scene for this room
-        scene_id = room_state.get('current_scene_id')
+        # Get current scene for this group
+        scene_id = group_state.get('current_scene_id')
         
-        # Debounce room state changes (0.3s) to avoid spam when multiple lights update
+        # Debounce group state changes (0.3s) to avoid spam when multiple lights update
         # This handles: turning on/off, brightness changes, etc.
         with self._timer_lock:
-            if room_id not in self._lightstrip_timers:
-                self._lightstrip_timers[room_id] = {}
+            if group_id not in self._lightstrip_timers:
+                self._lightstrip_timers[group_id] = {}
             
             # Cancel ALL existing timers (room and scene) to avoid duplicates
-            if 'room' in self._lightstrip_timers[room_id]:
-                self._lightstrip_timers[room_id]['room'].cancel()
-                logger.debug(f"Cancelled previous room state sync timer for room {room_id}")
-            if 'scene' in self._lightstrip_timers[room_id]:
-                self._lightstrip_timers[room_id]['scene'].cancel()
-                logger.debug(f"Cancelled scene sync timer (superseded by room change) for room {room_id}")
+            if 'room' in self._lightstrip_timers[group_id]:
+                self._lightstrip_timers[group_id]['room'].cancel()
+                logger.debug(f"Cancelled previous room state sync timer for {group_id}")
+            if 'scene' in self._lightstrip_timers[group_id]:
+                self._lightstrip_timers[group_id]['scene'].cancel()
+                logger.debug(f"Cancelled scene sync timer (superseded by room change) for {group_id}")
             
             # Start new debounced timer (0.3 seconds for quick response)
-            timer = threading.Timer(0.3, self._sync_lightstrips_for_room, args=(room_id, scene_id))
-            self._lightstrip_timers[room_id]['room'] = timer
+            timer = threading.Timer(0.3, self._sync_lightstrips_for_group, args=(group_id, group_type, scene_id))
+            self._lightstrip_timers[group_id]['room'] = timer
             timer.start()
-            logger.debug(f"Started room state sync timer for room {room_id} (0.3s delay)")
+            logger.debug(f"Started room state sync timer for {group_id} (0.3s delay)")
     
-    def _on_hue_scene_changed(self, room_id: str, scene_id: str, 
+    def _on_hue_scene_changed(self, group_id: str, scene_id: str, 
                              old_scene_id: Optional[str] = None, 
-                             source: str = 'unknown'):
+                             source: str = 'unknown', group_type: str = 'room'):
         """Handle Hue scene change - sync lightstrips with debounce.
         
         Args:
-            room_id: Room where scene changed
+            group_id: Room/zone where scene changed
             scene_id: New scene ID
             old_scene_id: Previous scene ID
             source: Source of change
+            group_type: 'room' or 'zone'
         """
-        logger.info(f"Scene changed in room {room_id}: {scene_id} (from {source})")
+        if group_type == 'room' and hue_state_manager.get_zone_state(group_id):
+            group_type = 'zone'
+        logger.info(f"Scene changed in {group_type} {group_id}: {scene_id} (from {source})")
 
         if source in self._internal_timer_cancel_sources and source != 'sse':
             logger.debug(
                 f"Scene source '{source}' is internal HuemixLink trigger; "
-                f"cancelling motion timers for room {room_id}"
+                f"cancelling motion timers for {group_type} {group_id}"
             )
-            self._cancel_motion_timers_for_room(room_id)
+            self._cancel_motion_timers_for_group(group_id)
         
         # Check if this scene change was expected from any motion sensor.
         is_expected = False
@@ -1664,7 +1752,7 @@ class AutomationEngine:
         with self._motion_lock:
             current_time = time.time()
             for sensor_mac, state in self._motion_states.items():
-                if state.get('room_id') != room_id:
+                if state.get('target_id') != group_id:
                     continue
 
                 expected_scene = state.get('expected_scene_id')
@@ -1684,14 +1772,14 @@ class AutomationEngine:
                     state['last_expected_clear_time'] = current_time
                     state['last_motion_activity_time'] = current_time
                     is_expected = True
-                    logger.debug(f"Scene change to {scene_id} in {room_id} was expected from motion sensor {sensor_mac}")
+                    logger.debug(f"Scene change to {scene_id} in {group_id} was expected from motion sensor {sensor_mac}")
                     break
 
         if not is_expected:
-            is_expected = self._is_recent_expected_motion_change(room_id, scene_id=scene_id)
+            is_expected = self._is_recent_expected_motion_change(group_id, scene_id=scene_id)
 
-        has_recent_motion_activity = self._room_has_recent_motion_activity(
-            room_id,
+        has_recent_motion_activity = self._group_has_recent_motion_activity(
+            group_id,
             self._motion_room_change_grace_seconds,
         )
 
@@ -1703,20 +1791,20 @@ class AutomationEngine:
                 should_cancel_for_sse = True
                 logger.debug(
                     f"SSE scene {scene_id} differs from motion scene references "
-                    f"{sorted(motion_scene_reference_ids)} for room {room_id}; cancelling timer"
+                    f"{sorted(motion_scene_reference_ids)} for {group_type} {group_id}; cancelling timer"
                 )
             elif not is_expected and not has_recent_motion_activity:
                 should_cancel_for_sse = True
 
         if should_cancel_for_sse:
-            self._cancel_motion_timers_for_room(room_id)
+            self._cancel_motion_timers_for_group(group_id)
         
         # Track manual turn-offs to prevent motion sensors from triggering immediately after
         # (scene_id is None = lights turned off, NOT is_expected = not from motion sensor timer)
         if scene_id is None and not is_expected:
             with self._motion_lock:
-                self._room_manual_off_times[room_id] = time.time()
-                logger.debug(f"Room {room_id} manually turned off (source: {source})")
+                self._group_manual_off_times[group_id] = time.time()
+                logger.debug(f"{group_type.capitalize()} {group_id} manually turned off (source: {source})")
         
         # Only sync lightstrips when we get SSE confirmation (actual color change)
         # Skip button/web sources since colors haven't updated yet
@@ -1728,7 +1816,7 @@ class AutomationEngine:
             logger.warning("NetworkServer not set, cannot sync lightstrips")
             return
         
-        # Check if room is turning on/off by looking at scene_id changes
+        # Check if group is turning on/off by looking at scene_id changes
         # Turning on: old_scene_id is None and scene_id is not None
         # Turning off: scene_id is None (regardless of old_scene_id)
         is_turning_off = (scene_id is None)
@@ -1737,56 +1825,57 @@ class AutomationEngine:
         if is_turning_off or is_turning_on:
             # Cancel any pending timers and sync immediately for on/off transitions
             with self._timer_lock:
-                if room_id in self._lightstrip_timers:
+                if group_id in self._lightstrip_timers:
                     for timer_type in ['room', 'scene']:
-                        if timer_type in self._lightstrip_timers[room_id]:
-                            self._lightstrip_timers[room_id][timer_type].cancel()
+                        if timer_type in self._lightstrip_timers[group_id]:
+                            self._lightstrip_timers[group_id][timer_type].cancel()
             
-            logger.debug(f"Room {room_id} turning {'off' if is_turning_off else 'on'}, syncing lightstrips immediately")
-            threading.Thread(target=self._sync_lightstrips_for_room, args=(room_id, scene_id), daemon=True).start()
+            logger.debug(f"{group_type.capitalize()} {group_id} turning {'off' if is_turning_off else 'on'}, syncing lightstrips immediately")
+            threading.Thread(target=self._sync_lightstrips_for_group, args=(group_id, group_type, scene_id), daemon=True).start()
         else:
             # Debounced sync for scene changes
-            # Cancel existing timer for this room if any
+            # Cancel existing timer for this group if any
             with self._timer_lock:
-                if room_id not in self._lightstrip_timers:
-                    self._lightstrip_timers[room_id] = {}
+                if group_id not in self._lightstrip_timers:
+                    self._lightstrip_timers[group_id] = {}
                 
                 # Cancel ALL existing timers (scene and room) to avoid duplicates
-                if 'scene' in self._lightstrip_timers[room_id]:
-                    self._lightstrip_timers[room_id]['scene'].cancel()
-                    logger.debug(f"Cancelled previous scene sync timer for room {room_id}")
-                if 'room' in self._lightstrip_timers[room_id]:
-                    self._lightstrip_timers[room_id]['room'].cancel()
-                    logger.debug(f"Cancelled room sync timer (superseded by scene change) for room {room_id}")
+                if 'scene' in self._lightstrip_timers[group_id]:
+                    self._lightstrip_timers[group_id]['scene'].cancel()
+                    logger.debug(f"Cancelled previous scene sync timer for {group_type} {group_id}")
+                if 'room' in self._lightstrip_timers[group_id]:
+                    self._lightstrip_timers[group_id]['room'].cancel()
+                    logger.debug(f"Cancelled room sync timer (superseded by scene change) for {group_type} {group_id}")
                 
                 # Start new debounced timer (1.5 seconds)
-                timer = threading.Timer(1.5, self._sync_lightstrips_for_room, args=(room_id, scene_id))
-                self._lightstrip_timers[room_id]['scene'] = timer
+                timer = threading.Timer(1.5, self._sync_lightstrips_for_group, args=(group_id, group_type, scene_id))
+                self._lightstrip_timers[group_id]['scene'] = timer
                 timer.start()
-                logger.debug(f"Started scene sync timer for room {room_id} (1.5s delay)")
+                logger.debug(f"Started scene sync timer for {group_type} {group_id} (1.5s delay)")
     
-    def _sync_lightstrips_for_room(self, room_id: str, scene_id: str):
-        """Sync lightstrips for a room after debounce delay.
+    def _sync_lightstrips_for_group(self, group_id: str, group_type: str, scene_id: str):
+        """Sync lightstrips for a room/zone after debounce delay.
         
         Args:
-            room_id: Room ID
+            group_id: Room/zone ID
+            group_type: 'room' or 'zone'
             scene_id: Scene ID
         """
         try:
-            # Find lightstrips for this room
+            # Find lightstrips for this group
             lightstrips = data_manager.read_json(FILE_LIGHTSTRIPS, default=[])
             strips_for_room = [
                 strip for strip in lightstrips
-                if strip.get('room_id') == room_id and strip.get('mac_address')
+                if self._strip_matches_group(strip, group_id, group_type) and strip.get('mac_address')
             ]
             
             if not strips_for_room:
-                logger.debug(f"No lightstrips for room {room_id}")
+                logger.debug(f"No lightstrips for {group_type} {group_id}")
                 return
             
-            # Get brightness from room state
-            room_state = hue_state_manager.get_room_state(room_id)
-            brightness_pct = room_state.get('avg_brightness', 100.0) if room_state else 100.0
+            # Get brightness from group state
+            group_state = self._get_group_state(group_id, group_type)
+            brightness_pct = group_state.get('avg_brightness', 100.0) if group_state else 100.0
             brightness_val = int(brightness_pct * 2.55)  # Convert 0-100 to 0-255
             
             # Helper function to update a single lightstrip
@@ -1800,7 +1889,7 @@ class AutomationEngine:
                             logger.debug(f"Skipping lightstrip {strip.get('name', light_mac)} - in preview mode")
                             return
                     
-                    rgb_data = self._get_lightstrip_colors(strip, scene_id, room_id)
+                    rgb_data = self._get_lightstrip_colors(strip, scene_id, group_id)
                     if rgb_data is not None:
                         if self.network_server:
                             self.network_server.send_to_light(light_mac, rgb_data, brightness_val)
@@ -1821,18 +1910,18 @@ class AutomationEngine:
             
             # Clean up timer references (both scene and room timers may exist)
             with self._timer_lock:
-                if room_id in self._lightstrip_timers:
+                if group_id in self._lightstrip_timers:
                     # Remove completed timers
-                    self._lightstrip_timers[room_id] = {
-                        k: v for k, v in self._lightstrip_timers[room_id].items()
+                    self._lightstrip_timers[group_id] = {
+                        k: v for k, v in self._lightstrip_timers[group_id].items()
                         if v.is_alive()
                     }
-                    # Remove room entry if no active timers
-                    if not self._lightstrip_timers[room_id]:
-                        del self._lightstrip_timers[room_id]
+                    # Remove group entry if no active timers
+                    if not self._lightstrip_timers[group_id]:
+                        del self._lightstrip_timers[group_id]
                     
         except Exception as e:
-            logger.error(f"Error in lightstrip sync for room {room_id}: {e}")
+            logger.error(f"Error in lightstrip sync for {group_type} {group_id}: {e}")
 
     def send_current_colors_to_light(self, light_mac: str):
         """Send current scene colors to a light that just came online.
@@ -1853,21 +1942,21 @@ class AutomationEngine:
                 logger.debug(f"Light {light_mac} not found in config, skipping color update")
                 return
             
-            # Get room and check for active scene
-            room_id = light_config.get('room_id')
-            if not room_id:
-                logger.debug(f"Light {light_mac} has no room assigned, skipping color update")
+            # Get group (room/zone) and check for active scene
+            group_id, group_type = self._strip_target(light_config)
+            if not group_id:
+                logger.debug(f"Light {light_mac} has no room/zone assigned, skipping color update")
                 return
             
-            room_state = hue_state_manager.get_room_state(room_id)
-            if not room_state or not room_state.get('current_scene_id'):
-                logger.debug(f"Room {room_id} has no active scene, skipping color update")
+            group_state = self._get_group_state(group_id, group_type)
+            if not group_state or not group_state.get('current_scene_id'):
+                logger.debug(f"{group_type.capitalize()} {group_id} has no active scene, skipping color update")
                 return
             
             # Get colors for current scene
-            scene_id = room_state['current_scene_id']
-            rgb_data = self._get_lightstrip_colors(light_config, scene_id, room_id)
-            brightness_pct = room_state.get('avg_brightness', 100.0) if room_state else 100.0
+            scene_id = group_state['current_scene_id']
+            rgb_data = self._get_lightstrip_colors(light_config, scene_id, group_id)
+            brightness_pct = group_state.get('avg_brightness', 100.0) if group_state else 100.0
             brightness_val = int(brightness_pct * 2.55)
             
             if rgb_data:
@@ -1922,23 +2011,24 @@ class AutomationEngine:
     
     # ===== Color Palette Extraction =====
     
-    def _get_hue_light_palette(self, room_id: str, ignore_third_party: bool = False) -> List[Tuple[int, int, int]]:
-        """Get RGB color palette from all lights in a room.
+    def _get_hue_light_palette(self, group_id: str, ignore_third_party: bool = False, group_type: str = 'room') -> List[Tuple[int, int, int]]:
+        """Get RGB color palette from all lights in a room/zone.
         
         Args:
-            room_id: Room ID to get colors from
+            group_id: Room/zone ID to get colors from
             ignore_third_party: If True, skip lights not in known Hue gamut list
+            group_type: 'room' or 'zone'
             
         Returns:
-            List of (r, g, b) tuples representing the room's color palette
+            List of (r, g, b) tuples representing the group's color palette
         """
-        # Get room state
-        room_state = hue_state_manager.get_room_state(room_id)
-        if not room_state or not room_state.get('is_on', False):
+        # Get group state
+        group_state = self._get_group_state(group_id, group_type)
+        if not group_state or not group_state.get('is_on', False):
             return [(0, 0, 0)]
         
-        # Get all light states in the room
-        light_ids = room_state.get('lights', [])
+        # Get all light states in the group
+        light_ids = group_state.get('lights', [])
         if not light_ids:
             return []
         
@@ -2091,32 +2181,54 @@ class AutomationEngine:
             
             return strip_colors
     
-    def _get_lightstrip_colors(self, strip: Dict, scene_id: str, room_id: str) -> Optional[List[Tuple[int, int, int]]]:
+    def _get_lightstrip_colors(self, strip: Dict, scene_id: str, group_id: str) -> Optional[List[Tuple[int, int, int]]]:
         """Get RGB colors for lightstrip based on scene.
         
         This is the main orchestrator that:
         1. Checks for scene overrides first
-        2. Falls back to room light colors
+        2. Falls back to group light colors
         3. Generates the final strip pattern
         
         Args:
             strip: Lightstrip configuration
             scene_id: Scene ID
-            room_id: Room ID
+            group_id: Room/zone ID
             
         Returns:
             List of (r, g, b) tuples or None
         """
         num_leds = strip.get('number_colors', 40)
         ignore_third_party = strip.get('ignore_third_party', False)
+        _, group_type = self._strip_target(strip)
 
-        room_state = hue_state_manager.get_room_state(room_id)
-        if not room_state or not room_state.get('is_on', False):
+        group_state = self._get_group_state(group_id, group_type)
+        if not group_state or not group_state.get('is_on', False):
             return self._generate_strip_colors(strip, [(0, 0, 0)], num_leds)
         
         # Step 1: Check for scene override palette
         palette = self._get_scene_override_colors(strip, scene_id)
         if not palette:
-            palette = self._get_hue_light_palette(room_id, ignore_third_party)
+            palette = self._get_hue_light_palette(group_id, ignore_third_party, group_type)
             
         return self._generate_strip_colors(strip, palette, num_leds)
+    
+    def _strip_target(self, strip: Dict) -> Tuple[Optional[str], str]:
+        """Extract (target_id, target_type) from a lightstrip config with legacy fallback.
+        
+        Args:
+            strip: Lightstrip configuration
+            
+        Returns:
+            Tuple of (target_id, target_type). target_type defaults to 'room'
+            for legacy configs that only have room_id.
+        """
+        target_id = strip.get('target_id') or strip.get('room_id')
+        target_type = strip.get('target_type', 'room')
+        if target_type not in ('room', 'zone'):
+            target_type = 'room'
+        return target_id, target_type
+    
+    def _strip_matches_group(self, strip: Dict, group_id: str, group_type: str) -> bool:
+        """Check if a lightstrip config targets the given room/zone."""
+        strip_id, strip_type = self._strip_target(strip)
+        return strip_id == group_id and strip_type == group_type

@@ -9,3 +9,98 @@
     border-radius: 4px;
     transition: width 0.3s ease;
 }
+
+/* --- Topology map --------------------------------------------------- */
+
+.mesh-skeleton-svg circle,
+.mesh-skeleton-svg rect {
+    fill: #d1d5db;
+    animation: mesh-pulse 1.6s ease-in-out infinite;
+}
+
+.mesh-skeleton-svg line {
+    stroke: #d1d5db;
+    stroke-width: 2;
+    stroke-linecap: round;
+    animation: mesh-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes mesh-pulse {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 1; }
+}
+
+.mesh-node {
+    cursor: pointer;
+}
+
+.mesh-node:hover .mesh-node-circle {
+    filter: brightness(0.92);
+    stroke-width: 3;
+}
+
+.mesh-node-icon {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    pointer-events: none;
+}
+
+.mesh-node-label {
+    font-size: 11px;
+    fill: #4b5563;
+    text-anchor: middle;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    pointer-events: none;
+}
+
+.mesh-node-sub {
+    font-size: 9.5px;
+    fill: #9ca3af;
+    text-anchor: middle;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    pointer-events: none;
+}
+
+.mesh-band-label {
+    font-size: 11px;
+    fill: #6b7280;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+/* --- Filter chips ----------------------------------------------------- */
+
+#filter-chips button {
+    white-space: nowrap;
+}
+
+/* --- Drawer ----------------------------------------------------------- */
+
+#detail-drawer {
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#drawer-body > div {
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+#drawer-body > div:last-child {
+    border-bottom: none;
+}
+
+/* --- Optimize modal ---------------------------------------------------- */
+
+#optimize-results::-webkit-scrollbar {
+    width: 6px;
+}
+
+#optimize-results::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 3px;
+}

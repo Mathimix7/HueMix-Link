@@ -1,5 +1,5 @@
 let devices = [];
-let rooms = [];
+let groups = [];
 let currentDeviceId = null;
 let deleteDeviceId = null;
 let deleteDeviceName = null;
@@ -105,7 +105,7 @@ function updateDeviceRow(device) {
     // Update status cell
     const statusCell = row.children[4];
     const config = device.config || {};
-    const isConfigured = config.room_id ? true : false;
+    const isConfigured = !!(config.target_id || config.room_id);
     statusCell.innerHTML = isConfigured ? 
         '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center"><i class="fas fa-check-circle mr-1"></i> Configured</span>' :
         '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 items-center"><i class="fas fa-circle mr-1"></i> Not Configured</span>';
@@ -148,6 +148,14 @@ function hideToast() {
     const container = document.getElementById('toast-container');
     container.classList.add('translate-x-full', 'opacity-0');
     setTimeout(() => toast.classList.add('hidden'), 300);
+}
+
+function getConfigTarget(config) {
+    const type = (config.target_type || 'room') === 'zone' ? 'zone' : 'room';
+    return {
+        id: config.target_id || config.room_id || '',
+        type: type
+    };
 }
 
 // Load devices
@@ -258,7 +266,7 @@ function renderDevicesTable() {
         // Status
         const statusCell = document.createElement('td');
         statusCell.className = 'px-6 py-4 whitespace-nowrap';
-        const isConfigured = config.room_id ? true : false;
+        const isConfigured = !!(config.target_id || config.room_id);
         if (isConfigured) {
             statusCell.innerHTML = '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 items-center"><i class="fas fa-check-circle mr-1"></i> Configured</span>';
         } else {
@@ -364,48 +372,68 @@ function openConfigModal(deviceId) {
     document.getElementById('config-device-name').textContent = device.name || 'Unnamed Sensor';
     const config = device.config || {};
 
-    // Load rooms
-    fetch('/api/rooms')
+    // Load rooms and zones
+    fetch('/api/groups')
         .then(response => response.json())
         .then(data => {
-            if (data.success && data.rooms) {
-                rooms = data.rooms;
+            if (data.success && data.groups) {
+                groups = data.groups;
                 const roomSelect = document.getElementById('room-select');
-                roomSelect.innerHTML = '<option value="">-- Select a room --</option>';
-                rooms.forEach(room => {
+                roomSelect.innerHTML = '<option value="">-- Select a room or zone --</option>';
+                
+                const roomOptgroup = document.createElement('optgroup');
+                roomOptgroup.label = 'Rooms';
+                const zoneOptgroup = document.createElement('optgroup');
+                zoneOptgroup.label = 'Zones';
+                
+                const target = getConfigTarget(config);
+                let shouldShowTimeSlots = false;
+                
+                groups.forEach(group => {
                     const option = document.createElement('option');
-                    option.value = room.id;
-                    option.textContent = room.name;
-                    if (config.room_id === room.id) {
+                    option.value = group.id;
+                    option.dataset.type = group.type;
+                    option.textContent = group.name;
+                    if (target.id === group.id && target.type === group.type) {
                         option.selected = true;
-                        loadScenesForRoom(room.id);
+                        shouldShowTimeSlots = true;
+                        loadScenesForGroup(group.id);
                     }
-                    roomSelect.appendChild(option);
+                    if (group.type === 'zone') {
+                        zoneOptgroup.appendChild(option);
+                    } else {
+                        roomOptgroup.appendChild(option);
+                    }
                 });
                 
-                // Add change listener for room selection
-                let previousRoomId = config.room_id;
+                roomSelect.appendChild(roomOptgroup);
+                roomSelect.appendChild(zoneOptgroup);
+                
+                // Add change listener for target selection
+                let previousTargetId = target.id;
                 roomSelect.onchange = function() {
+                    const selectedOption = this.options[this.selectedIndex];
+                    const newTargetId = this.value;
                     const timeSlotsSection = document.getElementById('time-slots-section');
-                    if (this.value) {
-                        // Reset time slots if room changed
-                        if (this.value !== previousRoomId) {
+                    if (newTargetId) {
+                        // Reset time slots if target changed
+                        if (newTargetId !== previousTargetId) {
                             currentTimeSlots = [];
                             renderTimeSlots();
-                            previousRoomId = this.value;
+                            previousTargetId = newTargetId;
                         }
                         timeSlotsSection.classList.remove('hidden');
-                        loadScenesForRoom(this.value);
+                        loadScenesForGroup(newTargetId);
                     } else {
                         timeSlotsSection.classList.add('hidden');
                         currentTimeSlots = [];
                         renderTimeSlots();
-                        previousRoomId = null;
+                        previousTargetId = null;
                     }
                 };
                 
-                // Show time slots section if room is already selected
-                if (config.room_id) {
+                // Show time slots section if target is already selected
+                if (shouldShowTimeSlots) {
                     document.getElementById('time-slots-section').classList.remove('hidden');
                 }
             }
@@ -494,12 +522,12 @@ function getLightSensitivity() {
     return selected ? parseInt(selected.dataset.level) : 5;
 }
 
-function loadScenesForRoom(roomId) {
-    if (!roomId) {
+function loadScenesForGroup(groupId) {
+    if (!groupId) {
         allScenes = [];
         return;
     }
-    fetch(`/api/rooms/${roomId}/scenes`)
+    fetch(`/api/groups/${groupId}/scenes`)
         .then(response => response.json())
         .then(data => {
             if (data.success && data.scenes) {
@@ -781,7 +809,9 @@ function closeConfigModal() {
 }
 
 function saveConfiguration() {
-    const roomId = document.getElementById('room-select').value;
+    const roomSelect = document.getElementById('room-select');
+    const roomId = roomSelect.value;
+    const targetType = roomSelect.options[roomSelect.selectedIndex]?.dataset.type || 'room';
     const cooldown = parseInt(document.getElementById('cooldown-input').value) || 60;
     const lightSensitivity = getLightSensitivity();
 
@@ -791,6 +821,8 @@ function saveConfiguration() {
         body: JSON.stringify({
             device_id: currentDeviceId,
             room_id: roomId || null,
+            target_id: roomId || null,
+            target_type: targetType,
             cooldown_seconds: cooldown,
             light_sensitivity: lightSensitivity,
             time_slots: currentTimeSlots

@@ -1,7 +1,7 @@
-"""Synchronize local automation configs with current Hue rooms/scenes."""
+"""Synchronize local automation configs with current Hue rooms/zones/scenes."""
 
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from constants import FILE_BUTTONS, FILE_MOTION_SENSORS, FILE_DOOR_SENSORS
 from services import data_manager
@@ -10,39 +10,100 @@ from services.hue_service import hue_service
 logger = logging.getLogger(__name__)
 
 
-def _normalize_room_name(name: Optional[str]) -> str:
+def _normalize_group_name(name: Optional[str]) -> str:
     return (name or "").strip().lower()
 
 
-def _resolve_room_id(
-    room_id: Optional[str],
-    room_name: Optional[str],
+def _build_name_map(group_id_to_name: Dict[str, str]) -> Dict[str, str]:
+    name_to_id: Dict[str, str] = {}
+    for gid, gname in group_id_to_name.items():
+        if not gid:
+            continue
+        key = _normalize_group_name(gname)
+        if key and key not in name_to_id:
+            name_to_id[key] = gid
+    return name_to_id
+
+
+def _resolve_group_id(
+    config: Dict,
     valid_room_ids: set,
     room_name_to_id: Dict[str, str],
-) -> Optional[str]:
-    if room_id and room_id in valid_room_ids:
-        return room_id
+    valid_zone_ids: set,
+    zone_name_to_id: Dict[str, str],
+) -> Tuple[Optional[str], str]:
+    """Resolve (target_id, target_type) for a config.
 
-    normalized = _normalize_room_name(room_name)
+    Supports the generic target format (target_id/target_type) with a legacy
+    fallback to room_id/room_name (treated as a room target). Name-based
+    resolution only matches within the config's own group type.
+    """
+    target_type = config.get('target_type', 'room')
+    if target_type not in ('room', 'zone'):
+        target_type = 'room'
+
+    target_id = config.get('target_id') or config.get('room_id')
+    target_name = config.get('room_name')
+
+    if target_type == 'zone':
+        if target_id and target_id in valid_zone_ids:
+            return target_id, 'zone'
+        normalized = _normalize_group_name(target_name)
+        if normalized and normalized in zone_name_to_id:
+            return zone_name_to_id[normalized], 'zone'
+        return None, 'zone'
+
+    if target_id and target_id in valid_room_ids:
+        return target_id, 'room'
+    normalized = _normalize_group_name(target_name)
     if normalized and normalized in room_name_to_id:
-        return room_name_to_id[normalized]
+        return room_name_to_id[normalized], 'room'
+    return None, 'room'
 
-    return None
+
+def _apply_resolution(config: Dict, resolved_id: Optional[str], resolved_type: str,
+                      group_id_to_name: Dict[str, str]) -> bool:
+    """Write resolved target into config (new + legacy fields). Returns True if changed."""
+    changed = False
+    current_id = config.get('target_id') or config.get('room_id')
+    current_type = config.get('target_type', 'room')
+
+    if resolved_id != current_id:
+        config['target_id'] = resolved_id
+        config['room_id'] = resolved_id
+        changed = True
+
+    if resolved_type != current_type:
+        config['target_type'] = resolved_type
+        changed = True
+
+    if resolved_id:
+        group_name = group_id_to_name.get(resolved_id)
+        if group_name and config.get('room_name') != group_name:
+            config['room_name'] = group_name
+            changed = True
+
+    return changed
 
 
-def _filter_scene_ids(scene_ids, valid_scene_ids: set, scene_to_room: Dict[str, Optional[str]], room_id: Optional[str]):
+def _filter_scene_ids(scene_ids, valid_scene_ids: set, scene_to_group: Dict[str, Tuple[Optional[str], Optional[str]]],
+                      group_id: Optional[str], group_type: str):
     filtered = []
     for scene_id in scene_ids or []:
         if scene_id not in valid_scene_ids:
             continue
-        if room_id and scene_to_room.get(scene_id) not in (None, room_id):
-            continue
+        if group_id:
+            scene_group_id, scene_group_type = scene_to_group.get(scene_id, (None, None))
+            if scene_group_id not in (None, group_id):
+                continue
+            if scene_group_type not in (None, group_type):
+                continue
         filtered.append(scene_id)
     return filtered
 
 
 def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
-    """Reconcile stored button/motion/door configs with current Hue room/scene topology."""
+    """Reconcile stored button/motion/door configs with current Hue room/zone/scene topology."""
     hue = hue_controller or hue_service.get_controller()
     stats = {
         "buttons_updated": 0,
@@ -59,31 +120,33 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
 
     try:
         rooms = hue.get_rooms()
+        zones = hue.get_zones()
         scenes = hue.get_scenes()
     except Exception as exc:
-        logger.error("Failed fetching Hue rooms/scenes during config sync: %s", exc, exc_info=True)
+        logger.error("Failed fetching Hue rooms/zones/scenes during config sync: %s", exc, exc_info=True)
         return stats
 
     room_id_to_name = {room.get("id"): room.get("metadata", {}).get("name", "") for room in rooms}
     valid_room_ids = set(room_id_to_name)
+    room_name_to_id = _build_name_map(room_id_to_name)
 
-    room_name_to_id: Dict[str, str] = {}
-    for rid, rname in room_id_to_name.items():
-        if not rid:
-            continue
-        key = _normalize_room_name(rname)
-        if key and key not in room_name_to_id:
-            room_name_to_id[key] = rid
+    zone_id_to_name = {zone.get("id"): zone.get("metadata", {}).get("name", "") for zone in zones}
+    valid_zone_ids = set(zone_id_to_name)
+    zone_name_to_id = _build_name_map(zone_id_to_name)
+
+    group_id_to_name = dict(room_id_to_name)
+    group_id_to_name.update(zone_id_to_name)
 
     valid_scene_ids = set()
-    scene_to_room: Dict[str, Optional[str]] = {}
+    scene_to_group: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
     scene_id_to_name: Dict[str, str] = {}
     for scene in scenes:
         sid = scene.get("id")
         if not sid:
             continue
         valid_scene_ids.add(sid)
-        scene_to_room[sid] = scene.get("group", {}).get("rid")
+        scene_group = scene.get("group", {})
+        scene_to_group[sid] = (scene_group.get("rid"), scene_group.get("rtype"))
         scene_id_to_name[sid] = scene.get("metadata", {}).get("name", "")
 
     buttons = data_manager.read_json(FILE_BUTTONS, default=[])
@@ -101,58 +164,46 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
                 if not isinstance(btn_cfg, dict):
                     continue
 
-                resolved_room_id = _resolve_room_id(
-                    btn_cfg.get("room_id"),
-                    btn_cfg.get("room_name"),
+                resolved_id, resolved_type = _resolve_group_id(
+                    btn_cfg,
                     valid_room_ids,
                     room_name_to_id,
+                    valid_zone_ids,
+                    zone_name_to_id,
                 )
-                if resolved_room_id != btn_cfg.get("room_id"):
-                    if resolved_room_id and btn_cfg.get("room_id"):
+                if _apply_resolution(btn_cfg, resolved_id, resolved_type, group_id_to_name):
+                    if resolved_id and (btn_cfg.get("room_id") or btn_cfg.get("target_id")):
                         stats["remapped_rooms"] += 1
-                    btn_cfg["room_id"] = resolved_room_id
                     device_changed = True
 
-                if resolved_room_id:
-                    room_name = room_id_to_name.get(resolved_room_id)
-                    if room_name and btn_cfg.get("room_name") != room_name:
-                        btn_cfg["room_name"] = room_name
-                        device_changed = True
-
                 old_scenes = list(btn_cfg.get("scenes", []))
-                new_scenes = _filter_scene_ids(old_scenes, valid_scene_ids, scene_to_room, resolved_room_id)
+                new_scenes = _filter_scene_ids(old_scenes, valid_scene_ids, scene_to_group, resolved_id, resolved_type)
                 if old_scenes != new_scenes:
                     stats["removed_scene_refs"] += len(set(old_scenes) - set(new_scenes))
                     btn_cfg["scenes"] = new_scenes
                     device_changed = True
 
         else:
-            resolved_room_id = _resolve_room_id(
-                config.get("room_id"),
-                config.get("room_name"),
+            resolved_id, resolved_type = _resolve_group_id(
+                config,
                 valid_room_ids,
                 room_name_to_id,
+                valid_zone_ids,
+                zone_name_to_id,
             )
-            if resolved_room_id != config.get("room_id"):
-                if resolved_room_id and config.get("room_id"):
+            if _apply_resolution(config, resolved_id, resolved_type, group_id_to_name):
+                if resolved_id and (config.get("room_id") or config.get("target_id")):
                     stats["remapped_rooms"] += 1
-                config["room_id"] = resolved_room_id
                 device_changed = True
 
-            if resolved_room_id:
-                room_name = room_id_to_name.get(resolved_room_id)
-                if room_name and config.get("room_name") != room_name:
-                    config["room_name"] = room_name
-                    device_changed = True
-
             old_scenes = list(config.get("scenes", []))
-            new_scenes = _filter_scene_ids(old_scenes, valid_scene_ids, scene_to_room, resolved_room_id)
+            new_scenes = _filter_scene_ids(old_scenes, valid_scene_ids, scene_to_group, resolved_id, resolved_type)
             if old_scenes != new_scenes:
                 stats["removed_scene_refs"] += len(set(old_scenes) - set(new_scenes))
                 config["scenes"] = new_scenes
                 device_changed = True
 
-            if not resolved_room_id or not new_scenes:
+            if not resolved_id or not new_scenes:
                 if device.get("configured"):
                     device["configured"] = False
                     device["config"] = None
@@ -176,23 +227,17 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
 
         sensor_changed = False
 
-        resolved_room_id = _resolve_room_id(
-            config.get("room_id"),
-            config.get("room_name"),
+        resolved_id, resolved_type = _resolve_group_id(
+            config,
             valid_room_ids,
             room_name_to_id,
+            valid_zone_ids,
+            zone_name_to_id,
         )
-        if resolved_room_id != config.get("room_id"):
-            if resolved_room_id and config.get("room_id"):
+        if _apply_resolution(config, resolved_id, resolved_type, group_id_to_name):
+            if resolved_id and (config.get("room_id") or config.get("target_id")):
                 stats["remapped_rooms"] += 1
-            config["room_id"] = resolved_room_id
             sensor_changed = True
-
-        if resolved_room_id:
-            room_name = room_id_to_name.get(resolved_room_id)
-            if room_name and config.get("room_name") != room_name:
-                config["room_name"] = room_name
-                sensor_changed = True
 
         slots = config.get("time_slots", [])
         if isinstance(slots, list):
@@ -208,7 +253,7 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
                         slot["motion_action"] = "nothing"
                         stats["removed_scene_refs"] += 1
                         sensor_changed = True
-                    elif scene_id and resolved_room_id and scene_to_room.get(scene_id) not in (None, resolved_room_id):
+                    elif scene_id and resolved_id and scene_to_group.get(scene_id) not in (None, (resolved_id, resolved_type)):
                         slot["scene_id"] = ""
                         slot["scene_name"] = ""
                         slot["motion_action"] = "nothing"
@@ -223,14 +268,14 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
                         slot["after_action"] = "nothing"
                         stats["removed_scene_refs"] += 1
                         sensor_changed = True
-                    elif after_scene_id and resolved_room_id and scene_to_room.get(after_scene_id) not in (None, resolved_room_id):
+                    elif after_scene_id and resolved_id and scene_to_group.get(after_scene_id) not in (None, (resolved_id, resolved_type)):
                         slot["after_scene_id"] = ""
                         slot["after_scene_name"] = ""
                         slot["after_action"] = "nothing"
                         stats["removed_scene_refs"] += 1
                         sensor_changed = True
 
-        if not resolved_room_id and sensor.get("configured"):
+        if not resolved_id and sensor.get("configured"):
             sensor["configured"] = False
             stats["disabled_configs"] += 1
             sensor_changed = True
@@ -252,23 +297,17 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
 
         sensor_changed = False
 
-        resolved_room_id = _resolve_room_id(
-            config.get("room_id"),
-            config.get("room_name"),
+        resolved_id, resolved_type = _resolve_group_id(
+            config,
             valid_room_ids,
             room_name_to_id,
+            valid_zone_ids,
+            zone_name_to_id,
         )
-        if resolved_room_id != config.get("room_id"):
-            if resolved_room_id and config.get("room_id"):
+        if _apply_resolution(config, resolved_id, resolved_type, group_id_to_name):
+            if resolved_id and (config.get("room_id") or config.get("target_id")):
                 stats["remapped_rooms"] += 1
-            config["room_id"] = resolved_room_id
             sensor_changed = True
-
-        if resolved_room_id:
-            room_name = room_id_to_name.get(resolved_room_id)
-            if room_name and config.get("room_name") != room_name:
-                config["room_name"] = room_name
-                sensor_changed = True
 
         slots = config.get("time_slots", [])
         if isinstance(slots, list):
@@ -282,8 +321,8 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
                         not open_scene_id
                         or open_scene_id not in valid_scene_ids
                         or (
-                            resolved_room_id
-                            and scene_to_room.get(open_scene_id) not in (None, resolved_room_id)
+                            resolved_id
+                            and scene_to_group.get(open_scene_id) not in (None, (resolved_id, resolved_type))
                         )
                     )
                     if scene_invalid:
@@ -306,8 +345,8 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
                         not close_scene_id
                         or close_scene_id not in valid_scene_ids
                         or (
-                            resolved_room_id
-                            and scene_to_room.get(close_scene_id) not in (None, resolved_room_id)
+                            resolved_id
+                            and scene_to_group.get(close_scene_id) not in (None, (resolved_id, resolved_type))
                         )
                     )
                     if scene_invalid:
@@ -324,7 +363,7 @@ def sync_device_configs_with_hue(hue_controller=None) -> Dict[str, int]:
                             slot["close_scene_name"] = expected_name
                             sensor_changed = True
 
-        if not resolved_room_id and sensor.get("configured"):
+        if not resolved_id and sensor.get("configured"):
             sensor["configured"] = False
             stats["disabled_configs"] += 1
             sensor_changed = True

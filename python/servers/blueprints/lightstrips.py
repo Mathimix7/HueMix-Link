@@ -55,6 +55,13 @@ def update_lightstrip(lightstrip_id):
             lightstrip['name'] = data['name']
         if 'room_id' in data:
             lightstrip['room_id'] = data['room_id']
+        if 'target_id' in data:
+            lightstrip['target_id'] = data['target_id']
+        if 'target_type' in data:
+            target_type = data['target_type']
+            if target_type not in ('room', 'zone'):
+                return jsonify({'success': False, 'error': 'target_type must be room or zone'}), 400
+            lightstrip['target_type'] = target_type
         if 'single_color' in data:
             lightstrip['single_color'] = data['single_color']
         if 'ignore_third_party' in data:
@@ -322,13 +329,20 @@ def preview_colors(lightstrip_id):
         num_leds = lightstrip.get('num_leds', 40)
         strip_colors = automation_engine._generate_strip_colors(lightstrip, rgb_palette, num_leds)
         
-        # Get current brightness from room
-        room_id = lightstrip.get('room_id')
+        # Get current brightness from room/zone
+        group_id = lightstrip.get('target_id') or lightstrip.get('room_id')
+        group_type = lightstrip.get('target_type', 'room')
+        if group_type not in ('room', 'zone'):
+            group_type = 'room'
         brightness_pct = 100.0
-        if room_id:
-            room_state = hue_state_manager.get_room_state(room_id)
-            if room_state:
-                brightness_pct = room_state.get('avg_brightness', 100.0)
+        if group_id:
+            group_state = (
+                hue_state_manager.get_zone_state(group_id)
+                if group_type == 'zone'
+                else hue_state_manager.get_room_state(group_id)
+            )
+            if group_state:
+                brightness_pct = group_state.get('avg_brightness', 100.0)
         
         brightness_val = int(brightness_pct * 2.55)
         
@@ -363,14 +377,17 @@ def get_default_colors(lightstrip_id, scene_id):
         if not lightstrip:
             return jsonify({'success': False, 'error': 'Lightstrip not found'}), 404
         
-        room_id = lightstrip.get('room_id')
-        if not room_id:
-            return jsonify({'success': False, 'error': 'Lightstrip has no room assigned'}), 400
+        group_id = lightstrip.get('target_id') or lightstrip.get('room_id')
+        if not group_id:
+            return jsonify({'success': False, 'error': 'Lightstrip has no room/zone assigned'}), 400
         
+        group_type = lightstrip.get('target_type', 'room')
+        if group_type not in ('room', 'zone'):
+            group_type = 'room'
         ignore_third_party = lightstrip.get('ignore_third_party', False)
         
-        # Get palette from room lights (ignoring any overrides)
-        palette = automation_engine._get_hue_light_palette(room_id, ignore_third_party)
+        # Get palette from room/zone lights (ignoring any overrides)
+        palette = automation_engine._get_hue_light_palette(group_id, ignore_third_party, group_type)
         
         if not palette:
             return jsonify({'success': True, 'colors': []})

@@ -270,6 +270,9 @@ class HueSSEListener:
             elif item_type == 'room':
                 self._handle_room_update(item_id, item)
             
+            elif item_type == 'zone':
+                self._handle_zone_update(item_id, item)
+            
             else:
                 # Ignore other types (button, device, etc.)
                 logger.debug(f"Ignoring SSE event type: {item_type}")
@@ -301,6 +304,9 @@ class HueSSEListener:
             elif item_type == 'room':
                 self._handle_room_addition(item_id, item)
             
+            elif item_type == 'zone':
+                self._handle_zone_addition(item_id, item)
+            
             else:
                 logger.debug(f"Ignoring addition of type: {item_type}")
         
@@ -327,6 +333,8 @@ class HueSSEListener:
                 self._handle_scene_deletion(item_id)
             elif item_type == 'room':
                 self._handle_room_deletion(item_id)
+            elif item_type == 'zone':
+                self._handle_zone_deletion(item_id)
             else:
                 logger.debug(f"Ignoring deletion of type: {item_type}")
         
@@ -357,9 +365,10 @@ class HueSSEListener:
         """Handle grouped_light deletion from SSE."""
         try:
             logger.info(f"Grouped light deletion detected: {grouped_light_id}")
-            room_id = hue_state_manager.get_room_id_from_grouped_light(grouped_light_id)
-            if room_id:
-                logger.debug(f"Grouped light {grouped_light_id} was for room {room_id}")
+            owner = hue_state_manager.get_grouped_light_owner(grouped_light_id)
+            if owner:
+                owner_type, owner_id = owner
+                logger.debug(f"Grouped light {grouped_light_id} was for {owner_type} {owner_id}")
         
         except Exception as e:
             logger.error(f"Error handling grouped_light deletion {grouped_light_id}: {e}", exc_info=True)
@@ -374,6 +383,16 @@ class HueSSEListener:
         except Exception as e:
             logger.error(f"Error handling room deletion {room_id}: {e}", exc_info=True)
     
+    def _handle_zone_deletion(self, zone_id: str):
+        """Handle zone deletion from SSE."""
+        try:
+            logger.info(f"Zone deletion detected: {zone_id}")
+            hue_state_manager.remove_zone(zone_id)
+            sync_device_configs_with_hue(self._hue_controller)
+        
+        except Exception as e:
+            logger.error(f"Error handling zone deletion {zone_id}: {e}", exc_info=True)
+    
     def _handle_scene_addition(self, scene_id: str, data: dict):
         """Handle new scene added from SSE."""
         try:
@@ -382,20 +401,39 @@ class HueSSEListener:
             # Extract scene metadata
             scene_name = data.get('metadata', {}).get('name', 'Unknown')
             group_info = data.get('group', {})
-            room_id = group_info.get('rid')
+            group_id = group_info.get('rid')
+            group_type = group_info.get('rtype')
+            if group_type not in ('room', 'zone') and group_id:
+                # Fallback: infer group type from known state
+                if hue_state_manager.get_room_state(group_id):
+                    group_type = 'room'
+                elif hue_state_manager.get_zone_state(group_id):
+                    group_type = 'zone'
             
             # Register the new scene
             hue_state_manager.register_scene(scene_id, {
                 'name': scene_name,
-                'room_id': room_id
+                'room_id': group_id,
+                'group_type': group_type or 'room'
             })
 
-            # If this scene references a room we have never seen, hydrate room metadata now.
-            if room_id and self._hue_controller and not hue_state_manager.get_room_state(room_id):
-                self._upsert_room_state(room_id, {}, event_type='scene_addition')
+            # If this scene references a group we have never seen, hydrate its metadata now.
+            if group_id and self._hue_controller:
+                group_known = (
+                    hue_state_manager.get_room_state(group_id)
+                    if group_type != 'zone'
+                    else hue_state_manager.get_zone_state(group_id)
+                )
+                if not group_known:
+                    self._upsert_group_state(
+                        group_id,
+                        group_type or 'room',
+                        {},
+                        event_type='scene_addition'
+                    )
 
             sync_device_configs_with_hue(self._hue_controller)
-            logger.info(f"Registered new scene {scene_id} ({scene_name}) for room {room_id}")
+            logger.info(f"Registered new scene {scene_id} ({scene_name}) for {group_type or 'room'} {group_id}")
         
         except Exception as e:
             logger.error(f"Error handling scene addition {scene_id}: {e}", exc_info=True)
@@ -403,15 +441,24 @@ class HueSSEListener:
     def _handle_room_update(self, room_id: str, data: dict):
         """Handle room updates from SSE."""
         try:
-            changed = self._upsert_room_state(room_id, data, event_type='update')
+            changed = self._upsert_group_state(room_id, 'room', data, event_type='update')
             if changed:
                 sync_device_configs_with_hue(self._hue_controller)
         except Exception as e:
             logger.error(f"Error handling room update {room_id}: {e}", exc_info=True)
+    
+    def _handle_zone_update(self, zone_id: str, data: dict):
+        """Handle zone updates from SSE."""
+        try:
+            changed = self._upsert_group_state(zone_id, 'zone', data, event_type='update')
+            if changed:
+                sync_device_configs_with_hue(self._hue_controller)
+        except Exception as e:
+            logger.error(f"Error handling zone update {zone_id}: {e}", exc_info=True)
 
-    def _upsert_room_state(self, room_id: str, data: dict, event_type: str = 'update') -> bool:
-        """Create/update room state from SSE payload with bridge fallback for partial payloads."""
-        room_name = data.get('metadata', {}).get('name', 'Unknown')
+    def _upsert_group_state(self, group_id: str, group_type: str, data: dict, event_type: str = 'update') -> bool:
+        """Create/update room or zone state from SSE payload with bridge fallback for partial payloads."""
+        group_name = data.get('metadata', {}).get('name', 'Unknown')
 
         grouped_light_id = None
         for service in data.get('services', []):
@@ -419,18 +466,18 @@ class HueSSEListener:
                 grouped_light_id = service.get('rid')
                 break
 
-        # SSE room payloads can be partial right after creation/update.
+        # SSE payloads can be partial right after creation/update.
         if self._hue_controller:
             try:
-                full_room = self._hue_controller.get_room(room_id)
-                room_name = full_room.get('metadata', {}).get('name', room_name)
+                full_group = self._hue_controller.get_group(group_id, group_type)
+                group_name = full_group.get('metadata', {}).get('name', group_name)
                 if not grouped_light_id:
-                    for service in full_room.get('services', []):
+                    for service in full_group.get('services', []):
                         if service.get('rtype') == 'grouped_light':
                             grouped_light_id = service.get('rid')
                             break
             except Exception:
-                logger.debug(f"Failed to fetch full room details for {room_id}", exc_info=True)
+                logger.debug(f"Failed to fetch full {group_type} details for {group_id}", exc_info=True)
 
         is_on = None
         if grouped_light_id and self._hue_controller:
@@ -438,20 +485,30 @@ class HueSSEListener:
                 grouped_light = self._hue_controller.get_grouped_light(grouped_light_id)
                 is_on = grouped_light.get('on', {}).get('on')
             except Exception:
-                logger.debug(f"Failed to fetch grouped_light state for room {room_id}", exc_info=True)
+                logger.debug(f"Failed to fetch grouped_light state for {group_type} {group_id}", exc_info=True)
 
-        old_state = hue_state_manager.get_room_state(room_id) or {}
-        hue_state_manager.update_room(
-            room_id=room_id,
-            name=room_name,
-            is_on=is_on,
-            grouped_light_id=grouped_light_id
-        )
-        new_state = hue_state_manager.get_room_state(room_id) or {}
+        if group_type == 'zone':
+            old_state = hue_state_manager.get_zone_state(group_id) or {}
+            hue_state_manager.update_zone(
+                zone_id=group_id,
+                name=group_name,
+                is_on=is_on,
+                grouped_light_id=grouped_light_id
+            )
+            new_state = hue_state_manager.get_zone_state(group_id) or {}
+        else:
+            old_state = hue_state_manager.get_room_state(group_id) or {}
+            hue_state_manager.update_room(
+                room_id=group_id,
+                name=group_name,
+                is_on=is_on,
+                grouped_light_id=grouped_light_id
+            )
+            new_state = hue_state_manager.get_room_state(group_id) or {}
 
         if not grouped_light_id:
             logger.debug(
-                f"Room {room_id} ({room_name}) upsert from {event_type} still has no grouped_light_id"
+                f"{group_type.capitalize()} {group_id} ({group_name}) upsert from {event_type} still has no grouped_light_id"
             )
 
         return (
@@ -461,12 +518,16 @@ class HueSSEListener:
             or (is_on is not None and old_state.get('is_on') != new_state.get('is_on'))
         )
     
+    def _upsert_room_state(self, room_id: str, data: dict, event_type: str = 'update') -> bool:
+        """Create/update room state from SSE payload (room-specific wrapper)."""
+        return self._upsert_group_state(room_id, 'room', data, event_type=event_type)
+    
     def _handle_room_addition(self, room_id: str, data: dict):
         """Handle new room added from SSE."""
         try:
             logger.info(f"Room addition detected: {room_id}")
 
-            self._upsert_room_state(room_id, data, event_type='add')
+            self._upsert_group_state(room_id, 'room', data, event_type='add')
             sync_device_configs_with_hue(self._hue_controller)
             room_state = hue_state_manager.get_room_state(room_id) or {}
             room_name = room_state.get('name', 'Unknown')
@@ -474,6 +535,20 @@ class HueSSEListener:
         
         except Exception as e:
             logger.error(f"Error handling room addition {room_id}: {e}", exc_info=True)
+
+    def _handle_zone_addition(self, zone_id: str, data: dict):
+        """Handle new zone added from SSE."""
+        try:
+            logger.info(f"Zone addition detected: {zone_id}")
+
+            self._upsert_group_state(zone_id, 'zone', data, event_type='add')
+            sync_device_configs_with_hue(self._hue_controller)
+            zone_state = hue_state_manager.get_zone_state(zone_id) or {}
+            zone_name = zone_state.get('name', 'Unknown')
+            logger.info(f"Registered new zone {zone_id} ({zone_name})")
+        
+        except Exception as e:
+            logger.error(f"Error handling zone addition {zone_id}: {e}", exc_info=True)
 
     
     def _handle_light_update(self, light_id: str, data: dict):
@@ -527,37 +602,51 @@ class HueSSEListener:
             logger.error(f"Error processing light update {light_id}: {e}", exc_info=True)
     
     def _handle_grouped_light_update(self, grouped_light_id: str, data: dict):
-        """Handle room state update from SSE."""
+        """Handle room/zone state update from SSE."""
         try:
-            # Get the actual room ID from the grouped_light ID
-            room_id = hue_state_manager.get_room_id_from_grouped_light(grouped_light_id)
+            # Get the actual owner (room or zone) from the grouped_light ID
+            owner = hue_state_manager.get_grouped_light_owner(grouped_light_id)
+            owner_id = None
+            owner_type = None
+            if owner:
+                owner_type, owner_id = owner
 
-            # If mapping is missing (common right after room creation), discover and hydrate it.
-            if room_id is None and self._hue_controller:
+            # If mapping is missing (common right after group creation), discover and hydrate it.
+            if owner_id is None and self._hue_controller:
                 try:
-                    for room in self._hue_controller.get_rooms():
-                        for service in room.get('services', []):
-                            if service.get('rtype') == 'grouped_light' and service.get('rid') == grouped_light_id:
-                                discovered_room_id = room.get('id')
-                                if discovered_room_id:
-                                    self._upsert_room_state(discovered_room_id, room, event_type='grouped_light_discovery')
-                                    room_id = discovered_room_id
-                                    logger.info(
-                                        f"Resolved grouped_light {grouped_light_id} to room {room_id} via bridge lookup"
-                                    )
-                                break
-                        if room_id is not None:
+                    for group_type, groups in (('room', self._hue_controller.get_rooms()),
+                                               ('zone', self._hue_controller.get_zones())):
+                        if owner_id is not None:
                             break
+                        for group in groups:
+                            for service in group.get('services', []):
+                                if service.get('rtype') == 'grouped_light' and service.get('rid') == grouped_light_id:
+                                    discovered_id = group.get('id')
+                                    if discovered_id:
+                                        self._upsert_group_state(
+                                            discovered_id,
+                                            group_type,
+                                            group,
+                                            event_type='grouped_light_discovery'
+                                        )
+                                        owner_id = discovered_id
+                                        owner_type = group_type
+                                        logger.info(
+                                            f"Resolved grouped_light {grouped_light_id} to {group_type} {owner_id} via bridge lookup"
+                                        )
+                                    break
+                            if owner_id is not None:
+                                break
                 except Exception:
                     logger.debug(
                         f"Failed to resolve grouped_light mapping for {grouped_light_id}",
                         exc_info=True
                     )
             
-            if room_id is None:
+            if owner_id is None:
                 return
             
-            # Extract room state - only include fields that are present
+            # Extract group state - only include fields that are present
             is_on = None
             brightness = None
             
@@ -571,11 +660,18 @@ class HueSSEListener:
             
             # Only update if we have at least one field
             if is_on is not None or brightness is not None:
-                hue_state_manager.update_room(
-                    room_id=room_id,
-                    is_on=is_on,
-                    brightness=brightness
-                )
+                if owner_type == 'zone':
+                    hue_state_manager.update_zone(
+                        zone_id=owner_id,
+                        is_on=is_on,
+                        brightness=brightness
+                    )
+                else:
+                    hue_state_manager.update_room(
+                        room_id=owner_id,
+                        is_on=is_on,
+                        brightness=brightness
+                    )
         
         except Exception as e:
             logger.error(f"Error processing grouped_light update {grouped_light_id}: {e}", exc_info=True)
@@ -591,35 +687,49 @@ class HueSSEListener:
             
             # Handle scene becoming inactive
             if active_status == 'inactive':
-                # Only clear the scene if this is the currently active scene in its room
+                # Only clear the scene if this is the currently active scene in its group
                 scene_info = hue_state_manager.get_scene_info(scene_id)
                 if scene_info:
-                    room_id = scene_info.get('room_id')
-                    if room_id:
-                        room_state = hue_state_manager.get_room_state(room_id)
-                        if room_state and room_state.get('current_scene_id') == scene_id:
-                            # This scene is currently active in the room, so clear it
-                            hue_state_manager.set_room_scene(room_id, None)
-                            logger.info(f"Cleared scene {scene_id} from room {room_id} (became inactive)")
+                    group_id = scene_info.get('room_id')
+                    group_type = scene_info.get('group_type', 'room')
+                    if group_id:
+                        if group_type == 'zone':
+                            zone_state = hue_state_manager.get_zone_state(group_id)
+                            if zone_state and zone_state.get('current_scene_id') == scene_id:
+                                hue_state_manager.set_zone_scene(group_id, None)
+                                logger.info(f"Cleared scene {scene_id} from zone {group_id} (became inactive)")
+                        else:
+                            room_state = hue_state_manager.get_room_state(group_id)
+                            if room_state and room_state.get('current_scene_id') == scene_id:
+                                hue_state_manager.set_room_scene(group_id, None)
+                                logger.info(f"Cleared scene {scene_id} from room {group_id} (became inactive)")
                 return
-                            
-            # First, try to get room from stored scene info
+            
+            # First, try to get the owning group from stored scene info
             scene_info = hue_state_manager.get_scene_info(scene_id)
-            room_id = None
+            group_id = None
+            group_type = None
             
             if scene_info:
-                room_id = scene_info.get('room_id')
-                logger.debug(f"Found room_id {room_id} from scene registry")
+                group_id = scene_info.get('room_id')
+                group_type = scene_info.get('group_type', 'room')
+                logger.debug(f"Found group_id {group_id} ({group_type}) from scene registry")
             
-            # If we have a room_id, update the room's active scene
-            if room_id:
-                hue_state_manager.set_room_scene(
-                    room_id=room_id,
-                    scene_id=scene_id
-                )
-                logger.info(f"Set scene {scene_id} as active for room {room_id}")
+            # If we have a group, update its active scene
+            if group_id:
+                if group_type == 'zone':
+                    hue_state_manager.set_zone_scene(
+                        zone_id=group_id,
+                        scene_id=scene_id
+                    )
+                else:
+                    hue_state_manager.set_room_scene(
+                        room_id=group_id,
+                        scene_id=scene_id
+                    )
+                logger.info(f"Set scene {scene_id} as active for {group_type} {group_id}")
             else:
-                logger.warning(f"Could not determine room for scene {scene_id}")
+                logger.warning(f"Could not determine owning group for scene {scene_id}")
         
         except Exception as e:
             logger.error(f"Error processing scene update {scene_id}: {e}", exc_info=True)

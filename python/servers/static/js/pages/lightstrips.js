@@ -1,5 +1,5 @@
 let lightstrips = [];
-let rooms = [];
+let groups = [];
 let currentLightstrip = null;
 let currentScenes = [];
 let colorPickerCallback = null;
@@ -9,7 +9,7 @@ let deleteLightstripName = null;
 
 // Load data on page load
 window.addEventListener('DOMContentLoaded', function() {
-    loadRooms();
+    loadGroups();
     loadLightstrips();
     
     // Color picker - RGB sliders and number inputs
@@ -135,7 +135,15 @@ function showSkeletonLoaders() {
     }
 }
 
-function loadRooms() {
+function getStripTarget(strip) {
+    const type = (strip.target_type || 'room') === 'zone' ? 'zone' : 'room';
+    return {
+        id: strip.target_id || strip.room_id || '',
+        type: type
+    };
+}
+
+function loadGroups() {
     const roomSelect = document.getElementById('lightstrip-room');
     const loadingState = document.getElementById('lightstrip-room-loading-state');
     const errorState = document.getElementById('lightstrip-room-error-state');
@@ -149,7 +157,7 @@ function loadRooms() {
     }
     roomSelect.disabled = true;
     
-    fetch('/api/rooms')
+    fetch('/api/groups')
         .then(response => response.json())
         .then(data => {
             if (loadingState) {
@@ -158,14 +166,28 @@ function loadRooms() {
             roomSelect.disabled = false;
             
             if (data.success) {
-                rooms = data.rooms;
-                roomSelect.innerHTML = '<option value="">Select a room</option>';
-                rooms.forEach(room => {
+                groups = data.groups;
+                roomSelect.innerHTML = '<option value="">Select a room or zone</option>';
+                
+                const roomOptgroup = document.createElement('optgroup');
+                roomOptgroup.label = 'Rooms';
+                const zoneOptgroup = document.createElement('optgroup');
+                zoneOptgroup.label = 'Zones';
+                
+                groups.forEach(group => {
                     const option = document.createElement('option');
-                    option.value = room.id;
-                    option.textContent = room.name;
-                    roomSelect.appendChild(option);
+                    option.value = group.id;
+                    option.dataset.type = group.type;
+                    option.textContent = group.name;
+                    if (group.type === 'zone') {
+                        zoneOptgroup.appendChild(option);
+                    } else {
+                        roomOptgroup.appendChild(option);
+                    }
                 });
+                
+                roomSelect.appendChild(roomOptgroup);
+                roomSelect.appendChild(zoneOptgroup);
             } else if (data.needs_config) {
                 // Show error state
                 if (errorState) {
@@ -185,7 +207,7 @@ function loadRooms() {
             }
         })
         .catch(err => {
-            console.error('Error loading rooms:', err);
+            console.error('Error loading groups:', err);
             if (loadingState) {
                 loadingState.classList.add('hidden');
             }
@@ -239,10 +261,12 @@ function createLightstripCard(strip) {
     const card = document.createElement('div');
     card.className = 'border border-gray-200 rounded-xl p-6 hover:shadow-lg transition-shadow';
     
-    const room = rooms.find(r => r.id === strip.room_id);
-    const roomName = room ? room.name : 'Not configured';
+    const target = getStripTarget(strip);
+    const group = groups.find(g => g.id === target.id);
+    const targetName = group ? group.name : 'Not configured';
+    const targetTypeLabel = target.id ? (target.type === 'zone' ? 'Zone' : 'Room') : '';
     const overrideCount = Object.keys(strip.overrides || {}).length;
-    const isConfigured = strip.room_id && strip.room_id !== '';
+    const isConfigured = target.id !== '';
     
     card.innerHTML = `
         <div class="flex items-start justify-between mb-4">
@@ -260,8 +284,8 @@ function createLightstripCard(strip) {
 
         <div class="grid grid-cols-2 gap-3 mb-4 text-sm">
             <div>
-                <p class="text-gray-500">Room</p>
-                <p class="text-gray-900">${roomName}</p>
+                <p class="text-gray-500">Target</p>
+                <p class="text-gray-900">${targetName}${targetTypeLabel ? ` <span class="text-xs text-gray-400">(${targetTypeLabel})</span>` : ''}</p>
             </div>
             <div>
                 <p class="text-gray-500">Number of LEDs</p>
@@ -347,7 +371,8 @@ function configureLightstrip(stripId) {
     document.getElementById('modal-title').textContent = 'Configure Lightstrip';
     document.getElementById('lightstrip-name').value = strip.name;
     document.getElementById('lightstrip-mac').value = strip.mac_address;
-    document.getElementById('lightstrip-room').value = strip.room_id || '';
+    const target = getStripTarget(strip);
+    document.getElementById('lightstrip-room').value = target.id || '';
     document.getElementById('lightstrip-single-color').checked = strip.single_color !== undefined ? strip.single_color : true;
     document.getElementById('lightstrip-num-leds').value = strip.number_colors || 40;
     
@@ -371,7 +396,9 @@ function saveLightstrip() {
     const btnText = document.getElementById('save-lightstrip-text');
 
     const name = document.getElementById('lightstrip-name').value.trim();
-    const roomId = document.getElementById('lightstrip-room').value;
+    const roomSelect = document.getElementById('lightstrip-room');
+    const roomId = roomSelect.value;
+    const targetType = roomSelect.options[roomSelect.selectedIndex]?.dataset.type || 'room';
     const singleColor = document.getElementById('lightstrip-single-color').checked;
     const numLeds = parseInt(document.getElementById('lightstrip-num-leds').value);
     const ignoreThirdParty = document.getElementById('lightstrip-ignore-third-party').checked;
@@ -394,6 +421,8 @@ function saveLightstrip() {
     const data = {
         name: name,
         room_id: roomId,
+        target_id: roomId,
+        target_type: targetType,
         single_color: singleColor,
         num_leds: numLeds,
         ignore_third_party: ignoreThirdParty,
@@ -454,8 +483,9 @@ function showOverrides(stripId) {
     
     document.getElementById('overrides-modal').classList.remove('hidden');
     
-    // Load scenes for the room
-    fetch(`/api/rooms/${strip.room_id}/scenes`)
+    // Load scenes for the room/zone
+    const target = getStripTarget(strip);
+    fetch(`/api/groups/${target.id}/scenes`)
         .then(response => response.json())
         .then(data => {
             if (data.success) {

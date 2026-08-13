@@ -19,15 +19,21 @@ class HueStateManager:
         # State storage
         self._lights: Dict[str, Dict] = {}
         self._rooms: Dict[str, Dict] = {}
+        self._zones: Dict[str, Dict] = {}
         self._scenes: Dict[str, Dict] = {}
         
         # Mapping for grouped_light_id to room_id (for SSE events)
         self._grouped_light_to_room: Dict[str, str] = {}  # grouped_light_id -> room_id
+        # Mapping for grouped_light_id to zone_id (for SSE events)
+        self._grouped_light_to_zone: Dict[str, str] = {}  # grouped_light_id -> zone_id
+        # Reverse index: light_id -> zone_ids (zones overlap; a light can be in many zones)
+        self._light_to_zones: Dict[str, List[str]] = {}
         
         # Subscribers for state changes
         self._light_change_callbacks: List[Callable] = []
         self._scene_change_callbacks: List[Callable] = []
         self._room_change_callbacks: List[Callable] = []
+        self._zone_change_callbacks: List[Callable] = []
         
         logger.info("HueStateManager initialized")
     
@@ -103,6 +109,10 @@ class HueStateManager:
             if room_id:
                 self._update_room_aggregate(room_id)
             
+            # Update all zone states this light belongs to (zones overlap)
+            for zone_id in self._light_to_zones.get(light_id, []):
+                self._update_zone_aggregate(zone_id)
+            
             # Notify subscribers
             self._notify_light_change(light_id, self._lights[light_id], old_state)
     
@@ -135,6 +145,14 @@ class HueStateManager:
                         room_lights.remove(light_id)
                         self._update_room_aggregate(room_id)
                 
+                # Remove light from any zones it belongs to
+                for zone_id in self._light_to_zones.pop(light_id, []):
+                    if zone_id in self._zones:
+                        zone_lights = self._zones[zone_id].get('lights', [])
+                        if light_id in zone_lights:
+                            zone_lights.remove(light_id)
+                            self._update_zone_aggregate(zone_id)
+                
                 del self._lights[light_id]
                 logger.info(f"Light {light_id} removed from state manager")
                 return True
@@ -152,6 +170,26 @@ class HueStateManager:
         """
         with self._lock:
             return self._grouped_light_to_room.get(grouped_light_id)
+    
+    def get_grouped_light_owner(self, grouped_light_id: str) -> Optional[tuple]:
+        """
+        Get the owning group (room or zone) of a grouped_light ID.
+        
+        Args:
+            grouped_light_id: The grouped_light service ID from SSE events
+            
+        Returns:
+            Tuple of (owner_type, owner_id) where owner_type is 'room' or 'zone',
+            or None if not found
+        """
+        with self._lock:
+            room_id = self._grouped_light_to_room.get(grouped_light_id)
+            if room_id:
+                return ('room', room_id)
+            zone_id = self._grouped_light_to_zone.get(grouped_light_id)
+            if zone_id:
+                return ('zone', zone_id)
+            return None
     
     # Room State Management
     
@@ -294,6 +332,166 @@ class HueStateManager:
         if old_is_on != any_on or old_brightness != room['avg_brightness']:
             self._notify_room_change(room_id, room)
     
+    # Zone State Management
+    
+    def update_zone(self, zone_id: str, is_on: Optional[bool] = None,
+                    brightness: Optional[float] = None, name: Optional[str] = None,
+                    lights: Optional[List[str]] = None, grouped_light_id: Optional[str] = None):
+        """
+        Update zone information and state.
+        
+        Args:
+            zone_id: Hue zone ID
+            is_on: Whether zone is on
+            brightness: Average brightness
+            name: Zone name
+            lights: List of light IDs in zone
+            grouped_light_id: Grouped light ID for this zone
+        """
+        with self._lock:
+            old_grouped_light_id = self._zones.get(zone_id, {}).get('grouped_light_id')
+
+            if zone_id not in self._zones:
+                self._zones[zone_id] = {
+                    'lights': [],
+                    'current_scene_id': None,
+                    'is_on': False
+                }
+            
+            # Update provided fields
+            if is_on is not None:
+                self._zones[zone_id]['is_on'] = is_on
+            if brightness is not None:
+                self._zones[zone_id]['avg_brightness'] = brightness
+            if name is not None:
+                self._zones[zone_id]['name'] = name
+            if lights is not None:
+                # Update reverse index for zone membership
+                old_lights = set(self._zones[zone_id].get('lights', []))
+                new_lights = set(lights)
+                for light_id in old_lights - new_lights:
+                    if light_id in self._light_to_zones:
+                        self._light_to_zones[light_id] = [z for z in self._light_to_zones[light_id] if z != zone_id]
+                        if not self._light_to_zones[light_id]:
+                            del self._light_to_zones[light_id]
+                for light_id in new_lights - old_lights:
+                    self._light_to_zones.setdefault(light_id, [])
+                    if zone_id not in self._light_to_zones[light_id]:
+                        self._light_to_zones[light_id].append(zone_id)
+                self._zones[zone_id]['lights'] = lights
+            if grouped_light_id is not None:
+                self._zones[zone_id]['grouped_light_id'] = grouped_light_id
+                if old_grouped_light_id and old_grouped_light_id in self._grouped_light_to_zone:
+                    if self._grouped_light_to_zone[old_grouped_light_id] == zone_id:
+                        del self._grouped_light_to_zone[old_grouped_light_id]
+                if grouped_light_id:
+                    self._grouped_light_to_zone[grouped_light_id] = zone_id
+            
+            self._zones[zone_id]['last_update'] = datetime.now().isoformat()
+            
+            # Update aggregate state if lights were provided
+            if lights is not None:
+                self._update_zone_aggregate(zone_id)
+    
+    def set_zone_scene(self, zone_id: str, scene_id: Optional[str], old_scene_id: Optional[str] = None, source: str = 'sse'):
+        """
+        Set the active scene for a zone.
+        
+        Args:
+            zone_id: Hue zone ID
+            scene_id: Hue scene ID being activated (None to clear)
+            old_scene_id: Previous scene ID (if known, otherwise will be looked up)
+            source: Source of the change ('sse', 'button', 'web')
+        """
+        with self._lock:
+            if zone_id not in self._zones:
+                self._zones[zone_id] = {'lights': [], 'is_on': False}
+            
+            # Use provided old_scene_id or look it up
+            if old_scene_id is None:
+                old_scene_id = self._zones[zone_id].get('current_scene_id')
+            
+            self._zones[zone_id]['current_scene_id'] = scene_id
+            self._zones[zone_id]['last_scene_change'] = datetime.now().isoformat()
+            
+            logger.info(f"Zone {zone_id} scene changed from {old_scene_id} to {scene_id} (source: {source})")
+            
+            # Notify subscribers
+            self._notify_scene_change(zone_id, scene_id, old_scene_id, source)
+    
+    def get_zone_state(self, zone_id: str) -> Optional[Dict]:
+        """Get the current state of a zone."""
+        with self._lock:
+            return self._zones.get(zone_id, {}).copy() if zone_id in self._zones else None
+    
+    def get_all_zones(self) -> Dict[str, Dict]:
+        """Get all zone states."""
+        with self._lock:
+            return {zid: state.copy() for zid, state in self._zones.items()}
+    
+    def remove_zone(self, zone_id: str) -> bool:
+        """Remove a zone from state tracking.
+        
+        Args:
+            zone_id: Hue zone ID to remove
+            
+        Returns:
+            True if zone was removed, False if it didn't exist
+        """
+        with self._lock:
+            if zone_id in self._zones:
+                # Remove grouped_light_id mapping
+                grouped_light_id = self._zones[zone_id].get('grouped_light_id')
+                if grouped_light_id and grouped_light_id in self._grouped_light_to_zone:
+                    del self._grouped_light_to_zone[grouped_light_id]
+                
+                # Clean reverse index
+                for light_id in self._zones[zone_id].get('lights', []):
+                    if light_id in self._light_to_zones:
+                        self._light_to_zones[light_id] = [z for z in self._light_to_zones[light_id] if z != zone_id]
+                        if not self._light_to_zones[light_id]:
+                            del self._light_to_zones[light_id]
+                
+                del self._zones[zone_id]
+                logger.info(f"Zone {zone_id} removed from state manager")
+                return True
+            return False
+    
+    def _update_zone_aggregate(self, zone_id: str):
+        """Update aggregate zone state based on its lights."""
+        if zone_id not in self._zones:
+            return
+        
+        zone = self._zones[zone_id]
+        light_ids = zone.get('lights', [])
+        
+        if not light_ids:
+            return
+        
+        # Check if any light is on
+        any_on = False
+        total_brightness = 0
+        on_count = 0
+        
+        for light_id in light_ids:
+            if light_id in self._lights:
+                light = self._lights[light_id]
+                if light.get('on'):
+                    any_on = True
+                    on_count += 1
+                    total_brightness += light.get('brightness', 0)
+        
+        # Update zone aggregate state
+        old_is_on = zone.get('is_on', False)
+        old_brightness = zone.get('avg_brightness', 0)
+        zone['is_on'] = any_on
+        zone['on_count'] = on_count
+        zone['avg_brightness'] = total_brightness / on_count if on_count > 0 else 0
+        
+        # Notify if zone on/off or brightness changed
+        if old_is_on != any_on or old_brightness != zone['avg_brightness']:
+            self._notify_zone_change(zone_id, zone)
+    
     # Scene Management
     
     def register_scene(self, scene_id: str, scene_data: Dict):
@@ -324,13 +522,19 @@ class HueStateManager:
         """
         with self._lock:
             if scene_id in self._scenes:
-                # Clear scene from any room if it's currently active
+                # Clear scene from any room/zone if it's currently active
                 scene_info = self._scenes[scene_id]
-                room_id = scene_info.get('room_id')
-                if room_id and room_id in self._rooms:
-                    if self._rooms[room_id].get('current_scene_id') == scene_id:
-                        self._rooms[room_id]['current_scene_id'] = None
-                        logger.info(f"Cleared active scene {scene_id} from room {room_id}")
+                group_id = scene_info.get('room_id')
+                group_type = scene_info.get('group_type', 'room')
+                if group_id:
+                    if group_type == 'zone' and group_id in self._zones:
+                        if self._zones[group_id].get('current_scene_id') == scene_id:
+                            self._zones[group_id]['current_scene_id'] = None
+                            logger.info(f"Cleared active scene {scene_id} from zone {group_id}")
+                    elif group_type == 'room' and group_id in self._rooms:
+                        if self._rooms[group_id].get('current_scene_id') == scene_id:
+                            self._rooms[group_id]['current_scene_id'] = None
+                            logger.info(f"Cleared active scene {scene_id} from room {group_id}")
                 
                 del self._scenes[scene_id]
                 logger.info(f"Scene {scene_id} removed from state manager")
@@ -365,6 +569,13 @@ class HueStateManager:
                 self._room_change_callbacks.append(callback)
                 logger.debug(f"Added room change subscriber: {callback.__name__}")
     
+    def subscribe_zone_changes(self, callback: Callable):
+        """Subscribe to zone state changes."""
+        with self._lock:
+            if callback not in self._zone_change_callbacks:
+                self._zone_change_callbacks.append(callback)
+                logger.debug(f"Added zone change subscriber: {callback.__name__}")
+    
     def unsubscribe_light_changes(self, callback: Callable):
         """Unsubscribe from light state changes."""
         with self._lock:
@@ -378,10 +589,16 @@ class HueStateManager:
                 self._scene_change_callbacks.remove(callback)
     
     def unsubscribe_room_changes(self, callback: Callable):
-        """Unsubscribe from room changes."""
+        """Unsubscribe from room state changes."""
         with self._lock:
             if callback in self._room_change_callbacks:
                 self._room_change_callbacks.remove(callback)
+    
+    def unsubscribe_zone_changes(self, callback: Callable):
+        """Unsubscribe from zone state changes."""
+        with self._lock:
+            if callback in self._zone_change_callbacks:
+                self._zone_change_callbacks.remove(callback)
     
     # Notification Helpers
     
@@ -403,11 +620,19 @@ class HueStateManager:
     
     def _notify_room_change(self, room_id: str, room_state: Dict):
         """Notify all subscribers of room state change."""
-        for callback in self._room_change_callbacks[:]:
+        for callback in self._room_change_callbacks[:]:  # Copy to avoid modification during iteration
             try:
                 callback(room_id, room_state)
             except Exception as e:
                 logger.error(f"Error in room change callback {callback.__name__}: {e}")
+    
+    def _notify_zone_change(self, zone_id: str, zone_state: Dict):
+        """Notify all subscribers of zone state change."""
+        for callback in self._zone_change_callbacks[:]:  # Copy to avoid modification during iteration
+            try:
+                callback(zone_id, zone_state)
+            except Exception as e:
+                logger.error(f"Error in zone change callback {callback.__name__}: {e}")
     
     # Utility
     
@@ -424,6 +649,7 @@ class HueStateManager:
             
             # Fetch all data from bridge
             rooms_data = hue_controller.get_rooms()
+            zones_data = hue_controller.get_zones()
             lights_data = hue_controller.get_lights()
             scenes_data = hue_controller.get_scenes()
             devices_data = hue_controller.get_devices()
@@ -482,6 +708,51 @@ class HueStateManager:
                     'last_update': datetime.now().isoformat()
                 })
             
+            # Process zones
+            for zone in zones_data:
+                zone_id = zone.get('id')
+                zone_name = zone.get('metadata', {}).get('name', 'Unknown')
+                
+                # Get lights in this zone
+                light_ids = []
+                for child in zone.get('children', []):
+                    if child.get('rtype') == 'device':
+                        device_id = child.get('rid')
+                        if device_id in device_to_light:
+                            light_ids.append(device_to_light[device_id])
+                
+                # Get zone on/off state from grouped_light and map grouped_light_id to zone_id
+                is_on = False
+                grouped_light_id = None
+                for service in zone.get('services', []):
+                    if service.get('rtype') == 'grouped_light':
+                        grouped_light_id = service.get('rid')
+                        # Store mapping for SSE events
+                        self._grouped_light_to_zone[grouped_light_id] = zone_id
+                        for gl in grouped_lights_data:
+                            if gl.get('id') == grouped_light_id:
+                                is_on = gl.get('on', {}).get('on', False)
+                                break
+                        break
+                
+                # Store zone state with grouped_light_id
+                if zone_id not in self._zones:
+                    self._zones[zone_id] = {}
+                
+                self._zones[zone_id].update({
+                    'name': zone_name,
+                    'lights': light_ids,
+                    'is_on': is_on,
+                    'grouped_light_id': grouped_light_id,
+                    'last_update': datetime.now().isoformat()
+                })
+                
+                # Maintain light -> zones reverse index for aggregate recomputation
+                for light_id in light_ids:
+                    self._light_to_zones.setdefault(light_id, [])
+                    if zone_id not in self._light_to_zones[light_id]:
+                        self._light_to_zones[light_id].append(zone_id)
+            
             # Process lights
             for light in lights_data:
                 light_id = light.get('id')
@@ -536,9 +807,16 @@ class HueStateManager:
                 scene_id = scene.get('id')
                 scene_name = scene.get('metadata', {}).get('name', 'Unknown')
                 
-                # Get room for this scene
+                # Get the owning group (room or zone) for this scene
                 group_info = scene.get('group', {})
-                room_id = group_info.get('rid')
+                group_id = group_info.get('rid')
+                group_type = group_info.get('rtype')
+                if group_type not in ('room', 'zone') and group_id:
+                    # Fallback: rtype may be absent on some bridges; infer from known ids
+                    if group_id in self._rooms:
+                        group_type = 'room'
+                    elif group_id in self._zones:
+                        group_type = 'zone'
                 
                 # Check if scene is currently active
                 status = scene.get('status', {})
@@ -546,16 +824,21 @@ class HueStateManager:
                 
                 self.register_scene(scene_id, {
                     'name': scene_name,
-                    'room_id': room_id
+                    'room_id': group_id,
+                    'group_type': group_type or 'room'
                 })
                 
-                # If scene is active, set it as the current scene for the room
-                if is_active and room_id:
-                    logger.debug(f"Found active scene {scene_name} ({scene_id}) in room {room_id}")
-                    self.set_room_scene(room_id, scene_id)
+                # If scene is active, set it as the current scene for the group
+                if is_active and group_id:
+                    if group_type == 'zone':
+                        logger.debug(f"Found active scene {scene_name} ({scene_id}) in zone {group_id}")
+                        self.set_zone_scene(group_id, scene_id)
+                    else:
+                        logger.debug(f"Found active scene {scene_name} ({scene_id}) in room {group_id}")
+                        self.set_room_scene(group_id, scene_id)
             
             logger.info(f"State manager initialized: {len(self._lights)} lights, "
-                       f"{len(self._rooms)} rooms, {len(self._scenes)} scenes")
+                       f"{len(self._rooms)} rooms, {len(self._zones)} zones, {len(self._scenes)} scenes")
         
         except Exception as e:
             logger.error(f"Error initializing state manager from bridge: {e}")
@@ -576,6 +859,7 @@ class HueStateManager:
             # Fetch current data from bridge
             bridge_lights = hue_controller.get_lights()
             bridge_rooms = hue_controller.get_rooms()
+            bridge_zones = hue_controller.get_zones()
             bridge_grouped_lights = hue_controller.get_grouped_lights()
             bridge_scenes = hue_controller.get_scenes()
 
@@ -597,6 +881,7 @@ class HueStateManager:
             with self._lock:
                 local_lights = {lid: state.copy() for lid, state in self._lights.items()}
                 local_rooms = {rid: state.copy() for rid, state in self._rooms.items()}
+                local_zones = {zid: state.copy() for zid, state in self._zones.items()}
 
             mismatches = []
 
@@ -670,6 +955,43 @@ class HueStateManager:
                         grouped_light_id=grouped_light_id
                     )
 
+            # Reconcile zone grouped state and grouped_light mapping.
+            for bridge_zone in bridge_zones:
+                zone_id = bridge_zone.get('id')
+                if not zone_id:
+                    continue
+
+                grouped_light_id = None
+                for service in bridge_zone.get('services', []):
+                    if service.get('rtype') == 'grouped_light':
+                        grouped_light_id = service.get('rid')
+                        break
+
+                bridge_zone_on = grouped_light_on_map.get(grouped_light_id, False)
+                bridge_zone_name = bridge_zone.get('metadata', {}).get('name')
+
+                local_zone = local_zones.get(zone_id, {})
+                local_zone_on = local_zone.get('is_on')
+                local_grouped_light_id = local_zone.get('grouped_light_id')
+                local_zone_name = local_zone.get('name')
+
+                zone_on_mismatch = local_zone_on != bridge_zone_on
+                grouped_id_mismatch = (grouped_light_id is not None and local_grouped_light_id != grouped_light_id)
+                name_mismatch = (bridge_zone_name is not None and local_zone_name != bridge_zone_name)
+
+                if zone_on_mismatch or grouped_id_mismatch or name_mismatch:
+                    mismatches.append(
+                        f"Zone {zone_id}: on local={local_zone_on} bridge={bridge_zone_on}, "
+                        f"grouped_light local={local_grouped_light_id} bridge={grouped_light_id}, "
+                        f"name local={local_zone_name} bridge={bridge_zone_name}"
+                    )
+                    self.update_zone(
+                        zone_id=zone_id,
+                        is_on=bridge_zone_on,
+                        name=bridge_zone_name,
+                        grouped_light_id=grouped_light_id
+                    )
+
             # Reconcile active scene per room.
             reconciled_room_ids = {room.get('id') for room in bridge_rooms if room.get('id')}
             for room_id in reconciled_room_ids:
@@ -680,6 +1002,17 @@ class HueStateManager:
                         f"Room {room_id}: scene local={local_scene_id} bridge={bridge_scene_id}"
                     )
                     self.set_room_scene(room_id, bridge_scene_id, old_scene_id=local_scene_id, source='reconcile')
+
+            # Reconcile active scene per zone.
+            reconciled_zone_ids = {zone.get('id') for zone in bridge_zones if zone.get('id')}
+            for zone_id in reconciled_zone_ids:
+                bridge_scene_id = bridge_active_scene_by_room.get(zone_id)
+                local_scene_id = local_zones.get(zone_id, {}).get('current_scene_id')
+                if local_scene_id != bridge_scene_id:
+                    mismatches.append(
+                        f"Zone {zone_id}: scene local={local_scene_id} bridge={bridge_scene_id}"
+                    )
+                    self.set_zone_scene(zone_id, bridge_scene_id, old_scene_id=local_scene_id, source='reconcile')
 
             if mismatches:
                 logger.warning(f"State reconciliation found {len(mismatches)} mismatches:")
@@ -699,6 +1032,8 @@ class HueStateManager:
                 'lights_on': sum(1 for l in self._lights.values() if l.get('on')),
                 'total_rooms': len(self._rooms),
                 'rooms_on': sum(1 for r in self._rooms.values() if r.get('is_on')),
+                'total_zones': len(self._zones),
+                'zones_on': sum(1 for z in self._zones.values() if z.get('is_on')),
                 'total_scenes': len(self._scenes),
                 'last_update': datetime.now().isoformat()
             }

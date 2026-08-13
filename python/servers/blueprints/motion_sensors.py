@@ -2,6 +2,7 @@
 from flask import Blueprint, render_template, request, jsonify
 from services import data_manager, config_notifier
 from constants import FILE_MOTION_SENSORS
+from servers.blueprints.door_sensors import _normalize_time_slots, _normalize_light_sensitivity
 import logging
 
 logger = logging.getLogger(__name__)
@@ -119,11 +120,21 @@ def configure_motion_sensor():
         'time_slots': data.get('time_slots', []),
         'enabled': data.get('enabled', True)
     }
-    
-    # Validate cooldown range
-    cooldown = config.get('cooldown_seconds', 60)
+
+    # Validate cooldown as an integer in the 5-60 second firmware range
+    try:
+        cooldown = int(config.get('cooldown_seconds', 60))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Cooldown must be an integer between 5 and 60 seconds"}), 400
     if cooldown < 5 or cooldown > 60:
         return jsonify({"success": False, "error": "Cooldown must be between 5 and 60 seconds"}), 400
+    config['cooldown_seconds'] = cooldown
+
+    try:
+        config['light_sensitivity'] = _normalize_light_sensitivity(config.get('light_sensitivity', 5))
+        config['time_slots'] = _normalize_time_slots(config.get('time_slots', []))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     
     # Save configuration
     save_motion_sensor_config(device_id, config)
@@ -161,9 +172,12 @@ def get_motion_sensor_config_route(device_id):
 def update_cooldown(device_id):
     """Update motion sensor cooldown period."""
     data = request.get_json()
-    cooldown_seconds = data.get('cooldown_seconds', 60)
     
-    # Validate cooldown range (5-60 seconds as per firmware)
+    # Validate cooldown as an integer in the 5-60 second firmware range
+    try:
+        cooldown_seconds = int(data.get('cooldown_seconds', 60))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Cooldown must be an integer between 5 and 60 seconds"}), 400
     if cooldown_seconds < 5 or cooldown_seconds > 60:
         return jsonify({"success": False, "error": "Cooldown must be between 5 and 60 seconds"}), 400
     

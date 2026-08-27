@@ -24,6 +24,7 @@ from constants import (
     REMOTE_ACTION_BRIGHTNESS_UP,
     REMOTE_ACTION_BRIGHTNESS_DOWN,
     REMOTE_ACTION_SCENE_CYCLE,
+    REMOTE_ACTION_ALL_OFF,
 )
 from controllers.hue_controller import Hue
 from controllers.color_controller import color_controller
@@ -239,7 +240,7 @@ class AutomationEngine:
         action_str = {ACT_CLICK: "CLICK", ACT_HOLDING: "HOLDING", ACT_RELEASE: "RELEASE", ACT_SYNC: "SYNC"}.get(action, f"UNKNOWN({action})")
         logger.info(f"Remote {remote_mac} button {button_index}: {action_str} -> {action_type} action in {target_type} {target_id}")
         
-        if not target_id:
+        if not target_id and action_type != REMOTE_ACTION_ALL_OFF:
             logger.warning(f"Remote {remote_mac} button {button_index} has no room or zone configured")
             return
         
@@ -283,6 +284,11 @@ class AutomationEngine:
                     self._adjust_group_brightness(target_id, target_type, -1)
                 except Exception as e:
                     logger.error(f"Failed to decrease brightness: {e}")
+
+        elif action_type == REMOTE_ACTION_ALL_OFF:
+            # Turn off all rooms and zones
+            if action == ACT_CLICK:
+                self._handle_remote_all_off_action()
     
     def _handle_remote_normal_action_click(self, remote_mac: str, button_config: Dict, target_id: str, target_type: str = 'room'):
         """Handle normal remote button CLICK action (scene cycling).
@@ -469,6 +475,23 @@ class AutomationEngine:
                 self._turn_on_group(target_id, target_type, source='remote')
         except Exception as e:
             logger.error(f"Failed to toggle {target_type}: {e}")
+
+    def _handle_remote_all_off_action(self):
+        """Handle all-off action - turn off all rooms."""
+        try:
+            rooms = self.hue.get_rooms()
+
+            for room in rooms:
+                room_id = room.get('id')
+                if room_id:
+                    try:
+                        self._turn_off_group(room_id, 'room', source='remote')
+                    except Exception as e:
+                        logger.error(f"Failed to turn off room {room_id}: {e}")
+
+            logger.info(f"Remote all-off: Turned off {len(rooms)} rooms")
+        except Exception as e:
+            logger.error(f"Failed to execute all-off action: {e}")
     
     def _handle_button_click(self, button_mac: str, button: Dict, target_id: str, target_type: str = 'room'):
         """Handle button click - cycle scenes or turn off.

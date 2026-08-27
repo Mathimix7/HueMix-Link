@@ -55,6 +55,7 @@ REMOTE_ACTION_TOGGLE = 'toggle'                    # Hold = None, Click = toggle
 REMOTE_ACTION_BRIGHTNESS_UP = 'brightness_up'      # Hold = Increase brightness, Click = Increase brightness
 REMOTE_ACTION_BRIGHTNESS_DOWN = 'brightness_down'  # Hold = Decrease brightness, Click = Decrease brightness
 REMOTE_ACTION_SCENE_CYCLE = 'scene_cycle'          # Click = cycle scenes only (never turn off)
+REMOTE_ACTION_ALL_OFF = 'all_off'                  # Click = turn off all rooms
 
 # ===== System Commands =====
 CMD_NIGHT_MODE_ON = 1   # LED OFF
@@ -86,6 +87,10 @@ HTTP_RETRY_BACKOFF_BASE = 0.1  # Base delay in seconds (0.1, 0.2, 0.4...)
 RSSI_AUTO_PAIR_THRESHOLD = -50  # dBm
 RSSI_MIN = -90  # Weakest signal in dBm
 RSSI_MAX = -40  # Strongest signal in dBm
+
+# ===== Battery Monitoring =====
+BATTERY_WARNING_THRESHOLD = 25  # Percent at or below which a battery is flagged for charging
+BATTERY_CRITICAL_THRESHOLD = 10  # Percent at or below which a battery is critical
 
 # ===== LED Configuration Limits =====
 MIN_LEDS = 1

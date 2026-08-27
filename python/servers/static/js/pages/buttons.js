@@ -1504,10 +1504,26 @@ function renderRemoteButtonConfig(index) {
                             <span class="text-xs text-gray-500">Decrease brightness</span>
                         </span>
                     </label>
+                    
+                    <label class="relative flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                        button.action_type === 'all_off' 
+                            ? 'border-pink-600 bg-pink-50' 
+                            : 'border-gray-200 bg-white hover:border-pink-300'
+                    }">
+                        <input type="radio" name="action-type" value="all_off" 
+                            ${button.action_type === 'all_off' ? 'checked' : ''} 
+                            onchange="updateRemoteButtonActionType(${index}, 'all_off')"
+                            class="form-radio">
+                        <span class="ml-2">
+                            <span class="block font-medium">All Off</span>
+                            <span class="text-xs text-gray-500">Turn off all rooms</span>
+                        </span>
+                    </label>
                 </div>
             </div>
             
-            <!-- Room Selection -->
+            <!-- Room Selection (hidden for all_off) -->
+            ${button.action_type !== 'all_off' ? `
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">
                     <i class="fas fa-door-open mr-2 text-blue-500"></i>Select Room or Zone
@@ -1531,6 +1547,7 @@ function renderRemoteButtonConfig(index) {
                     </optgroup>
                 </select>
             </div>
+            ` : ''}
             
             <!-- Scenes Selection (for normal or scene_cycle action types) - hidden until a room is selected -->
             ${(button.action_type === 'normal' || button.action_type === 'scene_cycle') ? `
@@ -1652,8 +1669,8 @@ function renderRemoteSelectedScenes(buttonIndex) {
     button.scenes.forEach((sceneId, index) => {
         // Find scene object from rooms
         let sceneName = sceneId;
-        for (const room of rooms) {
-            const scene = room.scenes.find(s => s.id === sceneId);
+        for (const group of groups) {
+            const scene = group.scenes.find(s => s.id === sceneId);
             if (scene) {
                 sceneName = scene.name;
                 break;
@@ -1916,8 +1933,8 @@ function handleRemoteSceneDragEnd(e) {
 }
 
 function findSceneById(sceneId) {
-    for (const room of rooms) {
-        const scene = room.scenes.find(s => s.id === sceneId);
+    for (const group of groups) {
+        const scene = group.scenes.find(s => s.id === sceneId);
         if (scene) return scene;
     }
     return null;
@@ -1929,7 +1946,8 @@ function getActionTypeLabel(actionType) {
         'scene_cycle': 'Scene Cycle',
         'toggle': 'Toggle On/Off',
         'brightness_up': 'Brightness Up',
-        'brightness_down': 'Brightness Down'
+        'brightness_down': 'Brightness Down',
+        'all_off': 'All Off'
     };
     return labels[actionType] || actionType;
 }

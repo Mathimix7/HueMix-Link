@@ -188,6 +188,10 @@ function loadGroups() {
                 
                 roomSelect.appendChild(roomOptgroup);
                 roomSelect.appendChild(zoneOptgroup);
+                
+                if (lightstrips.length > 0) {
+                    renderLightstrips();
+                }
             } else if (data.needs_config) {
                 // Show error state
                 if (errorState) {

@@ -6,6 +6,7 @@ Also manages HOME_ID operations.
 
 from flask import Blueprint, request, jsonify, send_from_directory, render_template
 import os
+import shutil
 import subprocess
 import threading
 from werkzeug.utils import secure_filename
@@ -547,6 +548,55 @@ def delete_backup():
             'success': False,
             'error': str(e)
         }), 500
+
+@admin_bp.route('/api/reset', methods=['POST'])
+def reset_everything():
+    """Reset everything. Creates a backup first, then deletes all files in data/ except config.json and the new backup."""
+    try:
+        from services.data_manager import data_manager as dm
+        data_dir = dm.data_dir
+
+        # Step 1: Create a backup before resetting
+        backup_path = backup_manager.create_backup()
+        backup_filename = os.path.basename(backup_path)
+
+        # Step 2: Delete every file and directory in data/ except config.json and the new backup
+        for item in data_dir.iterdir():
+            # Keep config.json
+            if item.is_file() and item.name == 'config.json':
+                continue
+
+            # For the backups directory: keep only the backup just created
+            if item.is_dir() and item.name == 'backups':
+                for backup_item in item.iterdir():
+                    if backup_item.is_file() and backup_item.name == backup_filename:
+                        continue
+                    try:
+                        backup_item.unlink()
+                    except Exception as e:
+                        print(f"Failed to delete {backup_item.name}: {e}")
+                continue
+
+            # Delete everything else (files and directories)
+            try:
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+            except Exception as e:
+                print(f"Failed to delete {item.name}: {e}")
+
+        return jsonify({
+            'success': True,
+            'message': 'All devices and configurations have been reset.',
+            'backup_filename': backup_filename,
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+        }), 500
+
 
 @admin_bp.route('/home_id', methods=['GET'])
 def get_home_id():

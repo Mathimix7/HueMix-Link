@@ -350,6 +350,38 @@ let pendingAction = null;
         );
     }
 
+    function confirmResetEverything() {
+        showModal(
+            'Reset Everything?',
+            'This will permanently delete ALL devices, sensors, bridges, plugins, and configurations. A backup will be downloaded before the reset. This action cannot be undone! Are you sure you want to proceed?',
+            () => resetEverything()
+        );
+    }
+
+    function resetEverything() {
+        showToast('Creating backup and resetting everything...', 'info');
+        fetch('/admin/api/reset', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Reset complete! Downloading backup...', 'success');
+                if (data.backup_filename) {
+                    setTimeout(() => downloadBackup(data.backup_filename), 500);
+                }
+                setTimeout(() => location.reload(), 3000);
+            } else {
+                showToast('Failed to reset: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error resetting everything', 'error');
+        });
+    }
+
     function deleteBackup(filename) {
         showToast('Deleting backup...', 'info');
         fetch('/admin/backups/delete', {

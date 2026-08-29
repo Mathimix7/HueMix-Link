@@ -2,10 +2,93 @@
 from flask import Blueprint, render_template, request, jsonify
 from services import data_manager, config_notifier
 from constants import FILE_MOTION_SENSORS
-from servers.blueprints.door_sensors import _normalize_time_slots, _normalize_light_sensitivity
+from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
+
+MOTION_ALLOWED_ACTIONS = {'nothing', 'scene', 'off'}
+
+
+def _is_valid_hhmm(time_str):
+    """Validate 24-hour HH:MM time format."""
+    try:
+        datetime.strptime(time_str, '%H:%M')
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalize_motion_time_slots(raw_slots):
+    """Validate and normalize motion sensor time slots."""
+    if not isinstance(raw_slots, list):
+        raise ValueError('time_slots must be an array')
+
+    normalized = []
+    for index, slot in enumerate(raw_slots):
+        if not isinstance(slot, dict):
+            raise ValueError(f'time_slots[{index}] must be an object')
+
+        start_time = (slot.get('start_time') or '').strip()
+        if not _is_valid_hhmm(start_time):
+            raise ValueError(f'time_slots[{index}] start_time must be HH:MM')
+
+        motion_action = (slot.get('motion_action') or 'nothing').strip()
+        if motion_action not in MOTION_ALLOWED_ACTIONS:
+            raise ValueError(f'time_slots[{index}] invalid motion_action: {motion_action}')
+
+        scene_id = (slot.get('scene_id') or '').strip() if motion_action == 'scene' else ''
+        scene_name = (slot.get('scene_name') or '').strip() if motion_action == 'scene' else ''
+
+        if motion_action == 'scene' and not scene_id:
+            raise ValueError(f'time_slots[{index}] motion scene action requires a scene')
+
+        after_action = (slot.get('after_action') or 'off').strip()
+        if after_action not in MOTION_ALLOWED_ACTIONS:
+            raise ValueError(f'time_slots[{index}] invalid after_action: {after_action}')
+
+        after_scene_id = (slot.get('after_scene_id') or '').strip() if after_action == 'scene' else ''
+        after_scene_name = (slot.get('after_scene_name') or '').strip() if after_action == 'scene' else ''
+
+        if after_action == 'scene' and not after_scene_id:
+            raise ValueError(f'time_slots[{index}] after scene action requires a scene')
+
+        try:
+            after_duration_seconds = int(slot.get('after_duration_seconds', 300))
+        except (TypeError, ValueError):
+            raise ValueError(f'time_slots[{index}] after_duration_seconds must be an integer')
+
+        if after_duration_seconds < 0 or after_duration_seconds > 3600:
+            raise ValueError(f'time_slots[{index}] after_duration_seconds must be between 0 and 3600')
+
+        normalized.append({
+            'start_time': start_time,
+            'motion_action': motion_action,
+            'scene_id': scene_id,
+            'scene_name': scene_name,
+            'after_duration_seconds': after_duration_seconds,
+            'after_action': after_action,
+            'after_scene_id': after_scene_id,
+            'after_scene_name': after_scene_name,
+            'do_not_disturb': bool(slot.get('do_not_disturb', False)),
+        })
+
+    normalized.sort(key=lambda x: x.get('start_time', '00:00'))
+    return normalized
+
+
+def _normalize_light_sensitivity(raw_value):
+    """Validate light threshold value (0-10)."""
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        raise ValueError('light_sensitivity must be an integer between 0 and 10')
+
+    if value < 0 or value > 10:
+        raise ValueError('light_sensitivity must be between 0 and 10')
+
+    return value
+
 
 motion_sensors_bp = Blueprint('motion_sensors', __name__, url_prefix='/motion-sensors')
 
@@ -132,7 +215,7 @@ def configure_motion_sensor():
 
     try:
         config['light_sensitivity'] = _normalize_light_sensitivity(config.get('light_sensitivity', 5))
-        config['time_slots'] = _normalize_time_slots(config.get('time_slots', []))
+        config['time_slots'] = _normalize_motion_time_slots(config.get('time_slots', []))
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     

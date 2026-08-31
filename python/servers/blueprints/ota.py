@@ -491,6 +491,7 @@ def upload_firmware():
         base_name = os.path.splitext(filename)[0]
         filename = f"{firmware_type}_{base_name}.bin"
         
+        os.makedirs(FIRMWARE_DIR, exist_ok=True)
         filepath = os.path.join(FIRMWARE_DIR, filename)
         file.save(filepath)
         
@@ -557,6 +558,7 @@ def download_firmware():
             }), 500
         
         # Save to firmware directory
+        os.makedirs(FIRMWARE_DIR, exist_ok=True)
         filepath = os.path.join(FIRMWARE_DIR, secure_filename(filename))
         with open(filepath, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
@@ -632,6 +634,7 @@ def get_firmware_binary():
                     }), 500
                 
                 # Save to firmware directory
+                os.makedirs(FIRMWARE_DIR, exist_ok=True)
                 with open(filepath, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
                         f.write(chunk)

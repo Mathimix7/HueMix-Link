@@ -580,7 +580,17 @@ def reset_everything():
             # Delete everything else (files and directories)
             try:
                 if item.is_dir():
-                    shutil.rmtree(item)
+                    if item.name == 'firmware':
+                        for firmware_item in item.iterdir():
+                            try:
+                                if firmware_item.is_dir():
+                                    shutil.rmtree(firmware_item)
+                                else:
+                                    firmware_item.unlink()
+                            except Exception as e:
+                                print(f"Failed to delete {firmware_item.name}: {e}")
+                    else:
+                        shutil.rmtree(item)
                 else:
                     item.unlink()
             except Exception as e:

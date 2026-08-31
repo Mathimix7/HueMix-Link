@@ -5,6 +5,7 @@ Also manages HOME_ID operations.
 """
 
 from flask import Blueprint, request, jsonify, send_from_directory, render_template
+from pathlib import Path
 import os
 import shutil
 import subprocess
@@ -22,6 +23,12 @@ admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 def settings_page():
     """Render the settings page."""
     return render_template('settings.html')
+
+
+@admin_bp.route('/restarting')
+def restarting_page():
+    """Render the server restarting page."""
+    return render_template('restarting.html')
 
 
 @admin_bp.route('/plugins')
@@ -551,7 +558,12 @@ def delete_backup():
 
 @admin_bp.route('/api/reset', methods=['POST'])
 def reset_everything():
-    """Reset everything. Creates a backup first, then deletes all files in data/ except config.json and the new backup."""
+    """Reset everything. Creates a backup first, then deletes all files in data/ except config.json and the new backup.
+    
+    After deletion, the process exits and systemd (or equivalent) restarts it,
+    clearing all stale in-memory state (OTA sessions, gateway table, automations,
+    Hue state, plugin state, etc.).
+    """
     try:
         from services.data_manager import data_manager as dm
         data_dir = dm.data_dir
@@ -596,9 +608,24 @@ def reset_everything():
             except Exception as e:
                 print(f"Failed to delete {item.name}: {e}")
 
+        # Step 3: Clean up plugin folders (plugins.json in data/ is already deleted above)
+        plugins_dir = Path(__file__).resolve().parents[2] / 'plugins'
+        if plugins_dir.is_dir():
+            for plugin_item in plugins_dir.iterdir():
+                try:
+                    if plugin_item.is_dir():
+                        shutil.rmtree(plugin_item)
+                    else:
+                        plugin_item.unlink()
+                except Exception as e:
+                    print(f"Failed to delete plugin {plugin_item.name}: {e}")
+
+        # Step 4: Schedule a restart after a short delay so the response is sent
+        threading.Timer(1.0, lambda: os._exit(0)).start()
+
         return jsonify({
             'success': True,
-            'message': 'All devices and configurations have been reset.',
+            'message': 'All devices and configurations have been reset. Server is restarting.',
             'backup_filename': backup_filename,
         })
     except Exception as e:

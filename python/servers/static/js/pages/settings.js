@@ -368,11 +368,10 @@ let pendingAction = null;
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                showToast('Reset complete! Downloading backup...', 'success');
                 if (data.backup_filename) {
-                    setTimeout(() => downloadBackup(data.backup_filename), 500);
+                    downloadBackup(data.backup_filename);
                 }
-                setTimeout(() => location.reload(), 3000);
+                window.location.href = '/admin/restarting';
             } else {
                 showToast('Failed to reset: ' + (data.error || 'Unknown error'), 'error');
             }

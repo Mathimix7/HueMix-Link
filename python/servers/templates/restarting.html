@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Restarting - HueMix-Link</title>
+    <script src="{{ url_for('static', filename='tailwind.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='fontawesome.min.css') }}">
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+</head>
+<body class="bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen flex items-center justify-center">
+    <div class="text-center max-w-md mx-auto px-6">
+        <div class="mb-6">
+            <i class="fas fa-sync-alt fa-spin text-5xl text-blue-600"></i>
+        </div>
+        <h1 class="text-2xl font-bold text-gray-900 mb-3">Server is Restarting</h1>
+        <p class="text-gray-600 mb-6">
+            The factory reset is complete and the server is restarting to apply changes.
+            This page will automatically redirect once the server is back online.
+        </p>
+        <div id="status" class="text-sm text-gray-500 mb-4">
+            Waiting for server...
+        </div>
+        <p class="text-sm text-gray-500">
+            If the server doesn't come back, please restart it manually.
+        </p>
+    </div>
+
+    <script>
+        const statusEl = document.getElementById('status');
+        let attempts = 0;
+
+        function checkServer() {
+            attempts++;
+            statusEl.textContent = 'Waiting for server... (attempt ' + attempts + ')';
+
+            fetch('/', { method: 'HEAD', cache: 'no-store' })
+                .then(function(response) {
+                    if (response.ok) {
+                        statusEl.textContent = 'Server is back online!';
+                        setTimeout(function() { window.location.href = '/'; }, 500);
+                    } else {
+                        setTimeout(checkServer, 2000);
+                    }
+                })
+                .catch(function() {
+                    setTimeout(checkServer, 2000);
+                });
+        }
+
+        setTimeout(checkServer, 2000);
+    </script>
+</body>
+</html>

@@ -4,6 +4,7 @@ Automation Service - Manages automation engine lifecycle.
 Initializes and reinitializes the automation engine when Hue bridge or config changes.
 """
 import logging
+import threading
 from typing import Optional
 from network.automation_engine import AutomationEngine
 from services.hue_service import hue_service
@@ -22,6 +23,8 @@ class AutomationService:
         self._engine: Optional[AutomationEngine] = None
         self._network_server = None
         self._initialized = False
+        self._retry_timer: Optional[threading.Timer] = None
+        self._retry_count: int = 0
         
         # Subscribe to config changes
         config_notifier.subscribe('bridge_config', self._on_bridge_config_changed)
@@ -45,6 +48,9 @@ class AutomationService:
             notification: Notification dict with type, data, timestamp
         """
         logger.info("Bridge configuration deleted, stopping automation engine...")
+        if self._retry_timer:
+            self._retry_timer.cancel()
+            self._retry_timer = None
         if self._engine:
             self._engine.stop()
             self._engine = None
@@ -110,6 +116,7 @@ class AutomationService:
             # Start the engine
             self._engine.start()
             self._initialized = True
+            self._retry_count = 0
             
             logger.info("Automation engine initialized and started successfully")
             
@@ -117,6 +124,20 @@ class AutomationService:
             logger.error(f"Failed to initialize automation engine: {e}", exc_info=True)
             self._engine = None
             self._initialized = False
+            self._schedule_retry()
+    
+    def _schedule_retry(self):
+        """Schedule a retry of engine initialization with exponential backoff."""
+        if self._retry_timer:
+            self._retry_timer.cancel()
+        
+        delay = min(60, 5 * (2 ** self._retry_count))
+        self._retry_count += 1
+        
+        logger.info(f"Scheduling engine initialization retry in {delay}s (attempt {self._retry_count})...")
+        self._retry_timer = threading.Timer(delay, self._initialize_engine)
+        self._retry_timer.daemon = True
+        self._retry_timer.start()
     
     def start(self):
         """Start the automation service and engine."""
@@ -128,6 +149,9 @@ class AutomationService:
     
     def stop(self):
         """Stop the automation engine."""
+        if self._retry_timer:
+            self._retry_timer.cancel()
+            self._retry_timer = None
         if self._engine:
             logger.info("Stopping automation engine...")
             self._engine.stop()

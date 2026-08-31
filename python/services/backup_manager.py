@@ -154,6 +154,14 @@ class BackupManager:
 
             logger.info(f"Backup restored successfully from: {archive_path}, previous data backed up at: {old_data_path}")
 
+            # Reinstall any missing plugins from their source repos
+            try:
+                from services.plugin_install_service import plugin_install_service
+                result = plugin_install_service.reinstall_missing_plugins()
+                logger.info(f"Plugin reinstall after restore: {result}")
+            except Exception:
+                logger.warning("Failed to reinstall plugins after restore", exc_info=True)
+
             # Notify services about restored configuration so they can reinitialize
             try:
                 try:

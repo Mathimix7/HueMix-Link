@@ -115,6 +115,87 @@ class PluginInstallService:
         records.sort(key=lambda x: x.get("name", "").lower())
         return records
 
+    def reinstall_missing_plugins(self) -> dict[str, Any]:
+        """Reinstall plugins whose package folders are missing but have source_repo in metadata.
+
+        Called after a backup restore to re-clone plugin repos.
+
+        Returns:
+            Dict with counts of installed/skipped/failed plugins.
+        """
+        registry = self._load_registry()
+        plugins = registry.get("plugins", []) if isinstance(registry.get("plugins"), list) else []
+
+        installed = 0
+        skipped = 0
+        failed = 0
+
+        for entry in plugins:
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get("enabled", False):
+                skipped += 1
+                continue
+
+            module_name = str(entry.get("module") or "").strip()
+            package_name = self._extract_package_name(module_name)
+            if not package_name:
+                skipped += 1
+                continue
+
+            if (self._plugins_dir / package_name).exists():
+                skipped += 1
+                continue
+
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            source_repo = str(metadata.get("source_repo") or "").strip()
+            branch = str(metadata.get("source_branch") or "").strip() or None
+
+            if not source_repo:
+                logger.warning(f"Plugin '{package_name}' has no source_repo, cannot reinstall")
+                failed += 1
+                continue
+
+            try:
+                logger.info(f"Reinstalling missing plugin '{package_name}' from {source_repo}...")
+                self._clone_and_install(source_repo, branch)
+                installed += 1
+            except Exception as e:
+                logger.error(f"Failed to reinstall plugin '{package_name}': {e}")
+                failed += 1
+
+        return {"installed": installed, "skipped": skipped, "failed": failed}
+
+    def _clone_and_install(self, repo_url: str, branch: str | None = None) -> None:
+        """Clone a repo and install the plugin synchronously (no background thread)."""
+        with tempfile.TemporaryDirectory(prefix="huemix_plugin_") as tmp:
+            checkout_dir = Path(tmp) / "repo"
+            clone_cmd = ["git", "clone", "--depth", "1"]
+            if branch:
+                clone_cmd.extend(["--branch", branch])
+            clone_cmd.extend([repo_url, str(checkout_dir)])
+            subprocess.run(clone_cmd, cwd=str(self._workspace_root), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=900)
+
+            manifest, _ = self._load_manifest(checkout_dir)
+            self._validate_manifest(manifest)
+
+            module_name = str(manifest.get("module") or "").strip()
+            package_name = self._extract_package_name(module_name)
+            if not package_name:
+                raise RuntimeError("Manifest module must be in format plugins.<package>.plugin")
+
+            package_src = self._resolve_package_source(checkout_dir, package_name)
+            package_dest = self._plugins_dir / package_name
+
+            if package_dest.exists():
+                raise RuntimeError(f"Plugin package directory already exists: {package_dest.name}")
+
+            requirements_path = checkout_dir / "requirements.txt"
+            if requirements_path.exists():
+                subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(requirements_path)], cwd=str(checkout_dir), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=900)
+
+            shutil.copytree(package_src, package_dest)
+
     def install_from_repo(self, repo_url: str, branch: str | None = None) -> dict[str, Any]:
         """Start an install session for a Git repository and return an install id.
 

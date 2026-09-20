@@ -217,6 +217,10 @@ class HueStateManager:
                     'is_on': False
                 }
             
+            # Capture old on/brightness for change detection when lights are not provided
+            old_is_on = self._rooms[room_id].get('is_on')
+            old_brightness = self._rooms[room_id].get('avg_brightness')
+
             # Update provided fields
             if is_on is not None:
                 self._rooms[room_id]['is_on'] = is_on
@@ -239,6 +243,14 @@ class HueStateManager:
             # Update aggregate state if lights were provided
             if lights is not None:
                 self._update_room_aggregate(room_id)
+            else:
+                # When is_on/brightness are set directly (e.g. from grouped_light SSE),
+                # notify subscribers so lightstrip sync and other listeners are triggered.
+                new_is_on = self._rooms[room_id].get('is_on')
+                new_brightness = self._rooms[room_id].get('avg_brightness')
+                if (is_on is not None and old_is_on != new_is_on) or \
+                   (brightness is not None and old_brightness != new_brightness):
+                    self._notify_room_change(room_id, self._rooms[room_id])
     
     def set_room_scene(self, room_id: str, scene_id: Optional[str], old_scene_id: Optional[str] = None, source: str = 'sse'):
         """
@@ -264,7 +276,7 @@ class HueStateManager:
             logger.info(f"Room {room_id} scene changed from {old_scene_id} to {scene_id} (source: {source})")
             
             # Notify subscribers
-            self._notify_scene_change(room_id, scene_id, old_scene_id, source)
+            self._notify_scene_change(room_id, scene_id, old_scene_id, source, group_type='room')
     
     def get_room_state(self, room_id: str) -> Optional[Dict]:
         """Get the current state of a room."""
@@ -358,6 +370,10 @@ class HueStateManager:
                     'is_on': False
                 }
             
+            # Capture old on/brightness for change detection when lights are not provided
+            old_is_on = self._zones[zone_id].get('is_on')
+            old_brightness = self._zones[zone_id].get('avg_brightness')
+
             # Update provided fields
             if is_on is not None:
                 self._zones[zone_id]['is_on'] = is_on
@@ -392,6 +408,14 @@ class HueStateManager:
             # Update aggregate state if lights were provided
             if lights is not None:
                 self._update_zone_aggregate(zone_id)
+            else:
+                # When is_on/brightness are set directly (e.g. from grouped_light SSE),
+                # notify subscribers so lightstrip sync and other listeners are triggered.
+                new_is_on = self._zones[zone_id].get('is_on')
+                new_brightness = self._zones[zone_id].get('avg_brightness')
+                if (is_on is not None and old_is_on != new_is_on) or \
+                   (brightness is not None and old_brightness != new_brightness):
+                    self._notify_zone_change(zone_id, self._zones[zone_id])
     
     def set_zone_scene(self, zone_id: str, scene_id: Optional[str], old_scene_id: Optional[str] = None, source: str = 'sse'):
         """
@@ -417,7 +441,7 @@ class HueStateManager:
             logger.info(f"Zone {zone_id} scene changed from {old_scene_id} to {scene_id} (source: {source})")
             
             # Notify subscribers
-            self._notify_scene_change(zone_id, scene_id, old_scene_id, source)
+            self._notify_scene_change(zone_id, scene_id, old_scene_id, source, group_type='zone')
     
     def get_zone_state(self, zone_id: str) -> Optional[Dict]:
         """Get the current state of a zone."""
@@ -610,10 +634,13 @@ class HueStateManager:
             except Exception as e:
                 logger.error(f"Error in light change callback {callback.__name__}: {e}")
     
-    def _notify_scene_change(self, room_id: str, scene_id: Optional[str], old_scene_id: Optional[str], source: str = 'sse'):
+    def _notify_scene_change(self, room_id: str, scene_id: Optional[str], old_scene_id: Optional[str], source: str = 'sse', group_type: str = 'room'):
         """Notify all subscribers of scene change."""
         for callback in self._scene_change_callbacks[:]:
             try:
+                callback(room_id, scene_id, old_scene_id, source, group_type=group_type)
+            except TypeError:
+                # Backward compatibility: callers or callbacks that don't yet pass group_type
                 callback(room_id, scene_id, old_scene_id, source)
             except Exception as e:
                 logger.error(f"Error in scene change callback {callback.__name__}: {e}")

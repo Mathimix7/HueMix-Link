@@ -169,6 +169,15 @@ def list_official_plugins():
             "branch": "main",
             "icon": "thermometer-half",
             "color": "emerald",
+        },
+        {
+            "name": "Custom Automations",\
+            "id": "custom_automations",
+            "description": "Create custom automations and scripts to control your HueMix-Link devices.",
+            "repo_url": "https://github.com/Mathimix7/HueMixLink-CustomAutomations",
+            "branch": "main",
+            "icon": "bolt",
+            "color": "amber",
         }
     ]
     # Enrich with already-installed status

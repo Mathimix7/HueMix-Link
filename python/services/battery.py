@@ -6,7 +6,7 @@ from typing import Optional
 
 def calculate_battery_percent(voltage_mv: int, battery_type: str = 'li_ion') -> Optional[int]:
     """Estimate battery percentage from voltage using chemistry-specific curves."""
-    if voltage_mv == 0:
+    if voltage_mv < 500: # voltage too low, pin floating
         return None
 
     normalized_type = (battery_type or 'li_ion').strip().lower()

@@ -1,7 +1,7 @@
 """Service that tracks the current state of all Hue lights and scenes."""
 import threading
 import logging
-from typing import Dict, Optional, List, Callable
+from typing import Dict, Optional, List, Callable, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,8 @@ class HueStateManager:
     
     def __init__(self):
         self._lock = threading.RLock()
+        # Serializes full bridge syncs (init vs. periodic reconciliation).
+        self._sync_lock = threading.Lock()
         
         # State storage
         self._lights: Dict[str, Dict] = {}
@@ -101,8 +103,13 @@ class HueStateManager:
                 self._lights[light_id] = {}
             
             old_state = self._lights[light_id].copy()
+            previous_room_id = old_state.get('room_id')
             self._lights[light_id].update(state)
             self._lights[light_id]['last_update'] = datetime.now().isoformat()
+            
+            # Keep room membership lists in sync when the room changes
+            if 'room_id' in state:
+                self._update_light_membership(light_id, previous_room_id, state['room_id'])
             
             # Update room state if light belongs to a room
             room_id = state.get('room_id') or self._lights[light_id].get('room_id')
@@ -137,9 +144,8 @@ class HueStateManager:
         """
         with self._lock:
             if light_id in self._lights:
-                # Remove light from any room it belongs to
-                room_id = self._lights[light_id].get('room_id')
-                if room_id and room_id in self._rooms:
+                # Remove the light from every room list it could still be in
+                for room_id in list(self._rooms.keys()):
                     room_lights = self._rooms[room_id].get('lights', [])
                     if light_id in room_lights:
                         room_lights.remove(light_id)
@@ -157,6 +163,180 @@ class HueStateManager:
                 logger.info(f"Light {light_id} removed from state manager")
                 return True
             return False
+    
+    def _update_light_membership(self, light_id: str, previous_room_id: Optional[str], room_id: Optional[str]):
+        """Keep the room light lists in sync with a light's room assignment.
+        
+        Must be called while holding the lock.
+        
+        Args:
+            light_id: Light being assigned
+            previous_room_id: Room the light belonged to before this change
+            room_id: Room the light belongs to now (None when unassigned)
+        """
+        if previous_room_id and previous_room_id != room_id and previous_room_id in self._rooms:
+            previous_lights = self._rooms[previous_room_id].get('lights', [])
+            if light_id in previous_lights:
+                previous_lights.remove(light_id)
+                self._update_room_aggregate(previous_room_id)
+        
+        if room_id:
+            room = self._rooms.get(room_id)
+            if room is None:
+                room = {'lights': [], 'current_scene_id': None, 'is_on': False}
+                self._rooms[room_id] = room
+            room_lights = room.setdefault('lights', [])
+            if light_id not in room_lights:
+                room_lights.append(light_id)
+                self._update_room_aggregate(room_id)
+    
+    def _assign_light_room_locked(self, light_id: str, room_id: Optional[str]):
+        """Locked variant of assign_light_room.
+        
+        Returns:
+            Tuple of (new_state, old_state) when something changed, else None
+        """
+        light = self._lights.get(light_id)
+        created = False
+        if light is None:
+            if room_id is None:
+                return None
+            light = {}
+            self._lights[light_id] = light
+            created = True
+            old_state = {}
+        else:
+            old_state = light.copy()
+        
+        previous_room_id = light.get('room_id')
+        membership_changed = previous_room_id != room_id
+        if membership_changed:
+            if room_id is None:
+                light.pop('room_id', None)
+            else:
+                light['room_id'] = room_id
+            light['last_update'] = datetime.now().isoformat()
+        
+        self._update_light_membership(light_id, previous_room_id, room_id)
+        
+        if not created and not membership_changed:
+            return None
+        return (light.copy(), old_state)
+    
+    def assign_light_room(self, light_id: str, room_id: Optional[str]) -> bool:
+        """Assign (or clear) the room a light belongs to.
+        
+        Args:
+            light_id: Hue light ID
+            room_id: Room ID the light belongs to, or None to unassign
+            
+        Returns:
+            True when the assignment changed, False otherwise
+        """
+        with self._lock:
+            result = self._assign_light_room_locked(light_id, room_id)
+            if not result:
+                return False
+            new_state, old_state = result
+            logger.info(f"Light {light_id} assigned to room {room_id}")
+            self._notify_light_change(light_id, new_state, old_state)
+            return True
+    
+    def sync_group_membership(self, group_id: str, group_type: str, light_ids: Optional[List[str]],
+                              device_ids: Optional[List[str]] = None) -> bool:
+        """Reconcile a room's or zone's light membership from authoritative bridge data.
+        
+        Zones overlap, so a light may belong to many zones but only one room.
+        
+        Args:
+            group_id: Room or zone ID
+            group_type: 'room' or 'zone'
+            light_ids: Light IDs that belong to the group according to the bridge
+            device_ids: Device IDs that are children of the group (optional)
+            
+        Returns:
+            True when local membership changed, False otherwise
+        """
+        if not group_id:
+            return False
+        
+        is_zone = group_type == 'zone'
+        new_lights: List[str] = []
+        seen = set()
+        for light_id in light_ids or []:
+            if light_id and light_id not in seen:
+                seen.add(light_id)
+                new_lights.append(light_id)
+        
+        with self._lock:
+            groups = self._zones if is_zone else self._rooms
+            group = groups.get(group_id)
+            if group is None:
+                group = {'lights': [], 'current_scene_id': None, 'is_on': False}
+                groups[group_id] = group
+            
+            old_lights = list(group.get('lights') or [])
+            membership_changed = old_lights != new_lights
+            devices_changed = (
+                device_ids is not None
+                and list(group.get('device_ids') or []) != list(device_ids)
+            )
+            
+            if not membership_changed and not devices_changed:
+                return False
+            
+            if device_ids is not None:
+                group['device_ids'] = list(device_ids)
+            
+            if membership_changed:
+                group['lights'] = list(new_lights)
+                group['last_update'] = datetime.now().isoformat()
+                
+                new_set = set(new_lights)
+                old_set = set(old_lights)
+                changed_lights = []
+                
+                if is_zone:
+                    for light_id in old_set - new_set:
+                        light_zones = self._light_to_zones.get(light_id)
+                        if light_zones and group_id in light_zones:
+                            light_zones.remove(group_id)
+                            if not light_zones:
+                                del self._light_to_zones[light_id]
+                    for light_id in new_lights:
+                        light_zones = self._light_to_zones.setdefault(light_id, [])
+                        if group_id not in light_zones:
+                            light_zones.append(group_id)
+                else:
+                    for light_id in old_set - new_set:
+                        light = self._lights.get(light_id)
+                        if light is None or light.get('room_id') != group_id:
+                            continue
+                        result = self._assign_light_room_locked(light_id, None)
+                        if result:
+                            changed_lights.append((light_id, *result))
+                    for light_id in new_lights:
+                        result = self._assign_light_room_locked(light_id, group_id)
+                        if result:
+                            changed_lights.append((light_id, *result))
+                    # Re-apply bridge ordering after the per-light updates.
+                    group['lights'] = list(new_lights)
+                
+                logger.debug(
+                    f"{group_type.capitalize()} {group_id} membership changed: {len(old_lights)} -> {len(new_lights)} lights"
+                )
+                
+                if is_zone:
+                    self._update_zone_aggregate(group_id)
+                    self._notify_zone_change(group_id, group)
+                else:
+                    self._update_room_aggregate(group_id)
+                    self._notify_room_change(group_id, group)
+                
+                for light_id, new_state, old_state in changed_lights:
+                    self._notify_light_change(light_id, new_state, old_state)
+            
+            return True
     
     def get_room_id_from_grouped_light(self, grouped_light_id: str) -> Optional[str]:
         """
@@ -304,6 +484,16 @@ class HueStateManager:
                 if grouped_light_id and grouped_light_id in self._grouped_light_to_room:
                     del self._grouped_light_to_room[grouped_light_id]
                 
+                # Unassign the room from its lights so they do not keep pointing
+                # at a room that no longer exists.
+                for light_id in list(self._rooms[room_id].get('lights', [])):
+                    light = self._lights.get(light_id)
+                    if light and light.get('room_id') == room_id:
+                        old_state = light.copy()
+                        light.pop('room_id', None)
+                        light['last_update'] = datetime.now().isoformat()
+                        self._notify_light_change(light_id, light.copy(), old_state)
+                
                 del self._rooms[room_id]
                 logger.info(f"Room {room_id} removed from state manager")
                 return True
@@ -318,6 +508,14 @@ class HueStateManager:
         light_ids = room.get('lights', [])
         
         if not light_ids:
+            # Empty room: clear stale aggregates instead of keeping the last state.
+            old_is_on = room.get('is_on', False)
+            old_brightness = room.get('avg_brightness', 0)
+            room['is_on'] = False
+            room['on_count'] = 0
+            room['avg_brightness'] = 0
+            if old_is_on or old_brightness:
+                self._notify_room_change(room_id, room)
             return
         
         # Check if any light is on
@@ -490,6 +688,14 @@ class HueStateManager:
         light_ids = zone.get('lights', [])
         
         if not light_ids:
+            # Empty zone: clear stale aggregates instead of keeping the last state.
+            old_is_on = zone.get('is_on', False)
+            old_brightness = zone.get('avg_brightness', 0)
+            zone['is_on'] = False
+            zone['on_count'] = 0
+            zone['avg_brightness'] = 0
+            if old_is_on or old_brightness:
+                self._notify_zone_change(zone_id, zone)
             return
         
         # Check if any light is on
@@ -667,379 +873,54 @@ class HueStateManager:
         """
         Initialize state manager with current data from Hue Bridge.
         Should be called once on startup.
-        
+
         Args:
             hue_controller: Instance of Hue controller to fetch data from
         """
         try:
             logger.info("Initializing state manager from Hue Bridge...")
-            
-            # Fetch all data from bridge
-            rooms_data = hue_controller.get_rooms()
-            zones_data = hue_controller.get_zones()
-            lights_data = hue_controller.get_lights()
-            scenes_data = hue_controller.get_scenes()
-            devices_data = hue_controller.get_devices()
-            grouped_lights_data = hue_controller.get_grouped_lights()
-            
-            # Build device to light mapping
-            device_to_light = {}
-            light_to_model = {}
-            for device in devices_data:
-                device_id = device.get('id')
-                product_data = device.get('product_data', {})
-                model_id = product_data.get('model_id', 'LCT001')  # Default to gamut C
-                for service in device.get('services', []):
-                    if service.get('rtype') == 'light':
-                        light_id = service.get('rid')
-                        if light_id:
-                            device_to_light[device_id] = light_id
-                            light_to_model[light_id] = model_id
-            
-            # Process rooms
-            for room in rooms_data:
-                room_id = room.get('id')
-                room_name = room.get('metadata', {}).get('name', 'Unknown')
-                
-                # Get lights in this room
-                light_ids = []
-                for child in room.get('children', []):
-                    if child.get('rtype') == 'device':
-                        device_id = child.get('rid')
-                        if device_id in device_to_light:
-                            light_ids.append(device_to_light[device_id])
-                
-                # Get room on/off state from grouped_light and map grouped_light_id to room_id
-                is_on = False
-                grouped_light_id = None
-                for service in room.get('services', []):
-                    if service.get('rtype') == 'grouped_light':
-                        grouped_light_id = service.get('rid')
-                        # Store mapping for SSE events
-                        self._grouped_light_to_room[grouped_light_id] = room_id
-                        for gl in grouped_lights_data:
-                            if gl.get('id') == grouped_light_id:
-                                is_on = gl.get('on', {}).get('on', False)
-                                break
-                        break
-                
-                # Store room state with grouped_light_id
-                if room_id not in self._rooms:
-                    self._rooms[room_id] = {}
-                
-                self._rooms[room_id].update({
-                    'name': room_name,
-                    'lights': light_ids,
-                    'is_on': is_on,
-                    'grouped_light_id': grouped_light_id,
-                    'last_update': datetime.now().isoformat()
-                })
-            
-            # Process zones
-            for zone in zones_data:
-                zone_id = zone.get('id')
-                zone_name = zone.get('metadata', {}).get('name', 'Unknown')
-                
-                # Get lights in this zone
-                light_ids = []
-                for child in zone.get('children', []):
-                    if child.get('rtype') == 'device':
-                        device_id = child.get('rid')
-                        if device_id in device_to_light:
-                            light_ids.append(device_to_light[device_id])
-                
-                # Get zone on/off state from grouped_light and map grouped_light_id to zone_id
-                is_on = False
-                grouped_light_id = None
-                for service in zone.get('services', []):
-                    if service.get('rtype') == 'grouped_light':
-                        grouped_light_id = service.get('rid')
-                        # Store mapping for SSE events
-                        self._grouped_light_to_zone[grouped_light_id] = zone_id
-                        for gl in grouped_lights_data:
-                            if gl.get('id') == grouped_light_id:
-                                is_on = gl.get('on', {}).get('on', False)
-                                break
-                        break
-                
-                # Store zone state with grouped_light_id
-                if zone_id not in self._zones:
-                    self._zones[zone_id] = {}
-                
-                self._zones[zone_id].update({
-                    'name': zone_name,
-                    'lights': light_ids,
-                    'is_on': is_on,
-                    'grouped_light_id': grouped_light_id,
-                    'last_update': datetime.now().isoformat()
-                })
-                
-                # Maintain light -> zones reverse index for aggregate recomputation
-                for light_id in light_ids:
-                    self._light_to_zones.setdefault(light_id, [])
-                    if zone_id not in self._light_to_zones[light_id]:
-                        self._light_to_zones[light_id].append(zone_id)
-            
-            # Process lights
-            for light in lights_data:
-                light_id = light.get('id')
-                is_on = light.get('on', {}).get('on', False)
-                supports_dimming = isinstance(light.get('dimming'), dict)
-                brightness = light.get('dimming', {}).get('brightness') if supports_dimming else None
-                light_name = light.get('metadata', {}).get('name', f'Light {light_id[:8]}')
-                model_id = light_to_model.get(light_id, 'LCT001')  # Default to gamut C
-                
-                # Find room for this light
-                room_id = None
-                for rid, room_state in self._rooms.items():
-                    if light_id in room_state.get('lights', []):
-                        room_id = rid
-                        break
-                
-                # Get color if available - store original values
-                xy_color = None
-                ct_color = None
-                color_mode = None
-                
-                color_data = light.get('color', {})
-                if color_data:
-                    xy = color_data.get('xy', {})
-                    if xy and 'x' in xy and 'y' in xy:
-                        xy_color = {'x': xy['x'], 'y': xy['y']}
-                        color_mode = 'xy'
-                
-                # Check for color temperature
-                color_temp_data = light.get('color_temperature', {})
-                if color_temp_data:
-                    ct_value = color_temp_data.get('mirek')
-                    if ct_value:
-                        ct_color = ct_value
-                        color_mode = 'ct'
-                
-                self.update_light(
-                    light_id=light_id,
-                    is_on=is_on,
-                    brightness=brightness,
-                    room_id=room_id,
-                    name=light_name,
-                    model_id=model_id,
-                    xy=xy_color,
-                    ct=ct_color,
-                    color_mode=color_mode,
-                    supports_dimming=supports_dimming
-                )
-            
-            # Process scenes
-            for scene in scenes_data:
-                scene_id = scene.get('id')
-                scene_name = scene.get('metadata', {}).get('name', 'Unknown')
-                
-                # Get the owning group (room or zone) for this scene
-                group_info = scene.get('group', {})
-                group_id = group_info.get('rid')
-                group_type = group_info.get('rtype')
-                if group_type not in ('room', 'zone') and group_id:
-                    # Fallback: rtype may be absent on some bridges; infer from known ids
-                    if group_id in self._rooms:
-                        group_type = 'room'
-                    elif group_id in self._zones:
-                        group_type = 'zone'
-                
-                # Check if scene is currently active
-                status = scene.get('status', {})
-                is_active = status.get('active') != 'inactive'
-                
-                self.register_scene(scene_id, {
-                    'name': scene_name,
-                    'room_id': group_id,
-                    'group_type': group_type or 'room'
-                })
-                
-                # If scene is active, set it as the current scene for the group
-                if is_active and group_id:
-                    if group_type == 'zone':
-                        logger.debug(f"Found active scene {scene_name} ({scene_id}) in zone {group_id}")
-                        self.set_zone_scene(group_id, scene_id)
-                    else:
-                        logger.debug(f"Found active scene {scene_name} ({scene_id}) in room {group_id}")
-                        self.set_room_scene(group_id, scene_id)
-            
+
+            with self._sync_lock:
+                snapshot = self._fetch_bridge_snapshot(hue_controller)
+
+                # Start from a clean slate so topology that changed while we were
+                # down (deleted rooms, moved or removed lights) cannot linger.
+                with self._lock:
+                    self._lights.clear()
+                    self._rooms.clear()
+                    self._zones.clear()
+                    self._scenes.clear()
+                    self._grouped_light_to_room.clear()
+                    self._grouped_light_to_zone.clear()
+                    self._light_to_zones.clear()
+
+                self._apply_bridge_snapshot(snapshot)
+
             logger.info(f"State manager initialized: {len(self._lights)} lights, "
                        f"{len(self._rooms)} rooms, {len(self._zones)} zones, {len(self._scenes)} scenes")
-        
+
         except Exception as e:
             logger.error(f"Error initializing state manager from bridge: {e}")
             raise
-    
+
     def reconcile_with_bridge(self, hue_controller):
         """
         Periodic reconciliation: query bridge and sync local state.
         Detects and logs any mismatches, then updates local state to match bridge.
         Called after SSE reconnection to catch missed events.
-        
+
+        Reconciles group membership, light room assignment, light metadata,
+        on/off state, active scenes and removes stale resources.
+
         Args:
             hue_controller: Instance of Hue controller to fetch current data from
         """
         try:
             logger.info("Starting state reconciliation with bridge...")
-            
-            # Fetch current data from bridge
-            bridge_lights = hue_controller.get_lights()
-            bridge_rooms = hue_controller.get_rooms()
-            bridge_zones = hue_controller.get_zones()
-            bridge_grouped_lights = hue_controller.get_grouped_lights()
-            bridge_scenes = hue_controller.get_scenes()
 
-            grouped_light_on_map = {
-                gl.get('id'): gl.get('on', {}).get('on', False)
-                for gl in bridge_grouped_lights
-                if gl.get('id')
-            }
-
-            bridge_active_scene_by_room = {}
-            for scene in bridge_scenes:
-                scene_id = scene.get('id')
-                room_id = scene.get('group', {}).get('rid')
-                is_active = scene.get('status', {}).get('active') != 'inactive'
-                if scene_id and room_id and is_active:
-                    bridge_active_scene_by_room[room_id] = scene_id
-
-            # Snapshot local state once, then reconcile outside the lock.
-            with self._lock:
-                local_lights = {lid: state.copy() for lid, state in self._lights.items()}
-                local_rooms = {rid: state.copy() for rid, state in self._rooms.items()}
-                local_zones = {zid: state.copy() for zid, state in self._zones.items()}
-
-            mismatches = []
-
-            # Reconcile light states (on/brightness).
-            for bridge_light in bridge_lights:
-                light_id = bridge_light.get('id')
-                if not light_id:
-                    continue
-
-                bridge_on = bridge_light.get('on', {}).get('on', False)
-                supports_dimming = isinstance(bridge_light.get('dimming'), dict)
-                bridge_brightness = bridge_light.get('dimming', {}).get('brightness') if supports_dimming else None
-
-                local_light = local_lights.get(light_id, {})
-                local_on = local_light.get('on')
-                local_brightness = local_light.get('brightness')
-
-                on_mismatch = local_on != bridge_on
-                brightness_mismatch = (
-                    supports_dimming
-                    and bridge_brightness is not None
-                    and local_brightness is not None
-                    and abs(float(local_brightness) - float(bridge_brightness)) > 0.5
-                )
-
-                if on_mismatch or brightness_mismatch:
-                    mismatches.append(
-                        f"Light {light_id}: on local={local_on} bridge={bridge_on}, "
-                        f"brightness local={local_brightness} bridge={bridge_brightness}"
-                    )
-                    self.update_light(
-                        light_id=light_id,
-                        is_on=bridge_on,
-                        brightness=bridge_brightness
-                    )
-
-            # Reconcile room grouped state and grouped_light mapping.
-            for bridge_room in bridge_rooms:
-                room_id = bridge_room.get('id')
-                if not room_id:
-                    continue
-
-                grouped_light_id = None
-                for service in bridge_room.get('services', []):
-                    if service.get('rtype') == 'grouped_light':
-                        grouped_light_id = service.get('rid')
-                        break
-
-                bridge_room_on = grouped_light_on_map.get(grouped_light_id, False)
-                bridge_room_name = bridge_room.get('metadata', {}).get('name')
-
-                local_room = local_rooms.get(room_id, {})
-                local_room_on = local_room.get('is_on')
-                local_grouped_light_id = local_room.get('grouped_light_id')
-                local_room_name = local_room.get('name')
-
-                room_on_mismatch = local_room_on != bridge_room_on
-                grouped_id_mismatch = (grouped_light_id is not None and local_grouped_light_id != grouped_light_id)
-                name_mismatch = (bridge_room_name is not None and local_room_name != bridge_room_name)
-
-                if room_on_mismatch or grouped_id_mismatch or name_mismatch:
-                    mismatches.append(
-                        f"Room {room_id}: on local={local_room_on} bridge={bridge_room_on}, "
-                        f"grouped_light local={local_grouped_light_id} bridge={grouped_light_id}, "
-                        f"name local={local_room_name} bridge={bridge_room_name}"
-                    )
-                    self.update_room(
-                        room_id=room_id,
-                        is_on=bridge_room_on,
-                        name=bridge_room_name,
-                        grouped_light_id=grouped_light_id
-                    )
-
-            # Reconcile zone grouped state and grouped_light mapping.
-            for bridge_zone in bridge_zones:
-                zone_id = bridge_zone.get('id')
-                if not zone_id:
-                    continue
-
-                grouped_light_id = None
-                for service in bridge_zone.get('services', []):
-                    if service.get('rtype') == 'grouped_light':
-                        grouped_light_id = service.get('rid')
-                        break
-
-                bridge_zone_on = grouped_light_on_map.get(grouped_light_id, False)
-                bridge_zone_name = bridge_zone.get('metadata', {}).get('name')
-
-                local_zone = local_zones.get(zone_id, {})
-                local_zone_on = local_zone.get('is_on')
-                local_grouped_light_id = local_zone.get('grouped_light_id')
-                local_zone_name = local_zone.get('name')
-
-                zone_on_mismatch = local_zone_on != bridge_zone_on
-                grouped_id_mismatch = (grouped_light_id is not None and local_grouped_light_id != grouped_light_id)
-                name_mismatch = (bridge_zone_name is not None and local_zone_name != bridge_zone_name)
-
-                if zone_on_mismatch or grouped_id_mismatch or name_mismatch:
-                    mismatches.append(
-                        f"Zone {zone_id}: on local={local_zone_on} bridge={bridge_zone_on}, "
-                        f"grouped_light local={local_grouped_light_id} bridge={grouped_light_id}, "
-                        f"name local={local_zone_name} bridge={bridge_zone_name}"
-                    )
-                    self.update_zone(
-                        zone_id=zone_id,
-                        is_on=bridge_zone_on,
-                        name=bridge_zone_name,
-                        grouped_light_id=grouped_light_id
-                    )
-
-            # Reconcile active scene per room.
-            reconciled_room_ids = {room.get('id') for room in bridge_rooms if room.get('id')}
-            for room_id in reconciled_room_ids:
-                bridge_scene_id = bridge_active_scene_by_room.get(room_id)
-                local_scene_id = local_rooms.get(room_id, {}).get('current_scene_id')
-                if local_scene_id != bridge_scene_id:
-                    mismatches.append(
-                        f"Room {room_id}: scene local={local_scene_id} bridge={bridge_scene_id}"
-                    )
-                    self.set_room_scene(room_id, bridge_scene_id, old_scene_id=local_scene_id, source='reconcile')
-
-            # Reconcile active scene per zone.
-            reconciled_zone_ids = {zone.get('id') for zone in bridge_zones if zone.get('id')}
-            for zone_id in reconciled_zone_ids:
-                bridge_scene_id = bridge_active_scene_by_room.get(zone_id)
-                local_scene_id = local_zones.get(zone_id, {}).get('current_scene_id')
-                if local_scene_id != bridge_scene_id:
-                    mismatches.append(
-                        f"Zone {zone_id}: scene local={local_scene_id} bridge={bridge_scene_id}"
-                    )
-                    self.set_zone_scene(zone_id, bridge_scene_id, old_scene_id=local_scene_id, source='reconcile')
+            with self._sync_lock:
+                snapshot = self._fetch_bridge_snapshot(hue_controller)
+                mismatches = self._apply_bridge_snapshot(snapshot)
 
             if mismatches:
                 logger.warning(f"State reconciliation found {len(mismatches)} mismatches:")
@@ -1047,9 +928,365 @@ class HueStateManager:
                     logger.warning(f"  - {mismatch}")
             else:
                 logger.info("State reconciliation complete: no mismatches found")
-        
+
         except Exception as e:
             logger.error(f"State reconciliation failed: {e}", exc_info=True)
+
+    # Bridge snapshot helpers
+
+    @staticmethod
+    def _fetch_bridge_snapshot(hue_controller) -> Dict:
+        """Fetch every resource needed to reconcile local state with the bridge."""
+        return {
+            'rooms': hue_controller.get_rooms() or [],
+            'zones': hue_controller.get_zones() or [],
+            'lights': hue_controller.get_lights() or [],
+            'devices': hue_controller.get_devices() or [],
+            'grouped_lights': hue_controller.get_grouped_lights() or [],
+            'scenes': hue_controller.get_scenes() or [],
+        }
+
+    @staticmethod
+    def _build_device_indexes(devices) -> Tuple[Dict[str, List[str]], Dict[str, str]]:
+        """Build (device_id -> light ids, light_id -> model id) indexes.
+
+        Devices without a light service (sensors, remotes, ...) are kept with an
+        empty list so callers can tell "known device without lights" apart from
+        "unknown device".
+        """
+        device_to_lights: Dict[str, List[str]] = {}
+        light_to_model: Dict[str, str] = {}
+
+        for device in devices:
+            device_id = device.get('id')
+            if not device_id:
+                continue
+            model_id = (device.get('product_data') or {}).get('model_id') or 'LCT001'
+            light_ids = [
+                service.get('rid')
+                for service in device.get('services', [])
+                if service.get('rtype') == 'light' and service.get('rid')
+            ]
+            device_to_lights[device_id] = light_ids
+            for light_id in light_ids:
+                light_to_model[light_id] = model_id
+
+        return device_to_lights, light_to_model
+
+    @staticmethod
+    def _resolve_group_children(group: dict, device_to_lights: Dict[str, List[str]]) -> Tuple[List[str], List[str]]:
+        """Resolve (device_ids, light_ids) for a room/zone from its children."""
+        device_ids: List[str] = []
+        light_ids: List[str] = []
+        seen = set()
+
+        for child in group.get('children') or []:
+            if not isinstance(child, dict):
+                continue
+            child_id = child.get('rid')
+            if not child_id:
+                continue
+            child_type = child.get('rtype')
+            if child_type == 'device':
+                device_ids.append(child_id)
+                for light_id in device_to_lights.get(child_id, []):
+                    if light_id not in seen:
+                        seen.add(light_id)
+                        light_ids.append(light_id)
+            elif child_type == 'light':
+                if child_id not in seen:
+                    seen.add(child_id)
+                    light_ids.append(child_id)
+
+        return device_ids, light_ids
+
+    def _apply_bridge_snapshot(self, snapshot: Dict) -> List[str]:
+        """Apply a full bridge snapshot to local state.
+
+        Reconciles group membership (rooms/zones -> lights), light metadata and
+        room assignment, on/off state, active scenes, and removes anything that
+        no longer exists on the bridge.
+
+        Returns the list of detected mismatches.
+        """
+        rooms = snapshot.get('rooms') or []
+        zones = snapshot.get('zones') or []
+        lights = snapshot.get('lights') or []
+        devices = snapshot.get('devices') or []
+        grouped_lights = snapshot.get('grouped_lights') or []
+        scenes = snapshot.get('scenes') or []
+
+        mismatches: List[str] = []
+
+        device_to_lights, light_to_model = self._build_device_indexes(devices)
+
+        # A completely empty device index while rooms/zones still reference
+        # devices means we received an incomplete response: never treat that as
+        # "every room became empty" or "every light was deleted".
+        topology_valid = bool(device_to_lights) or not any(
+            any(isinstance(child, dict) and child.get('rtype') == 'device' and child.get('rid')
+                for child in (group.get('children') or []))
+            for group in list(rooms) + list(zones)
+        )
+        if not topology_valid:
+            mismatches.append(
+                "Bridge device index is empty while groups still reference devices; "
+                "skipping membership and removal reconciliation"
+            )
+
+        grouped_light_on = {
+            gl.get('id'): gl.get('on', {}).get('on', False)
+            for gl in grouped_lights
+            if gl.get('id')
+        }
+
+        active_scene_by_group: Dict[str, str] = {}
+        for scene in scenes:
+            scene_id = scene.get('id')
+            group_id = scene.get('group', {}).get('rid')
+            scene_status = (scene.get('status') or {}).get('active')
+            # A real recall reports 'static'/'dynamic'; scenes without a status
+            # carry no activation info and must not flip the active scene.
+            if scene_id and group_id and scene_status is not None and scene_status != 'inactive':
+                active_scene_by_group[group_id] = scene_id
+
+        light_to_room: Dict[str, str] = {}
+        bridge_room_ids = {room.get('id') for room in rooms if room.get('id')}
+        bridge_zone_ids = {zone.get('id') for zone in zones if zone.get('id')}
+
+        # 1) Rooms and zones: membership, name, grouped_light mapping, on-state.
+        for group_type, group_list in (('room', rooms), ('zone', zones)):
+            for group in group_list:
+                group_id = group.get('id')
+                if not group_id:
+                    continue
+
+                device_ids, light_ids = self._resolve_group_children(group, device_to_lights)
+                if topology_valid:
+                    if group_type == 'room':
+                        for light_id in light_ids:
+                            light_to_room[light_id] = group_id
+
+                    if self.sync_group_membership(group_id, group_type, light_ids, device_ids=device_ids):
+                        mismatches.append(f"{group_type.capitalize()} {group_id}: membership changed -> {light_ids}")
+
+                grouped_light_id = None
+                for service in group.get('services', []):
+                    if service.get('rtype') == 'grouped_light':
+                        grouped_light_id = service.get('rid')
+                        break
+
+                group_name = (group.get('metadata') or {}).get('name')
+                group_on = grouped_light_on.get(grouped_light_id) if grouped_light_id else None
+
+                with self._lock:
+                    local_group = (self._zones if group_type == 'zone' else self._rooms).get(group_id, {})
+                    local_name = local_group.get('name')
+                    local_grouped_light_id = local_group.get('grouped_light_id')
+                    local_is_on = local_group.get('is_on')
+
+                name_mismatch = group_name is not None and local_name != group_name
+                grouped_mismatch = grouped_light_id is not None and local_grouped_light_id != grouped_light_id
+                on_mismatch = group_on is not None and local_is_on != group_on
+
+                if name_mismatch or grouped_mismatch or on_mismatch:
+                    details = []
+                    if name_mismatch:
+                        details.append(f"name local={local_name} bridge={group_name}")
+                    if grouped_mismatch:
+                        details.append(f"grouped_light local={local_grouped_light_id} bridge={grouped_light_id}")
+                    if on_mismatch:
+                        details.append(f"on local={local_is_on} bridge={group_on}")
+                    mismatches.append(f"{group_type.capitalize()} {group_id}: " + ", ".join(details))
+
+                if group_type == 'zone':
+                    self.update_zone(
+                        zone_id=group_id,
+                        name=group_name,
+                        is_on=group_on,
+                        grouped_light_id=grouped_light_id
+                    )
+                else:
+                    self.update_room(
+                        room_id=group_id,
+                        name=group_name,
+                        is_on=group_on,
+                        grouped_light_id=grouped_light_id
+                    )
+
+        # 2) Lights: add unknown lights, refresh changed metadata and state.
+        bridge_light_ids = set()
+        for light in lights:
+            light_id = light.get('id')
+            if not light_id:
+                continue
+            bridge_light_ids.add(light_id)
+
+            supports_dimming = isinstance(light.get('dimming'), dict)
+            brightness = light.get('dimming', {}).get('brightness') if supports_dimming else None
+            is_on = light.get('on', {}).get('on', False)
+            name = (light.get('metadata') or {}).get('name')
+            model_id = light_to_model.get(light_id, 'LCT001')
+            room_id = light_to_room.get(light_id)
+
+            xy_color = None
+            ct_color = None
+            color_mode = None
+            color_data = light.get('color') or {}
+            xy = color_data.get('xy') or {}
+            if xy and 'x' in xy and 'y' in xy:
+                xy_color = {'x': xy['x'], 'y': xy['y']}
+                color_mode = 'xy'
+            color_temp_data = light.get('color_temperature') or {}
+            ct_value = color_temp_data.get('mirek')
+            if ct_value:
+                ct_color = ct_value
+                color_mode = 'ct'
+
+            with self._lock:
+                local_light = self._lights.get(light_id)
+
+            if local_light is None:
+                self.update_light(
+                    light_id=light_id,
+                    is_on=is_on,
+                    brightness=brightness,
+                    room_id=room_id,
+                    name=name,
+                    model_id=model_id,
+                    xy=xy_color,
+                    ct=ct_color,
+                    color_mode=color_mode,
+                    supports_dimming=supports_dimming
+                )
+                mismatches.append(f"Light {light_id}: known on bridge but missing locally, added")
+                continue
+
+            local_on = local_light.get('on')
+            local_brightness = local_light.get('brightness')
+            local_name = local_light.get('name')
+            local_model_id = local_light.get('model_id')
+            local_supports_dimming = local_light.get('supports_dimming')
+
+            on_mismatch = local_on != is_on
+            brightness_mismatch = (
+                supports_dimming
+                and brightness is not None
+                and local_brightness is not None
+                and abs(float(local_brightness) - float(brightness)) > 0.5
+            )
+            name_mismatch = name is not None and local_name != name
+            model_mismatch = local_model_id != model_id
+            dimming_mismatch = local_supports_dimming != supports_dimming
+
+            if not (on_mismatch or brightness_mismatch or name_mismatch or model_mismatch or dimming_mismatch):
+                continue
+
+            details = []
+            if on_mismatch:
+                details.append(f"on local={local_on} bridge={is_on}")
+            if brightness_mismatch:
+                details.append(f"brightness local={local_brightness} bridge={brightness}")
+            if name_mismatch:
+                details.append(f"name local={local_name} bridge={name}")
+            if model_mismatch:
+                details.append(f"model local={local_model_id} bridge={model_id}")
+            if dimming_mismatch:
+                details.append(f"dimming local={local_supports_dimming} bridge={supports_dimming}")
+            mismatches.append(f"Light {light_id}: " + ", ".join(details))
+
+            self.update_light(
+                light_id=light_id,
+                is_on=is_on,
+                brightness=brightness,
+                name=name,
+                model_id=model_id,
+                supports_dimming=supports_dimming
+            )
+
+        # 3) Room assignment for every known light (also clears stale assignments).
+        with self._lock:
+            known_light_ids = list(self._lights.keys())
+
+        if topology_valid:
+            for light_id in known_light_ids:
+                expected_room = light_to_room.get(light_id)
+                with self._lock:
+                    current_room = self._lights.get(light_id, {}).get('room_id')
+                if current_room == expected_room:
+                    continue
+                if self.assign_light_room(light_id, expected_room):
+                    mismatches.append(
+                        f"Light {light_id}: room local={current_room} bridge={expected_room}"
+                    )
+
+            # 4) Remove resources that no longer exist on the bridge.
+            for light_id in known_light_ids:
+                if light_id not in bridge_light_ids:
+                    self.remove_light(light_id)
+                    mismatches.append(f"Light {light_id}: known locally but missing on bridge, removed")
+
+            with self._lock:
+                local_room_ids = list(self._rooms.keys())
+            for room_id in local_room_ids:
+                if room_id not in bridge_room_ids:
+                    self.remove_room(room_id)
+                    mismatches.append(f"Room {room_id}: known locally but missing on bridge, removed")
+
+            with self._lock:
+                local_zone_ids = list(self._zones.keys())
+            for zone_id in local_zone_ids:
+                if zone_id not in bridge_zone_ids:
+                    self.remove_zone(zone_id)
+                    mismatches.append(f"Zone {zone_id}: known locally but missing on bridge, removed")
+
+        # 5) Scenes: register, sync active scene, remove stale entries.
+        bridge_scene_ids = set()
+        for scene in scenes:
+            scene_id = scene.get('id')
+            if not scene_id:
+                continue
+            bridge_scene_ids.add(scene_id)
+
+            group_info = scene.get('group') or {}
+            group_id = group_info.get('rid')
+            group_type = group_info.get('rtype')
+            if group_type not in ('room', 'zone') and group_id:
+                if group_id in bridge_room_ids:
+                    group_type = 'room'
+                elif group_id in bridge_zone_ids:
+                    group_type = 'zone'
+
+            self.register_scene(scene_id, {
+                'name': (scene.get('metadata') or {}).get('name', 'Unknown'),
+                'room_id': group_id,
+                'group_type': group_type or 'room'
+            })
+
+        with self._lock:
+            local_scene_ids = list(self._scenes.keys())
+        for scene_id in local_scene_ids:
+            if scene_id not in bridge_scene_ids:
+                self.remove_scene(scene_id)
+                mismatches.append(f"Scene {scene_id}: known locally but missing on bridge, removed")
+
+        for group_id in bridge_room_ids | bridge_zone_ids:
+            is_zone = group_id in bridge_zone_ids
+            bridge_scene_id = active_scene_by_group.get(group_id)
+            with self._lock:
+                group_state = (self._zones if is_zone else self._rooms).get(group_id, {})
+                local_scene_id = group_state.get('current_scene_id')
+            if local_scene_id == bridge_scene_id:
+                continue
+            mismatches.append(
+                f"{'Zone' if is_zone else 'Room'} {group_id}: scene local={local_scene_id} bridge={bridge_scene_id}"
+            )
+            if is_zone:
+                self.set_zone_scene(group_id, bridge_scene_id, old_scene_id=local_scene_id, source='reconcile')
+            else:
+                self.set_room_scene(group_id, bridge_scene_id, old_scene_id=local_scene_id, source='reconcile')
+
+        return mismatches
     
     def get_current_state_summary(self) -> Dict:
         """Get a summary of the current state."""

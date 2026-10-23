@@ -86,3 +86,4 @@ Hardware-designs/**/#auto_saved_files#
 # KiCad local/editor swap files
 Hardware-designs/**/*.lck
 Hardware-designs/**/.~lock.*
+Hardware-designs/**/.history

@@ -31,3 +31,25 @@
 .room-swatch {
     cursor: default;
 }
+
+/* Rooms | Zones tab switcher */
+.overview-tab {
+    padding: 8px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #6b7280;
+    transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.overview-tab:hover {
+    color: #1f2937;
+    background: rgba(255, 255, 255, 0.6);
+}
+
+.overview-tab.active {
+    background: #fff;
+    color: #6d28d9; /* matches the page's purple gradient */
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}

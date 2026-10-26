@@ -221,6 +221,26 @@ The `home_box` field defines a tile card rendered on the main dashboard:
 
 If `home_box` is absent, no dashboard card is shown.
 
+### OTA Firmware Target Declaration
+
+Each entry in the `ota` array tells the core which plugin firmware images exist
+and which device type they belong to:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `device_type` | `integer` | yes | Device type code this firmware targets (must match a `devices` declaration). |
+| `name` | `string` | yes | Release asset name segment to match. The core matches it against dash-separated segments of asset filenames in the plugin's latest GitHub release. |
+| `platform` | `string` | no | Target chip: `"esp32"` or `"esp8266"`. Used by the Serial Flash Tool to guard against flashing an image onto the wrong chip family. When omitted, the platform is inferred from the asset filename. |
+
+```json
+"ota": [
+  { "device_type": 0, "name": "oled_temperature_sensor", "platform": "esp32" }
+]
+```
+
+Discovered plugin firmware is available both for **over-the-air updates** and
+for **USB serial flashing** (the Serial Flash Tool on the OTA page).
+
 ---
 
 ## Entry Points
@@ -624,6 +644,8 @@ def get_ota_devices(self):
 
 The core collects these across all plugins and presents them in the OTA
 management interface. The `plugin_id` is injected automatically by the core.
+Plugin firmware can be delivered over-the-air or flashed directly over USB with
+the Serial Flash Tool on the OTA page.
 
 ---
 

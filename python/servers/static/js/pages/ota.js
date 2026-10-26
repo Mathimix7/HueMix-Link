@@ -27,7 +27,65 @@ document.getElementById('closeSerialModal').addEventListener('click', () => {
 });
 document.getElementById('connectSerialBtn').addEventListener('click', handleSerialFlash);
 
-function openSerialModal() {
+// Firmware list backing the serial flash modal (keyed by firmware type key)
+let serialFirmwares = [];
+let serialFirmwareByKey = {};
+
+async function loadSerialFirmwares() {
+    try {
+        const response = await fetch('/api/ota/serial_firmwares');
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || 'Request failed');
+        serialFirmwares = data.firmwares || [];
+        serialFirmwareByKey = {};
+        serialFirmwares.forEach(fw => { serialFirmwareByKey[fw.key] = fw; });
+        return true;
+    } catch (err) {
+        console.error('Failed to load serial firmwares:', err);
+        showError('Failed to load available firmware list');
+        serialFirmwares = [];
+        serialFirmwareByKey = {};
+        return false;
+    }
+}
+
+function rebuildSerialFirmwareOptions(loaded = true) {
+    const select = document.getElementById('serialFirmwareSelect');
+    select.innerHTML = '';
+
+    if (!serialFirmwares.length) {
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.disabled = true;
+        empty.textContent = loaded ? 'No firmware available' : 'Failed to load firmware list';
+        select.appendChild(empty);
+        return null;
+    }
+
+    // Group entries preserving server order (built-in groups first, then plugins)
+    const groups = new Map();
+    serialFirmwares.forEach(fw => {
+        const group = fw.group || 'Other';
+        if (!groups.has(group)) groups.set(group, []);
+        groups.get(group).push(fw);
+    });
+
+    groups.forEach((entries, groupName) => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = groupName;
+        entries.forEach(fw => {
+            const option = document.createElement('option');
+            option.value = fw.key;
+            option.textContent = `${fw.label} (v${fw.version})`;
+            optgroup.appendChild(option);
+        });
+        select.appendChild(optgroup);
+    });
+
+    return serialFirmwares[0];
+}
+
+async function openSerialModal() {
     // Check if Web Serial API is available
     if (!navigator.serial) {
         // Check if we're on HTTP and can redirect to HTTPS
@@ -43,23 +101,11 @@ function openSerialModal() {
         return;
     }
 
-    const select = document.getElementById('serialFirmwareSelect');
-    
-    // Enable/disable options based on available firmwares
-    Array.from(select.options).forEach(opt => {
-        if (availableFirmwares[opt.value]) {
-            opt.disabled = false;
-            const fw = availableFirmwares[opt.value];
-            opt.textContent = `${opt.textContent} (v${fw.version})`;
-        } else {
-            opt.disabled = true;
-        }
-    });
-
-    // Select first available firmware by default
-    const firstAvailable = Array.from(select.options).find(opt => !opt.disabled);
+    // Rebuild the firmware list from the server so plugin firmwares are included
+    const loaded = await loadSerialFirmwares();
+    const firstAvailable = rebuildSerialFirmwareOptions(loaded);
     if (firstAvailable) {
-        select.value = firstAvailable.value;
+        document.getElementById('serialFirmwareSelect').value = firstAvailable.key;
     }
 
     document.getElementById('serialModal').classList.remove('hidden');
@@ -67,7 +113,7 @@ function openSerialModal() {
 
 async function handleSerialFlash() {
     const firmwareKey = document.getElementById('serialFirmwareSelect').value;
-    const fwInfo = availableFirmwares[firmwareKey];
+    const fwInfo = serialFirmwareByKey[firmwareKey];
     const baudRate = parseInt(document.getElementById('serialBaudRate').value);
 
     if (!fwInfo) return showError("Select a firmware first");
@@ -98,10 +144,19 @@ async function handleSerialFlash() {
         const chip = await espLoader.main();
         logToTerminal(`Connected to ${chip}`);
 
-        // 3. Prepare flash files (bootloader/partitions for ESP32 only)
-        const flashFiles = [];
         const isESP32 = chip.includes('ESP32');
         const isESP8266 = chip.includes('ESP8266');
+
+        // Abort when the selected firmware targets a different chip family
+        if (fwInfo.platform) {
+            const connectedPlatform = isESP32 ? 'esp32' : (isESP8266 ? 'esp8266' : null);
+            if (connectedPlatform && connectedPlatform !== fwInfo.platform) {
+                throw new Error(`Firmware is for ${fwInfo.platform.toUpperCase()}, but the connected device is ${connectedPlatform.toUpperCase()}. Select the matching firmware.`);
+            }
+        }
+
+        // 3. Prepare flash files (bootloader/partitions for ESP32 only)
+        const flashFiles = [];
         
         if (isESP32) {
             logToTerminal("ESP32 detected - Full flash mode (bootloader + partitions + firmware)");
@@ -196,7 +251,7 @@ async function handleSerialFlash() {
     } catch (err) {
         console.error(err);
         logToTerminal(`Error: ${err.message}`);
-        showError("Serial Flash Failed");
+        showError(err.message ? `Serial Flash Failed: ${err.message}` : "Serial Flash Failed");
     } finally {
         if (transport) await transport.disconnect();
     }

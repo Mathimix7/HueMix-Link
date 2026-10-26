@@ -144,6 +144,124 @@ def _is_serial_gateway(gateway: dict) -> bool:
     return (gateway.get('transport') == 'usb_serial') or (
         isinstance(endpoint, str) and endpoint.startswith('serial://')
     )
+
+
+def infer_platform(key: str, filename: str = '', ota_platform: str | None = None) -> str | None:
+    """Best-effort inference of the target platform for a firmware entry.
+
+    Args:
+        key: Firmware type key (e.g. 'button_esp32', 'lightstrip_model2')
+        filename: Firmware filename, checked for embedded platform hints
+        ota_platform: Optional explicit platform declared by a plugin manifest ota entry
+
+    Returns:
+        'esp32', 'esp8266', or None when the platform cannot be determined
+    """
+    if ota_platform:
+        platform = str(ota_platform).strip().lower()
+        if platform in ('esp32', 'esp8266'):
+            return platform
+
+    name = (filename or '').lower()
+    if 'esp8266' in name:
+        return 'esp8266'
+    if 'esp32' in name:
+        return 'esp32'
+
+    if key.endswith('_esp8266'):
+        return 'esp8266'
+    if key.endswith('_esp32'):
+        return 'esp32'
+
+    if key.startswith('lightstrip_model'):
+        try:
+            model_id = int(key[len('lightstrip_model'):])
+            return str(LIGHTSTRIP_MODELS[model_id]['platform']).lower()
+        except (ValueError, KeyError):
+            return None
+
+    # Core gateway firmwares are ESP32-based (radio_python assets are esp32-only)
+    if key.startswith('gateway_'):
+        return 'esp32'
+
+    return None
+
+
+def resolve_plugin_display(plugin_id: str, device_type: int | None = None) -> dict:
+    """Resolve display metadata for a plugin (and optionally one of its device types).
+
+    Args:
+        plugin_id: Plugin UUID
+        device_type: Optional device type to resolve a device-specific name for
+
+    Returns:
+        Dict with keys: name (device name falls back to plugin name), plugin_name,
+        device_name, color and icon
+    """
+    result = {
+        'name': plugin_id,
+        'plugin_name': plugin_id,
+        'device_name': None,
+        'color': '#6366f1',
+        'icon': 'fa-puzzle-piece',
+    }
+
+    for entry in plugin_manager.list_registered_plugins():
+        if str(entry.get('plugin_id', '')).strip() != plugin_id:
+            continue
+
+        home_box = entry.get('home_box')
+        if isinstance(home_box, dict):
+            result['color'] = home_box.get('color', result['color'])
+            result['icon'] = home_box.get('icon', result['icon'])
+            result['plugin_name'] = home_box.get('name', result['plugin_name'])
+
+        if device_type is not None:
+            for device in entry.get('devices', []):
+                if device.get('device_type') == device_type:
+                    result['device_name'] = device.get('name')
+                    break
+        break
+
+    result['name'] = result['device_name'] or result['plugin_name']
+    return result
+
+
+def parse_plugin_firmware_key(key: str) -> tuple[str, int] | None:
+    """Parse a plugin firmware key into (plugin_id, device_type).
+
+    Args:
+        key: Firmware key of the form plugin_{plugin_id}_devtype_{device_type}
+
+    Returns:
+        Tuple of (plugin_id, device_type) or None if the key is not a plugin key
+    """
+    match = re.match(r'^plugin_(.+)_devtype_(\d+)$', str(key))
+    if not match:
+        return None
+    return match.group(1), int(match.group(2))
+
+
+def find_plugin_ota_entry(plugin_id: str, device_type: int) -> dict | None:
+    """Find the manifest ota declaration for a plugin device type.
+
+    Args:
+        plugin_id: Plugin UUID
+        device_type: Device type code declared by the plugin
+
+    Returns:
+        The raw ota entry dict if declared, None otherwise
+    """
+    for entry in plugin_manager.list_registered_plugins():
+        if str(entry.get('plugin_id', '')).strip() != plugin_id:
+            continue
+        for ota_entry in entry.get('ota', []) or []:
+            if ota_entry.get('device_type') == device_type:
+                return ota_entry
+        return None
+    return None
+
+
 def parse_github_url(url: str) -> tuple[str | None, str | None]:
     """Parse GitHub URL to extract owner and repo names.
     
@@ -255,6 +373,30 @@ def save_local_firmwares(firmwares):
         logger.error(f"Failed to save local firmware metadata: {e}")
 
 
+def _plugin_firmware_options() -> list[dict]:
+    """Build upload-modal options for plugin-declared firmware types.
+
+    Returns:
+        List of dicts with key, label and group for each plugin ota declaration
+    """
+    options = []
+    for entry in plugin_manager.list_registered_plugins():
+        plugin_id = str(entry.get('plugin_id', '')).strip()
+        if not plugin_id:
+            continue
+        for ota_entry in entry.get('ota', []) or []:
+            device_type = ota_entry.get('device_type')
+            if device_type is None:
+                continue
+            display = resolve_plugin_display(plugin_id, device_type)
+            options.append({
+                'key': f'plugin_{plugin_id}_devtype_{device_type}',
+                'label': display['name'],
+                'group': display['plugin_name'],
+            })
+    return options
+
+
 @ota_bp.route('/ota')
 def ota_page():
     """Render OTA management page."""
@@ -263,20 +405,20 @@ def ota_page():
                          dev_mode=dev_mode,
                          device_type_groups=DEVICE_TYPE_GROUPS,
                          device_type_labels=DEVICE_TYPE_LABELS,
-                         lightstrip_model_names=LIGHTSTRIP_MODEL_NAMES)
+                         lightstrip_model_names=LIGHTSTRIP_MODEL_NAMES,
+                         plugin_firmware_options=_plugin_firmware_options())
 
 
-@ota_bp.route('/api/ota/check', methods=['GET'])
-def check_updates():
-    """Check for available firmware updates from GitHub and local uploads.
-    
+def collect_available_firmwares() -> tuple[dict, dict | None]:
+    """Collect available firmwares from GitHub releases (core and plugins) and local uploads.
+
     Returns:
-        JSON with available firmware versions per device type
+        Tuple of (available firmwares keyed by firmware type, release info or None)
     """
+    available_firmwares = {}
+    release_info = None
+
     try:
-        available_firmwares = {}
-        release_info = None
-        
         # First, try to fetch GitHub releases
         try:
             url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
@@ -314,7 +456,8 @@ def check_updates():
                                 'firmware_type': 'gateway_radio_python',
                                 'download_url': download_url,
                                 'filename': name,
-                                'source': 'github'
+                                'source': 'github',
+                                'platform': infer_platform('gateway_radio_python', name)
                             }
                         continue
                     
@@ -335,7 +478,8 @@ def check_updates():
                             'firmware_type': firmware_type,
                             'download_url': download_url,
                             'filename': name,
-                            'source': 'github'
+                            'source': 'github',
+                            'platform': infer_platform(firmware_type, name)
                         }
         except Exception as e:
             logger.warning(f"Failed to fetch GitHub releases: {e}")
@@ -396,6 +540,7 @@ def check_updates():
                                         'plugin_id': plugin_id,
                                         'plugin_device_type': dev_type,
                                         'source_repo': source_repo,
+                                        'platform': infer_platform(key, aname, ota_entry.get('platform')),
                                     }
                                     break
                 except Exception as e:
@@ -406,6 +551,10 @@ def check_updates():
         # Load and merge locally uploaded firmwares
         local_firmwares = load_local_firmwares()
         for firmware_type_key, firmware_info in local_firmwares.items():
+            firmware_info.setdefault(
+                'platform',
+                infer_platform(firmware_type_key, firmware_info.get('filename', ''))
+            )
             # Use local if no GitHub version or if local is newer
             if firmware_type_key not in available_firmwares:
                 available_firmwares[firmware_type_key] = firmware_info
@@ -416,6 +565,23 @@ def check_updates():
                 if compare_versions(local_ver, github_ver) > 0:
                     available_firmwares[firmware_type_key] = firmware_info
         
+    except Exception as e:
+        logger.error(f"Failed to collect available firmwares: {e}")
+        raise
+
+    return available_firmwares, release_info
+
+
+@ota_bp.route('/api/ota/check', methods=['GET'])
+def check_updates():
+    """Check for available firmware updates from GitHub and local uploads.
+
+    Returns:
+        JSON with available firmware versions per device type
+    """
+    try:
+        available_firmwares, release_info = collect_available_firmwares()
+
         if not release_info:
             release_info = {
                 'tag': 'local',
@@ -424,19 +590,88 @@ def check_updates():
                 'published_at': '',
                 'html_url': ''
             }
-        
+
         return jsonify({
             'success': True,
             'release': release_info,
             'firmwares': available_firmwares
         })
-        
+
     except Exception as e:
         logger.error(f"Error checking updates: {e}")
         return jsonify({
             'success': False,
             'error': str(e)
         }), 500
+
+
+@ota_bp.route('/api/ota/serial_firmwares', methods=['GET'])
+def get_serial_firmwares():
+    """List firmware entries that can be flashed with the browser Serial Flash Tool.
+
+    Combines built-in device firmwares with plugin-provided firmwares so the
+    serial flash modal can offer every flashable image, including plugin ones.
+
+    Returns:
+        JSON with a flat list of firmware entries. Each entry carries display
+        metadata (key, label, group), source info usable by /api/ota/binary,
+        and a platform hint ('esp32' | 'esp8266' | null).
+    """
+    try:
+        available_firmwares, _ = collect_available_firmwares()
+        entries = []
+
+        # Built-in firmware types, in declared group order
+        for group, keys in DEVICE_TYPE_GROUPS.items():
+            for key in keys:
+                firmware = available_firmwares.get(key)
+                if not firmware:
+                    continue
+                entries.append({
+                    'key': key,
+                    'label': DEVICE_TYPE_LABELS.get(key, key),
+                    'group': group,
+                    'version': firmware.get('version', '0.0.0'),
+                    'source': firmware.get('source', 'github'),
+                    'download_url': firmware.get('download_url'),
+                    'filename': firmware.get('filename'),
+                    'filepath': firmware.get('filepath'),
+                    'platform': firmware.get('platform') or infer_platform(key, firmware.get('filename', '')),
+                    'is_plugin': False,
+                })
+
+        # Plugin firmwares, grouped under the plugin display name
+        for key, firmware in available_firmwares.items():
+            if not key.startswith('plugin_'):
+                continue
+            parts = parse_plugin_firmware_key(key)
+            if not parts:
+                continue
+            plugin_id, device_type = parts
+            display = resolve_plugin_display(plugin_id, device_type)
+            entries.append({
+                'key': key,
+                'label': display['name'],
+                'group': display['plugin_name'],
+                'version': firmware.get('version', '0.0.0'),
+                'source': firmware.get('source', 'github'),
+                'download_url': firmware.get('download_url'),
+                'filename': firmware.get('filename'),
+                'filepath': firmware.get('filepath'),
+                'platform': firmware.get('platform') or infer_platform(key, firmware.get('filename', '')),
+                'is_plugin': True,
+                'plugin_id': plugin_id,
+                'plugin_display_name': display['plugin_name'],
+            })
+
+        return jsonify({
+            'success': True,
+            'firmwares': entries
+        })
+
+    except Exception as e:
+        logger.error(f"Failed to list serial firmwares: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @ota_bp.route('/api/ota/upload', methods=['POST'])
@@ -473,10 +708,21 @@ def upload_firmware():
             return jsonify({'success': False, 'error': 'Version must be in format X.Y.Z (e.g., 3.7.4)'}), 400
         
         # Map device_type string to code and firmware type
+        plugin_parts = None
         if device_type_str in EXTENDED_DEVICE_TYPES:
             device_type_code, firmware_type = EXTENDED_DEVICE_TYPES[device_type_str]
         else:
-            return jsonify({'success': False, 'error': f'Invalid device type: {device_type_str}'}), 400
+            # Allow plugin-declared firmware types (plugin_{plugin_id}_devtype_{device_type})
+            plugin_parts = parse_plugin_firmware_key(device_type_str)
+            if not plugin_parts:
+                return jsonify({'success': False, 'error': f'Invalid device type: {device_type_str}'}), 400
+            plugin_id, device_type_code = plugin_parts
+            if find_plugin_ota_entry(plugin_id, device_type_code) is None:
+                return jsonify({
+                    'success': False,
+                    'error': f'Plugin does not declare an OTA target for: {device_type_str}'
+                }), 400
+            firmware_type = device_type_str
         
         # Secure filename
         filename = secure_filename(file.filename or '')
@@ -498,13 +744,19 @@ def upload_firmware():
         logger.info(f"Uploaded {firmware_type} firmware: {filename} ({os.path.getsize(filepath)} bytes)")
         
         # Store metadata for this upload
+        ota_entry = find_plugin_ota_entry(*plugin_parts) if plugin_parts else None
         local_firmwares = load_local_firmwares()
         local_firmwares[firmware_type] = {
             'version': version_str,
             'filename': filename,
             'filepath': filepath,
             'source': 'local',
-            'firmware_type': firmware_type
+            'firmware_type': firmware_type,
+            'platform': infer_platform(
+                firmware_type,
+                filename,
+                ota_entry.get('platform') if ota_entry else None
+            )
         }
         save_local_firmwares(local_firmwares)
         
@@ -999,26 +1251,8 @@ def get_devices_with_versions():
         for pd in plugin_devices:
             plugin_id = pd.get('plugin_id', '')
             dev_type = pd.get('device_type', 0)
-            # Look up home_box color from plugin registry
-            home_box_color = '#6366f1'
-            home_box_icon = 'fa-puzzle-piece'
-            plugin_display_name = plugin_id
-            for entry in plugin_manager.list_registered_plugins():
-                eid = str(entry.get('plugin_id', '')).strip()
-                if eid == plugin_id:
-                    hb = entry.get('home_box')
-                    if isinstance(hb, dict):
-                        home_box_color = hb.get('color', home_box_color)
-                        home_box_icon = hb.get('icon', home_box_icon)
-                        plugin_display_name = hb.get('name', plugin_display_name)
-                    dev = entry.get('devices', [])
-                    for d in dev:
-                        if d.get('device_type') == dev_type:
-                            plugin_display_name = d.get('name', plugin_display_name)
-                            break
-                    break
-
-                
+            # Resolve display metadata from the plugin registry
+            display = resolve_plugin_display(plugin_id, dev_type)
             devices.append({
                 'mac_address': pd.get('mac_address'),
                 'name': pd.get('name', 'Plugin Device'),
@@ -1028,9 +1262,9 @@ def get_devices_with_versions():
                 'platform': pd.get('platform', 'esp32'),
                 'plugin_id': plugin_id,
                 'is_plugin': True,
-                'home_box_color': home_box_color,
-                'home_box_icon': home_box_icon,
-                'plugin_display_name': plugin_display_name,
+                'home_box_color': display['color'],
+                'home_box_icon': display['icon'],
+                'plugin_display_name': display['name'],
             })
         
         return jsonify({

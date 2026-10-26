@@ -42,6 +42,7 @@ class PluginOTA:
     url: str
     version: str
     checksum: str = ""
+    platform: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PluginOTA":
@@ -50,6 +51,7 @@ class PluginOTA:
             url=str(data.get("url", "")),
             version=str(data.get("version", "0.0.0")),
             checksum=str(data.get("checksum", "")),
+            platform=str(data.get("platform", "") or ""),
         )
 
 

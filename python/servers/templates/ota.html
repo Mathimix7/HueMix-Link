@@ -165,6 +165,13 @@
                             {% endfor %}
                         </optgroup>
                         {% endfor %}
+                        {% if plugin_firmware_options %}
+                        <optgroup label="Plugins">
+                            {% for opt in plugin_firmware_options %}
+                            <option value="{{ opt.key }}">{{ opt.group }}{% if opt.label != opt.group %} — {{ opt.label }}{% endif %}</option>
+                            {% endfor %}
+                        </optgroup>
+                        {% endif %}
                     </select>
                 </div>
                 
@@ -207,13 +214,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Select Firmware</label>
                     <select id="serialFirmwareSelect" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-                        {% for group_name, device_keys in device_type_groups.items() %}
-                        <optgroup label="{{ group_name }}">
-                            {% for key in device_keys %}
-                            <option value="{{ key }}" disabled>{{ device_type_labels.get(key, key) }}</option>
-                            {% endfor %}
-                        </optgroup>
-                        {% endfor %}
+                        <option value="" disabled selected>Loading available firmware...</option>
                     </select>
                 </div>
                 <div>

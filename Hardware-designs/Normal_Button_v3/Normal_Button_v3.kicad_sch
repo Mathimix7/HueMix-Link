@@ -6897,7 +6897,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "68nF"
+		(property "Value" "100nF"
 			(at 27.94 38.0999 0)
 			(show_name no)
 			(do_not_autoplace no)

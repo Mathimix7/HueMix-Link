@@ -148,6 +148,86 @@
         </div>
     </div>
 
+    <!-- Security v2 Configuration Section -->
+    <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-200">
+            <i class="fas fa-shield-alt text-blue-600 mr-2"></i>Protocol Security (v2)
+        </h2>
+
+        <div id="security-v2-gateway-banner" class="hidden mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+            <div class="flex items-start">
+                <i class="fas fa-exclamation-triangle text-amber-600 mt-0.5 mr-3"></i>
+                <div class="text-sm text-amber-800">
+                    <p class="font-medium">Update all gateways to firmware 4.0.0+ before enabling Security v2</p>
+                    <p id="security-v2-outdated-list" class="mt-1 text-amber-700"></p>
+                    <a href="/ota" class="inline-block mt-2 font-medium text-amber-900 underline hover:text-amber-700">
+                        Go to Firmware Updates &rarr;
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="space-y-4">
+            <!-- Enable Security v2 -->
+            <div class="flex items-center justify-between py-3">
+                <div class="flex-1">
+                    <h3 class="font-medium text-gray-900">Enable Security v2</h3>
+                    <p class="text-sm text-gray-600 mt-1">Enable AES-128-GCM encrypted communication and ECDH+PIN pairing for v2 devices (requires all gateways on firmware 4.0.0+)</p>
+                </div>
+                <div class="ml-4">
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="security-v2-enabled" class="sr-only peer" onchange="onSecurityV2Toggle(this)">
+                        <div class="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600 peer-disabled:opacity-50 peer-disabled:cursor-not-allowed"></div>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Require v2 for new pairings -->
+            <div class="flex items-center justify-between py-3 border-t border-gray-100">
+                <div class="flex-1">
+                    <h3 class="font-medium text-gray-900">Require Security v2 for New Pairings</h3>
+                    <p class="text-sm text-gray-600 mt-1">Refuse legacy v1 pairing requests (existing paired v1 devices keep working while legacy v1 is allowed)</p>
+                </div>
+                <div class="ml-4">
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="security-require-v2" class="sr-only peer" onchange="onRequireV2Toggle(this)">
+                        <div class="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600 peer-disabled:opacity-50 peer-disabled:cursor-not-allowed"></div>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Allow Legacy v1 Traffic -->
+            <div class="flex items-center justify-between py-3 border-t border-gray-100">
+                <div class="flex-1">
+                    <h3 class="font-medium text-gray-900">Allow Legacy v1 Devices</h3>
+                    <p class="text-sm text-gray-600 mt-1">Turn off to reject all unencrypted v1 traffic once all devices are upgraded to Security v2</p>
+                    <p id="security-v1-count-hint" class="hidden text-xs text-amber-700 mt-1"></p>
+                </div>
+                <div class="ml-4">
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="security-allow-v1" class="sr-only peer" checked onchange="onAllowV1Toggle(this)">
+                        <div class="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Saved Device PINs (Modal trigger) -->
+            <div class="flex items-center justify-between py-3 border-t border-gray-100">
+                <div class="flex-1">
+                    <h3 class="font-medium text-gray-900">Saved Device PINs</h3>
+                    <p class="text-sm text-gray-600 mt-1">View, copy, or permanently delete saved 6-digit pairing PINs (including removed/revoked devices)</p>
+                    <p id="security-pins-summary" class="text-xs text-gray-500 mt-1"></p>
+                </div>
+                <div class="ml-4">
+                    <button type="button" onclick="openSecurityPinsModal()"
+                            class="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-800 transition-colors inline-flex items-center text-sm font-medium">
+                        <i class="fas fa-key mr-2"></i><span id="manage-pins-btn-label">Manage PINs</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Backup & Restore Section -->
     <div class="bg-white rounded-xl shadow-md p-6 mb-6">
         <h2 class="text-xl font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-200">
@@ -211,6 +291,57 @@
                         <i class="fas fa-trash-alt mr-2"></i>Reset Everything
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Saved Device PINs Modal -->
+<div id="security-pins-modal" class="hidden fixed inset-0 z-40 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen px-4 py-6">
+        <div class="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75" onclick="closeSecurityPinsModal()"></div>
+
+        <div class="relative bg-white rounded-xl text-left overflow-hidden shadow-xl transform transition-all sm:max-w-2xl sm:w-full z-10">
+            <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">
+                        <i class="fas fa-key text-blue-600 mr-2"></i>Saved Device PINs
+                    </h3>
+                    <p class="text-xs text-gray-500 mt-0.5">Deleting a device revokes its radio access immediately while keeping its PIN here for re-pairing.</p>
+                </div>
+                <button type="button" onclick="closeSecurityPinsModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <i class="fas fa-times text-lg"></i>
+                </button>
+            </div>
+
+            <div class="px-6 py-4 space-y-3">
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <div class="relative flex-1">
+                        <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
+                        <input type="text" id="security-pins-search" oninput="renderSavedSecurityPins()"
+                               placeholder="Search by device name, MAC, or PIN..."
+                               class="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    </div>
+                    <div class="inline-flex rounded-lg border border-gray-300 overflow-hidden text-xs font-medium self-start sm:self-auto">
+                        <button type="button" id="pins-filter-all" onclick="setSecurityPinsFilter('all')"
+                                class="px-3 py-2 bg-blue-600 text-white">All</button>
+                        <button type="button" id="pins-filter-paired" onclick="setSecurityPinsFilter('paired')"
+                                class="px-3 py-2 bg-white text-gray-700 hover:bg-gray-50 border-l border-gray-300">Paired</button>
+                        <button type="button" id="pins-filter-revoked" onclick="setSecurityPinsFilter('revoked')"
+                                class="px-3 py-2 bg-white text-gray-700 hover:bg-gray-50 border-l border-gray-300">Revoked</button>
+                    </div>
+                </div>
+
+                <div id="security-pins-list" class="space-y-2 max-h-96 overflow-y-auto pr-1">
+                    <p class="text-sm text-gray-500 text-center py-6">No saved device PINs</p>
+                </div>
+            </div>
+
+            <div class="bg-gray-50 px-6 py-3 flex justify-end border-t border-gray-200">
+                <button type="button" onclick="closeSecurityPinsModal()"
+                        class="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+                    Close
+                </button>
             </div>
         </div>
     </div>

@@ -704,6 +704,242 @@ def get_system_status():
 
 # ===== Pairing Mode Endpoints =====
 
+def _parse_version_major(version_str) -> int:
+    try:
+        return int(str(version_str or "0").strip().lstrip("v").split(".")[0])
+    except (ValueError, IndexError):
+        return 0
+
+
+def _get_security_v2_readiness() -> dict:
+    """Check whether all gateways are >= 4.0.0 and list v1 vs v2 devices."""
+    from network.security_store import security_store
+
+    outdated_gateways = []
+    v1_devices = []
+    v2_devices = []
+
+    def _record_device(name: str, mac: str, dev_type: str):
+        entry = {"name": name, "mac": mac, "type": dev_type}
+        if security_store.is_v2_device(mac):
+            v2_devices.append(entry)
+        else:
+            v1_devices.append(entry)
+
+    gateways = device_manager.get_all_gateways()
+    gateway_wifi_macs = set()
+
+    for gw in gateways:
+        gw_name = gw.get("name") or gw.get("mac_address") or "Gateway"
+        wifi_mac = gw.get("mac_address")
+        radio_mac = gw.get("radio_mac")
+        endpoint = gw.get("transport_endpoint") or gw.get("ip_address") or ""
+        is_serial = (gw.get("transport") == "usb_serial") or (
+            isinstance(endpoint, str) and endpoint.startswith("serial://")
+        )
+
+        if wifi_mac:
+            gateway_wifi_macs.add(wifi_mac.upper())
+            if not is_serial:
+                ver_net = gw.get("version_net") or "0.0.0"
+                if _parse_version_major(ver_net) < 4:
+                    outdated_gateways.append({
+                        "name": gw_name,
+                        "mac": wifi_mac,
+                        "role": "net",
+                        "version": ver_net,
+                    })
+                _record_device(f"{gw_name} (Net)", wifi_mac, "gateway_net")
+
+        if radio_mac:
+            ver_radio = gw.get("version_radio") or "0.0.0"
+            if _parse_version_major(ver_radio) < 4:
+                outdated_gateways.append({
+                    "name": gw_name,
+                    "mac": radio_mac,
+                    "role": "radio",
+                    "version": ver_radio,
+                })
+            _record_device(f"{gw_name} (Radio)", radio_mac, "gateway_radio")
+
+    for light in device_manager.get_all_lights():
+        mac = light.get("mac_address")
+        if mac:
+            _record_device(light.get("name") or f"Light {mac[-8:]}", mac, "lightstrip")
+
+    for btn in device_manager.get_all_buttons():
+        mac = btn.get("mac_address")
+        if not mac or mac.upper() in gateway_wifi_macs:
+            continue
+        _record_device(
+            btn.get("name") or f"Button {mac[-8:]}",
+            mac,
+            "remote" if btn.get("device_type") == 4 else "button",
+        )
+
+    for sensor in device_manager.get_all_motion_sensors():
+        mac = sensor.get("mac_address")
+        if mac:
+            _record_device(sensor.get("name") or f"Motion {mac[-8:]}", mac, "motion_sensor")
+
+    for sensor in device_manager.get_all_door_sensors():
+        mac = sensor.get("mac_address")
+        if mac:
+            _record_device(sensor.get("name") or f"Door {mac[-8:]}", mac, "door_sensor")
+
+    try:
+        from services.plugin_manager import plugin_manager
+        for pd in plugin_manager.collect_plugin_ota_devices():
+            mac = pd.get("mac_address")
+            if mac:
+                _record_device(pd.get("name") or f"Plugin {mac[-8:]}", mac, "plugin")
+    except Exception:
+        pass
+
+    return {
+        "all_gateways_v2_ready": len(outdated_gateways) == 0,
+        "outdated_gateways": outdated_gateways,
+        "v1_devices": v1_devices,
+        "v1_device_count": len(v1_devices),
+        "v2_devices": v2_devices,
+        "v2_device_count": len(v2_devices),
+    }
+
+
+def _build_active_device_name_map() -> dict:
+    """Return uppercased MAC -> display name for all currently registered devices."""
+    names = {}
+    for gw in device_manager.get_all_gateways():
+        gw_name = gw.get("name") or gw.get("mac_address") or "Gateway"
+        if gw.get("mac_address"):
+            names[gw["mac_address"].upper()] = f"{gw_name} (Net)"
+        if gw.get("radio_mac"):
+            names[gw["radio_mac"].upper()] = f"{gw_name} (Radio)"
+    for light in device_manager.get_all_lights():
+        if light.get("mac_address"):
+            names[light["mac_address"].upper()] = light.get("name") or f"Light {light['mac_address'][-8:]}"
+    for btn in device_manager.get_all_buttons():
+        if btn.get("mac_address"):
+            names.setdefault(btn["mac_address"].upper(), btn.get("name") or f"Button {btn['mac_address'][-8:]}")
+    for sensor in device_manager.get_all_motion_sensors():
+        if sensor.get("mac_address"):
+            names[sensor["mac_address"].upper()] = sensor.get("name") or f"Motion {sensor['mac_address'][-8:]}"
+    for sensor in device_manager.get_all_door_sensors():
+        if sensor.get("mac_address"):
+            names[sensor["mac_address"].upper()] = sensor.get("name") or f"Door {sensor['mac_address'][-8:]}"
+    try:
+        from services.plugin_manager import plugin_manager
+        for pd in plugin_manager.collect_plugin_ota_devices():
+            if pd.get("mac_address"):
+                names[pd["mac_address"].upper()] = pd.get("name") or f"Plugin {pd['mac_address'][-8:]}"
+    except Exception:
+        pass
+    return names
+
+
+@api_bp.route('/security/pins', methods=['GET'])
+def list_security_pins():
+    """List saved device pairing PINs (both active and revoked/removed devices)."""
+    from network.security_store import security_store
+    try:
+        active_names = _build_active_device_name_map()
+        pins = []
+        for entry in security_store.list_saved_pins():
+            mac_up = entry["mac"].upper()
+            is_active = (not entry["revoked"]) and (mac_up in active_names)
+            pins.append({
+                "mac": entry["mac"],
+                "pin": entry["pin"],
+                "revoked": entry["revoked"] or (not is_active),
+                "active": is_active,
+                "name": active_names.get(mac_up) or entry.get("last_name") or entry["mac"],
+            })
+        return jsonify({"success": True, "pins": pins})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/security/pins/<device_mac>', methods=['DELETE'])
+def delete_security_pin(device_mac):
+    """Permanently delete a saved device PIN (and remove its revoked security record)."""
+    from network.security_store import security_store
+    try:
+        deleted = security_store.forget_device_pin(device_mac)
+        if not deleted:
+            return jsonify({"success": False, "error": "Saved PIN not found"}), 404
+        return jsonify({"success": True, "mac": device_mac})
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/security/flags', methods=['GET', 'POST'])
+def security_flags():
+    """Get or update Security v2 runtime safety flags."""
+    from services.config_manager import config_manager
+    try:
+        readiness = _get_security_v2_readiness()
+        if request.method == 'GET':
+            return jsonify({
+                "success": True,
+                "flags": config_manager.get_security_flags(),
+                "readiness": readiness,
+            })
+
+        data = request.get_json() or {}
+        allowed = {'security_v2_decode', 'security_v2_pair', 'security_v2_send', 'require_v2', 'allow_v1'}
+        for key in data:
+            if key not in allowed:
+                return jsonify({"success": False, "error": f"Unknown flag: {key}"}), 400
+
+        # Block enabling Security v2 until all registered gateways are running >= 4.0.0
+        enabling_v2 = any(
+            bool(data.get(k)) for k in ('security_v2_pair', 'security_v2_send', 'require_v2')
+        )
+        if enabling_v2 and not readiness["all_gateways_v2_ready"]:
+            outdated_desc = ", ".join(
+                f"{g['name']} ({g['role']} v{g['version']})"
+                for g in readiness["outdated_gateways"]
+            )
+            return jsonify({
+                "success": False,
+                "error": f"All gateways must be updated to firmware 4.0.0 or higher before enabling Security v2. Outdated: {outdated_desc}",
+                "readiness": readiness,
+            }), 400
+
+        # Prevent locking out all devices (both Security v2 disabled AND allow_v1 disabled)
+        current_flags = config_manager.get_security_flags()
+        projected_flags = dict(current_flags)
+        for key, val in data.items():
+            projected_flags[key] = bool(val)
+        v2_active = bool(projected_flags.get('security_v2_pair') and projected_flags.get('security_v2_send'))
+        if not v2_active and not projected_flags.get('allow_v1', True):
+            return jsonify({
+                "success": False,
+                "error": "Cannot disable both Security v2 and Legacy v1 at the same time (at least one protocol must remain enabled).",
+                "readiness": readiness,
+            }), 400
+
+        for key, val in data.items():
+            config_manager.set_security_flag(key, bool(val))
+
+        if data.get('security_v2_pair'):
+            try:
+                from network.network_server import network_server
+                network_server.auto_upgrade_v2_gateways()
+            except Exception as upgrade_err:
+                logger.warning(f"Auto gateway v2 upgrade check failed: {upgrade_err}")
+
+        return jsonify({
+            "success": True,
+            "flags": config_manager.get_security_flags(),
+            "readiness": _get_security_v2_readiness(),
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @api_bp.route('/pairing/start', methods=['POST'])
 def start_pairing():
     """Start device pairing mode.
@@ -718,6 +954,16 @@ def start_pairing():
         data = request.get_json() or {}
         duration = data.get('duration', 60)
         device_types = data.get('types')  # None = all types
+        pin = data.get('pin')
+        if pin is not None:
+            pin = str(pin).strip()
+            if pin == '':
+                pin = None
+            elif not (len(pin) == 6 and pin.isdigit()):
+                return jsonify({
+                    "success": False,
+                    "error": "PIN must be exactly 6 digits"
+                }), 400
         
         # Validate duration
         if not isinstance(duration, int) or duration < 10 or duration > 300:
@@ -743,12 +989,13 @@ def start_pairing():
                     }), 400
         
         # Start pairing
-        pairing_manager.start_pairing(duration, device_types)
+        pairing_manager.start_pairing(duration, device_types, pin=pin)
         
         return jsonify({
             "success": True,
             "duration": duration,
-            "types": device_types if device_types else ['all']
+            "types": device_types if device_types else ['all'],
+            "pin_active": bool(pin),
         })
     
     except Exception as e:
@@ -780,12 +1027,51 @@ def get_pairing_status():
     """Get current pairing mode status."""
     try:        
         status = pairing_manager.get_status()
+        from services.config_manager import config_manager
+        from network.security_store import security_store
+        sec_flags = config_manager.get_security_flags()
+        readiness = _get_security_v2_readiness()
+        legacy_gateways = [
+            {
+                'name': f"{g['name']} ({g['role']})",
+                'mac': g['mac'],
+                'version_radio': g['version'],
+            }
+            for g in readiness.get('outdated_gateways', [])
+        ]
         
         return jsonify({
             "success": True,
-            **status
+            **status,
+            "allow_rssi_auto_pair": config_manager.get_allow_rssi_auto_pair(),
+            "security_flags": sec_flags,
+            "legacy_gateways": legacy_gateways,
         })
     
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@api_bp.route('/pairing/short-range', methods=['POST'])
+def set_short_range_pairing():
+    """Enable or disable secure short-range (v2 Known-PIN, > -50 dBm) auto-pairing."""
+    try:
+        from services.config_manager import config_manager
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get('enabled', False))
+        if enabled and not config_manager.get_security_flags().get('security_v2_pair', False):
+            return jsonify({
+                "success": False,
+                "error": "Enable Security v2 in Settings before turning on Short-Range PIN Auto-Pairing."
+            }), 400
+        config_manager.set_allow_rssi_auto_pair(enabled)
+        return jsonify({
+            "success": True,
+            "allow_rssi_auto_pair": enabled,
+        })
     except Exception as e:
         return jsonify({
             "success": False,

@@ -8,9 +8,11 @@ from constants import (
     TIMEOUT_PING, TIMEOUT_PING_SINGLE,
     FILE_LIGHTSTRIPS, FILE_GATEWAYS
 )
+import logging
 import re
 import threading
 
+logger = logging.getLogger(__name__)
 lightstrips_bp = Blueprint('lightstrips', __name__, url_prefix='/lightstrips')
 
 # MAC address validation pattern
@@ -170,9 +172,10 @@ def set_override(lightstrip_id):
 
 @lightstrips_bp.route('/api/lightstrips/<lightstrip_id>', methods=['DELETE'])
 def delete_lightstrip(lightstrip_id):
-    """Delete a lightstrip."""
+    """Delete a lightstrip and revoke its Security v2 radio trust (keeping its saved PIN)."""
     try:
         lightstrips = data_manager.read_json(FILE_LIGHTSTRIPS)
+        deleted_ls = next((ls for ls in lightstrips if ls['id'] == lightstrip_id), None)
         
         # Find and remove the lightstrip
         original_length = len(lightstrips)
@@ -182,6 +185,17 @@ def delete_lightstrip(lightstrip_id):
             return jsonify({'success': False, 'error': 'Lightstrip not found'}), 404
         
         data_manager.write_json(FILE_LIGHTSTRIPS, lightstrips)
+
+        if deleted_ls and deleted_ls.get('mac_address'):
+            try:
+                from network.network_server import network_server
+                network_server.revoke_device(
+                    deleted_ls['mac_address'],
+                    keep_pin=True,
+                    last_name=deleted_ls.get('name'),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to revoke Security v2 access for lightstrip {deleted_ls.get('mac_address')}: {e}")
         
         return jsonify({'success': True, 'message': 'Lightstrip deleted successfully'})
     except Exception as e:

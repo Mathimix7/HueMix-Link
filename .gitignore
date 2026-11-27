@@ -87,3 +87,8 @@ Hardware-designs/**/#auto_saved_files#
 Hardware-designs/**/*.lck
 Hardware-designs/**/.~lock.*
 Hardware-designs/**/.history
+
+# Security v2 local secrets & test suite
+python/data/security.json
+python/data/security_counters.db*
+python/tests/

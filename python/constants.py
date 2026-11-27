@@ -15,6 +15,8 @@ PKT_PAIR_CONFIRM = 0x01
 PKT_LIGHT_RAW = 0x02
 PKT_SYS_CMD = 0x04
 PKT_GW_LIST_UPD = 0x05
+PKT_PAIR_ACK = 0x06
+PKT_KEY_DISTRIB = 0x07
 PKT_HELLO = 0x10
 PKT_BTN_EVENT = 0x11
 PKT_SCENE_REQ = 0x12
@@ -64,6 +66,13 @@ CMD_NETNODE_WIFI_STATUS = 3  # Net node connectivity status (payload[1]: 0=offli
 CMD_SET_MOTION_COOLDOWN = 0x40  # Set motion sensor cooldown period (persistent)
 CMD_SET_MOTION_SLEEP = 0x41  # Set motion sensor one-time sleep duration (not saved)
 CMD_SET_LED_COUNT = 0x50
+CMD_UPGRADE_TO_V2 = 0x60  # Trigger in-place v1 -> v2 TOFU handshake
+CMD_SET_PIN = 0x61        # Provision 6-digit PIN over encrypted v2 channel (write-once)
+CMD_SET_PIN_ACK = 0x62    # Device -> Backend encrypted v2 ACK for CMD_SET_PIN
+
+PIN_ACK_OK = 0x01
+PIN_ACK_ALREADY_SET = 0x02
+PIN_ACK_INVALID = 0x03
 
 # ===== Network Limits =====
 MAX_GATEWAY_ATTEMPTS = 5
@@ -97,10 +106,45 @@ MIN_LEDS = 1
 MAX_LEDS = 60
 DEFAULT_BRIGHTNESS = 255
 
-# ===== Packet Sizes =====
+# ===== Packet Sizes (v1 frozen) =====
 PACKET_HEADER_SIZE = 18
 PACKET_PAYLOAD_SIZE = 185
 PACKET_TOTAL_SIZE = 203
+
+# ===== Security v2 Protocol Constants =====
+PROTO_VERSION_V1 = 0x01
+PROTO_VERSION_V2 = 0x02
+
+V2_HEADER_SIZE = 22
+V2_AAD_SIZE = 21          # Header bytes 0..20 (excludes rssi at offset 21)
+V2_TAG_SIZE = 16
+V2_NONCE_SIZE = 12        # srcMAC(6) || counter(4) || key_epoch(2)
+V2_OVERHEAD = V2_HEADER_SIZE + V2_TAG_SIZE  # 38 bytes
+V2_MIN_FRAME_SIZE = V2_OVERHEAD + 1         # 39 bytes (N >= 1)
+V2_FORBIDDEN_LEN = PACKET_TOTAL_SIZE        # 203 bytes reserved for v1
+V2_MAX_FRAME_ESP8266 = 250
+V2_MAX_FRAME_ESP32 = 1470
+V2_PAIR_CONFIRM_LEN = 151  # 22 hdr + 32 pub_B + 8 nonce_B + 4 homeID + 1 devID + 2 epoch + 32 proof_B + 50 wrap
+V2_UDP_BUFFER_SIZE = 2048
+
+V2_COUNTER_BLOCK_SIZE_BACKEND = 1024
+V2_COUNTER_RESERVE_DEVICE = 100
+
+V2_HELLO_FLAG_HAS_PIN = 0x01
+V2_HELLO_CAP_LEN = 44  # proto(1) + max_frame(2) + flags(1) + pub_D(32) + nonce_D(8)
+V2_HELLO_CAP_OFFSETS = {
+    DEV_GATEWAY: 15,
+    DEV_BUTTON: 6,
+    DEV_LIGHT: 11,
+    DEV_REMOTE: 7,
+    DEV_MOTION: 6,
+    DEV_DOOR: 6,
+    DEV_PLUGIN_MARKER: 23,
+}
+
+CRYPTO_MODE_V1 = 'v1'
+CRYPTO_MODE_V2_UNVERIFIED = 'v2-unverified'
+CRYPTO_MODE_V2 = 'v2'
 
 # ===== OTA Configuration =====
 OTA_CHUNK_DATA_SIZE = 182  # Bytes of actual firmware data per chunk
@@ -109,6 +153,7 @@ OTA_CHUNK_ACK_TIMEOUT = 3  # Seconds to wait for checkpoint ACK
 OTA_CHUNK_MAX_RETRIES = 2  # Max retries for a chunk batch before aborting
 OTA_CHECKPOINT_INTERVAL = 10  # Send checkpoint ACK every N chunks
 OTA_POST_UPDATE_TIMEOUT = 30  # Seconds to wait for post-update HELLO
+OTA_MIN_BATTERY_PERCENT = 20  # Skip wake-triggered auto-OTA below this battery level
 OTA_MAX_FIRMWARE_SIZE = 2 * 1024 * 1024  # 2MB max firmware size
 
 # ===== FNV-1a Hash =====
@@ -128,6 +173,8 @@ FILE_PAIRING_HISTORY = 'pairing_history.json'
 FILE_OTA_SESSIONS = 'ota_sessions.json'
 FILE_PLUGINS = 'plugins.json'
 FILE_PLUGIN_DEVICE_BINDINGS = 'plugin_device_bindings.json'
+FILE_SECURITY = 'security.json'
+FILE_SECURITY_COUNTERS = 'security_counters.db'
 
 # ===== Logging =====
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

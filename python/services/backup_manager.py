@@ -10,9 +10,10 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from services.config_change_notifier import config_notifier
 from services.data_manager import data_manager
-from constants import FILE_BRIDGE, FILE_BUTTONS, FILE_LIGHTSTRIPS
+from constants import FILE_BRIDGE, FILE_BUTTONS, FILE_LIGHTSTRIPS, FILE_SECURITY_COUNTERS
 import threading
 from network.network_server import network_server
+from network.security_store import security_store
 import logging
 
 logger = logging.getLogger(__name__)
@@ -44,14 +45,29 @@ class BackupManager:
         # Ensure output directory exists
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         
+        # Flush SQLite WAL into main DB file so security_counters.db in the archive is self-contained
+        try:
+            if os.path.exists(os.path.join(self.data_dir, FILE_SECURITY_COUNTERS)):
+                import sqlite3
+                conn = sqlite3.connect(os.path.join(self.data_dir, FILE_SECURITY_COUNTERS), timeout=5.0)
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                finally:
+                    conn.close()
+        except Exception:
+            logger.debug("Skipping SQLite WAL checkpoint before backup", exc_info=True)
+
         # Create tar.gz archive
         with tarfile.open(out_path, 'w:gz') as tar:
-            # Add all files from data directory except backups, temp files, etc.
+            # Add all files from data directory (including security.json & security_counters.db)
             for item in os.listdir(self.data_dir):
                 item_path = os.path.join(self.data_dir, item)
                 
-                # Skip backups directory, temp files, and cache
-                if item in ['backups', '__pycache__'] or item.endswith(('.bak', '.tmp')):
+                # Skip backups directory, transient SQLite WAL/SHM sidecars, temp files, and cache
+                if (
+                    item in ['backups', '__pycache__', f'{FILE_SECURITY_COUNTERS}-wal', f'{FILE_SECURITY_COUNTERS}-shm']
+                    or item.endswith(('.bak', '.tmp'))
+                ):
                     continue
                 
                 # Add to archive with relative path
@@ -137,8 +153,10 @@ class BackupManager:
                     dst = os.path.join(old_data_path, item)
                     shutil.move(src, dst)
             
-            # Move restored data into place
+            # Move restored data into place (including security.json & security_counters.db)
             for item in os.listdir(temp_dir):
+                if item in (f'{FILE_SECURITY_COUNTERS}-wal', f'{FILE_SECURITY_COUNTERS}-shm'):
+                    continue
                 src = os.path.join(temp_dir, item)
                 dst = os.path.join(self.data_dir, item)
                 
@@ -151,6 +169,14 @@ class BackupManager:
                 
                 # Move new data
                 shutil.move(src, dst)
+
+            # Reload in-memory security store so restored master_key / device keys take effect immediately
+            try:
+                if os.path.abspath(self.data_dir) == os.path.abspath(str(security_store.data_dir)):
+                    security_store._load_or_init()
+                    security_store._init_db()
+            except Exception:
+                logger.warning("Failed to reload security_store after restore", exc_info=True)
 
             logger.info(f"Backup restored successfully from: {archive_path}, previous data backed up at: {old_data_path}")
 

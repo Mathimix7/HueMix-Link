@@ -26,6 +26,127 @@ document.getElementById('closeSerialModal').addEventListener('click', () => {
     document.getElementById('serialModal').classList.add('hidden');
 });
 document.getElementById('connectSerialBtn').addEventListener('click', handleSerialFlash);
+document.getElementById('stopSerialBtn').addEventListener('click', handleStopSerialFlash);
+
+let serialAborted = false;
+let lastSerialPin = '';
+let lastSerialPinMac = '';
+let lastSerialPinLabel = '';
+
+function isV2PinFirmwareVersion(versionStr) {
+    if (!versionStr) return false;
+    const match = String(versionStr).trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+    if (!match) return false;
+    const major = parseInt(match[1], 10);
+    return major >= 4 && major < 5;
+}
+
+function hideSerialPinBanner() {
+    lastSerialPin = '';
+    lastSerialPinMac = '';
+    lastSerialPinLabel = '';
+    const banner = document.getElementById('serialPinBanner');
+    if (banner) banner.classList.add('hidden');
+}
+
+function showSerialPinBanner(pin, mac, label) {
+    lastSerialPin = pin;
+    lastSerialPinMac = mac;
+    lastSerialPinLabel = label || 'HueMix-Link Device';
+    const banner = document.getElementById('serialPinBanner');
+    const infoEl = document.getElementById('serialPinDeviceInfo');
+    const valEl = document.getElementById('serialPinValue');
+    if (infoEl) infoEl.textContent = `${lastSerialPinLabel} • ${mac}`;
+    if (valEl) valEl.textContent = `${pin.slice(0, 3)} ${pin.slice(3)}`;
+    if (banner) banner.classList.remove('hidden');
+}
+
+document.getElementById('copySerialPinBtn')?.addEventListener('click', () => {
+    if (!lastSerialPin) return;
+    navigator.clipboard.writeText(lastSerialPin).then(() => showSuccess('PIN copied to clipboard'));
+});
+
+document.getElementById('copySerialNfcUrlBtn')?.addEventListener('click', () => {
+    if (!lastSerialPin) return;
+    const url = `${window.location.origin}/pairing#pin=${lastSerialPin}`;
+    navigator.clipboard.writeText(url).then(() => showSuccess('NFC pairing URL copied to clipboard'));
+});
+
+document.getElementById('printSerialPinBtn')?.addEventListener('click', () => {
+    if (!lastSerialPin) return;
+    window.printHueMixPinLabel(lastSerialPin);
+});
+
+async function provisionEsp8266PinOverSerial(port, pin) {
+    try {
+        await port.open({ baudRate: 115200 });
+        // Pulse RTS with DTR=false so ESP8266 boots cleanly into app mode (not bootloader)
+        try {
+            await port.setSignals({ dataTerminalReady: false, requestToSend: true });
+            await new Promise(r => setTimeout(r, 100));
+            await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+        } catch (_) {}
+
+        const encoder = new TextEncoder();
+        const decoder = new TextDecoder();
+        const writer = port.writable.getWriter();
+        const reader = port.readable.getReader();
+        let rxBuf = '';
+        let acked = false;
+        const deadline = Date.now() + 7000;
+        let lastSend = 0;
+
+        // Read loop with periodic HML2_PIN:<pin>\n sends until HML2_PIN_OK
+        const readPromise = (async () => {
+            while (!acked && Date.now() < deadline) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                if (value) {
+                    rxBuf += decoder.decode(value, { stream: true });
+                    if (rxBuf.includes('HML2_PIN_OK')) {
+                        acked = true;
+                        break;
+                    }
+                }
+            }
+        })();
+
+        while (!acked && Date.now() < deadline) {
+            if (Date.now() - lastSend >= 350) {
+                lastSend = Date.now();
+                await writer.write(encoder.encode(`HML2_PIN:${pin}\n`));
+            }
+            await new Promise(r => setTimeout(r, 100));
+        }
+
+        try { await reader.cancel(); } catch (_) {}
+        try { reader.releaseLock(); } catch (_) {}
+        try { writer.releaseLock(); } catch (_) {}
+        await readPromise.catch(() => {});
+        try { await port.close(); } catch (_) {}
+        return acked;
+    } catch (err) {
+        try { await port.close(); } catch (_) {}
+        console.warn('ESP8266 serial PIN provisioning error:', err);
+        return false;
+    }
+}
+
+async function handleStopSerialFlash() {
+    serialAborted = true;
+    logToTerminal("Stopping serial session...");
+    if (transport) {
+        try {
+            await transport.disconnect();
+        } catch (err) {
+            console.warn("Error while stopping serial transport:", err);
+        }
+        transport = null;
+    }
+    document.getElementById('stopSerialBtn').classList.add('hidden');
+    document.getElementById('connectSerialBtn').classList.remove('hidden');
+    logToTerminal("Stopped. You can reconnect or try 115200 baud if the port stalled.");
+}
 
 // Firmware list backing the serial flash modal (keyed by firmware type key)
 let serialFirmwares = [];
@@ -102,6 +223,7 @@ async function openSerialModal() {
     }
 
     // Rebuild the firmware list from the server so plugin firmwares are included
+    hideSerialPinBanner();
     const loaded = await loadSerialFirmwares();
     const firstAvailable = rebuildSerialFirmwareOptions(loaded);
     if (firstAvailable) {
@@ -124,13 +246,45 @@ async function handleSerialFlash() {
         return;
     }
 
+    serialAborted = false;
+    hideSerialPinBanner();
+    const connectBtn = document.getElementById('connectSerialBtn');
+    const stopBtn = document.getElementById('stopSerialBtn');
+    let provisionedPin = null;
+    let provisionedMac = null;
+    let esp8266NeedsSerialPin = false;
+    let serialDevicePort = null;
+
     try {
         // 1. Request Browser Serial Port
         const device = await navigator.serial.requestPort();
+        serialDevicePort = device;
+        connectBtn.classList.add('hidden');
+        stopBtn.classList.remove('hidden');
         logToTerminal("Connecting to device...");
 
         // 2. Initialize esptool-js transport
         transport = new Transport(device);
+
+        // Fix esptool-js bug in bundle.js: Transport.disconnect() calls reader.cancel()
+        // without reader.releaseLock(), leaving device.readable.locked === true so
+        // waitForUnlock(400) spins forever when changing baud rates (e.g. 460800 / 921600).
+        transport.disconnect = async () => {
+            if (transport.reader) {
+                try {
+                    await transport.reader.cancel();
+                } catch (_) {}
+                try {
+                    transport.reader.releaseLock();
+                } catch (_) {}
+                transport.reader = undefined;
+            }
+            await transport.waitForUnlock(100);
+            if (transport.device && (transport.device.readable || transport.device.writable)) {
+                await transport.device.close();
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+        };
 
         espLoader = new ESPLoader({
             transport: transport,
@@ -142,6 +296,7 @@ async function handleSerialFlash() {
 
         // Connect/Sync
         const chip = await espLoader.main();
+        if (serialAborted) return;
         logToTerminal(`Connected to ${chip}`);
 
         const isESP32 = chip.includes('ESP32');
@@ -225,6 +380,49 @@ async function handleSerialFlash() {
         flashFiles.push({ data: binaryString, address: firmwareAddress });
         logToTerminal(`  Firmware: ${(firmwareBuffer.byteLength / 1024).toFixed(1)} KB @ 0x${firmwareAddress.toString(16)}`);
 
+        // 3b. Security v2 PIN provisioning for v4.x non-gateway firmware (>= 4.0.0 and < 5.0.0)
+        // Gateways pair via local WiFi/USB and use TOFU-only Security v2 (no 6-digit PIN).
+        const isGatewayFirmware = String(firmwareKey || '').toLowerCase().startsWith('gateway');
+        if (isV2PinFirmwareVersion(fwInfo.version) && isGatewayFirmware) {
+            logToTerminal('  Gateway firmware uses TOFU Security v2 (no PIN required).');
+        } else if (isV2PinFirmwareVersion(fwInfo.version)) {
+            let chipMac = '';
+            try {
+                chipMac = await espLoader.chip.readMac(espLoader);
+            } catch (macErr) {
+                logToTerminal(`Warning: could not read chip MAC (${macErr.message})`);
+            }
+            if (chipMac) {
+                logToTerminal(`Provisioning Security v2 6-digit PIN for ${chipMac}...`);
+                const provResp = await fetch('/api/ota/serial_provision_pin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mac: chipMac,
+                        version: fwInfo.version,
+                        platform: isESP32 ? 'esp32' : 'esp8266',
+                        firmware_type: firmwareKey,
+                        label: fwInfo.label || firmwareKey
+                    })
+                });
+                const provData = await provResp.json();
+                if (!provResp.ok || !provData.success) {
+                    throw new Error(provData.error || 'Failed to provision Security v2 PIN');
+                }
+                provisionedPin = provData.pin;
+                provisionedMac = provData.mac;
+
+                if (isESP32 && provData.nvs_b64 && provData.nvs_offset != null) {
+                    const nvsString = atob(provData.nvs_b64);
+                    flashFiles.push({ data: nvsString, address: provData.nvs_offset });
+                    logToTerminal(`  Security v2 PIN NVS: ${(nvsString.length / 1024).toFixed(1)} KB @ 0x${provData.nvs_offset.toString(16)} (PIN: ${provisionedPin.slice(0,3)} ${provisionedPin.slice(3)})`);
+                } else if (isESP8266) {
+                    esp8266NeedsSerialPin = true;
+                    logToTerminal(`  Security v2 PIN ready for post-boot write (PIN: ${provisionedPin.slice(0,3)} ${provisionedPin.slice(3)})`);
+                }
+            }
+        }
+
         // 4. Flash all files
         logToTerminal(`Starting flash (${flashFiles.length} file${flashFiles.length > 1 ? 's' : ''})...`);
         
@@ -244,15 +442,47 @@ async function handleSerialFlash() {
         
         // Hard reset the device to boot into new firmware
         logToTerminal("Resetting device...");
-        hardReset.reset();
-        
-        showSuccess("Device flashed successfully via Serial");
+        await hardReset.reset();
+
+        // On ESP8266 (LittleFS Preferences), write the 6-digit PIN over serial right after boot
+        if (esp8266NeedsSerialPin && provisionedPin && serialDevicePort) {
+            logToTerminal("Writing Security v2 PIN to ESP8266...");
+            if (transport) {
+                try { await transport.disconnect(); } catch (_) {}
+                transport = null;
+            }
+            await new Promise(r => setTimeout(r, 400));
+            const pinAcked = await provisionEsp8266PinOverSerial(serialDevicePort, provisionedPin);
+            if (pinAcked) {
+                logToTerminal(`✅ ESP8266 confirmed Security v2 PIN (${provisionedPin.slice(0,3)} ${provisionedPin.slice(3)})`);
+            } else {
+                logToTerminal("⚠️ ESP8266 did not confirm PIN over serial; you can still pair via TOFU and provision the PIN from the OTA page.");
+            }
+        }
+
+        if (provisionedPin && provisionedMac) {
+            showSerialPinBanner(provisionedPin, provisionedMac, fwInfo.label || firmwareKey);
+            showSuccess(`Device flashed! Security v2 PIN: ${provisionedPin.slice(0,3)} ${provisionedPin.slice(3)}`);
+        } else {
+            showSuccess("Device flashed successfully via Serial");
+        }
 
     } catch (err) {
-        console.error(err);
-        logToTerminal(`Error: ${err.message}`);
-        showError(err.message ? `Serial Flash Failed: ${err.message}` : "Serial Flash Failed");
+        if (!serialAborted) {
+            console.error(err);
+            logToTerminal(`Error: ${err.message}`);
+            showError(err.message ? `Serial Flash Failed: ${err.message}` : "Serial Flash Failed");
+        }
     } finally {
-        if (transport) await transport.disconnect();
+        stopBtn.classList.add('hidden');
+        connectBtn.classList.remove('hidden');
+        if (transport) {
+            try {
+                await transport.disconnect();
+            } catch (e) {
+                console.warn("Cleanup disconnect error:", e);
+            }
+            transport = null;
+        }
     }
 }

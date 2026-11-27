@@ -4,6 +4,9 @@
 */
 
 #include "HueMixLink.h"
+#include "sec.h"
+#include "sec_pairing.h"
+#include "sec_device.h"
 #include <Preferences.h>
 #include <nvs_flash.h>
 #include "soc/soc.h"
@@ -55,16 +58,31 @@ Ticker breathingTicker;
 int breathingDirection = 1;
 int breathingBrightness = 0;
 
+#define MAX_FRAME_BUFFER 1500
+#define RADIO_RX_QUEUE_SIZE 4
 HueMixLinkPacket radioRx;
 HueMixLinkPacket radioTx;
+struct RadioRxSlot {
+  uint8_t buf[MAX_FRAME_BUFFER];
+  uint16_t len;
+};
+RadioRxSlot radioRxQueue[RADIO_RX_QUEUE_SIZE];
+volatile uint8_t radioRxHead = 0;
+volatile uint8_t radioRxTail = 0;
 Payload_GatewayList activeGateways;
 
+SecPairingState gwSecState;
+SecGwPeerTable  gwPeerTable;
+SecCounter      gwCounter;
+unsigned long   lastSecHelloMs = 0;
+
 uint8_t lastMsgID = 0;
-bool waitingForDelivery = false;
+volatile bool waitingForDelivery = false;
+volatile bool pendingDeliveryRpt = false;
+Payload_Report pendingDeliveryPayload;
 uint8_t lastTargetMAC[6] = {0}; // Store the actual target MAC for delivery reports
 
-volatile bool pktReady = false;
-HueMixLinkPacket bufferPkt;
+unsigned long lastOtaTrafficMs = 0;
 
 // --- OTA STATE MACHINE ---
 enum OtaState { OTA_IDLE, OTA_RECEIVING, OTA_VALIDATING, OTA_COMPLETE };
@@ -116,11 +134,49 @@ unsigned long last_serial_activity = 0;
   #define DASHBOARD_ACTIVITY_FLASH_MS 350
 #endif
 
-// --- RADIO SERIAL PARSER ---
-enum SerialState { S_IDLE, S_READING, S_FOOTER };
+// --- RADIO SERIAL PARSER (length-prefixed: 0xFE | len_lo | len_hi | payload | 0xFD) ---
+enum SerialState { S_IDLE, S_LEN_LO, S_LEN_HI, S_READING, S_FOOTER };
 SerialState rxState = S_IDLE;
 uint16_t rxIndex = 0;
-uint8_t rxRawBuffer[sizeof(HueMixLinkPacket)];
+uint16_t rxExpectedLen = 0;
+uint8_t rxRawBuffer[MAX_FRAME_BUFFER];
+
+void sendSerialFrame(const uint8_t* data, uint16_t len) {
+  if (len < V2_OVERHEAD || len > V2_MAX_FRAME_ESP32) return;
+  uint8_t hdr[3] = { SERIAL_START, (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
+  SERIAL_COM.write(hdr, 3);
+  SERIAL_COM.write(data, len);
+  SERIAL_COM.write(SERIAL_END);
+  SERIAL_COM.flush();
+}
+
+void sendRadioSecHello() {
+  HueMixLinkPacket pkt;
+  memset(&pkt, 0, sizeof(HueMixLinkPacket));
+  pkt.type = PKT_HELLO;
+  uint8_t myMac[6];
+  esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+  memcpy(pkt.sourceMAC, myMac, 6);
+  pkt.payload.raw[0] = DEV_GATEWAY;
+  memcpy(pkt.payload.raw + 1, myMac, 6);
+  #ifdef FIRMWARE_VERSION
+    uint8_t major = 0, minor = 0, patch = 0;
+    sscanf(FIRMWARE_VERSION, "%hhu.%hhu.%hhu", &major, &minor, &patch);
+    pkt.payload.raw[11] = major;
+    pkt.payload.raw[12] = minor;
+    pkt.payload.raw[13] = patch;
+  #endif
+  if (gwSecState.crypto_mode == SEC_MODE_V1) {
+    sec_pairing_fill_hello_tlv(&gwSecState, pkt.payload.raw, 15, V2_MAX_FRAME_ESP32);
+  } else {
+    pkt.payload.raw[15] = PROTO_VERSION_V2;
+    pkt.payload.raw[16] = (uint8_t)(V2_MAX_FRAME_ESP32 & 0xFF);
+    pkt.payload.raw[17] = (uint8_t)((V2_MAX_FRAME_ESP32 >> 8) & 0xFF);
+  }
+  pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
+  sendSerialFrame((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
+  SERIAL_DEBUG.println("[RADIO] Sent Security v2 gateway HELLO");
+}
 
 static bool shouldAckInboundPacket(uint8_t packetType) {
   return packetType == PKT_BTN_EVENT ||
@@ -130,9 +186,9 @@ static bool shouldAckInboundPacket(uint8_t packetType) {
 }
 
 // --- OTA BUFFERING CONFIG ---
-#define OTA_BUFFER_MAX_CHUNKS 15
-#define CHUNK_PAYLOAD_SIZE 185
-#define OTA_ACCUMULATOR_SIZE (CHUNK_PAYLOAD_SIZE * OTA_BUFFER_MAX_CHUNKS)
+// Sized to hold a full 10-chunk v2 batch (10 * 1024 B = 10,240 B) in RAM so
+// esp_ota_write() only runs at checkpoints when UART is idle (no mid-batch flash stalls).
+#define OTA_ACCUMULATOR_SIZE 11264
 uint8_t otaAccumulator[OTA_ACCUMULATOR_SIZE];
 uint16_t otaAccumulatorIndex = 0;
 
@@ -387,11 +443,23 @@ void applyDashboardLine(const char* line) {
     netNodeHasWiFi = true;
     SERIAL_DEBUG.println("[RADIO] Dashboard data resumed, assuming net node WiFi is ON");
   }
-  renderDashboard();
+  bool otaBusy = (otaState == OTA_RECEIVING) || (lastOtaTrafficMs != 0 && (millis() - lastOtaTrafficMs) < 1500);
+  if (!otaBusy) {
+    renderDashboard();
+  }
 }
 
 void initDashboardDisplay() {
   Wire.begin(OLED_PIN_SDA, OLED_PIN_SCL);
+  Wire.setClock(400000);
+
+  Wire.beginTransmission(OLED_I2C_ADDR);
+  if (Wire.endTransmission() != 0) {
+    SERIAL_DEBUG.println("[OLED] No SSD1306 found at 0x3C");
+    dashboardDisplayReady = false;
+    return;
+  }
+
   if (!oled.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
     SERIAL_DEBUG.println("[OLED] SSD1306 init failed");
     dashboardDisplayReady = false;
@@ -493,25 +561,31 @@ void loadGateways() {
 void abortOta(const char* reason) {
   SERIAL_DEBUG.printf("[OTA] ABORT: %s\n", reason);
   
-  // Notify server about the abort via UART to net node
-  HueMixLinkPacket abortPkt;
-  memset(&abortPkt, 0, sizeof(HueMixLinkPacket));
-  abortPkt.type = PKT_OTA_ABORT;
-  esp_read_mac(abortPkt.sourceMAC, ESP_MAC_WIFI_STA);
-  memset(abortPkt.targetMAC, 0, 6);
-  abortPkt.msgID = 0;
-  
-  // Encode reason as a simple code (0 = device-initiated abort)
-  abortPkt.payload.raw[0] = 0;  // reason_code
-  
-  // Calculate signature (1 byte payload)
-  abortPkt.signature = calculateHash(abortPkt.payload.raw, 185, HOME_ID);
-  
-  // Send abort notification to net node via UART
-  SERIAL_COM.write(SERIAL_START);
-  SERIAL_COM.write((uint8_t*)&abortPkt, sizeof(HueMixLinkPacket));
-  SERIAL_COM.write(SERIAL_END);
-  SERIAL_COM.flush();  // Wait for transmission to complete
+  // Notify server about the abort via UART to net node (dual-stack v1/v2)
+  uint8_t myMac[6];
+  esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+  if (gwSecState.crypto_mode != SEC_MODE_V1) {
+    uint8_t reasonCode = 0;
+    const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t v2Buf[96];
+    size_t v2Len = sec_device_encode_tx(
+        &gwSecState, &gwCounter, PKT_OTA_ABORT, myMac, backendMac, 0,
+        &reasonCode, sizeof(reasonCode), v2Buf, sizeof(v2Buf)
+    );
+    if (v2Len > 0) {
+      sendSerialFrame(v2Buf, (uint16_t)v2Len);
+    }
+  } else {
+    HueMixLinkPacket abortPkt;
+    memset(&abortPkt, 0, sizeof(HueMixLinkPacket));
+    abortPkt.type = PKT_OTA_ABORT;
+    memcpy(abortPkt.sourceMAC, myMac, 6);
+    memset(abortPkt.targetMAC, 0, 6);
+    abortPkt.msgID = 0;
+    abortPkt.payload.raw[0] = 0;  // reason_code
+    abortPkt.signature = calculateHash(abortPkt.payload.raw, 185, HOME_ID);
+    sendSerialFrame((uint8_t*)&abortPkt, sizeof(HueMixLinkPacket));
+  }
   
   SERIAL_DEBUG.printf("[OTA] Sent abort notification via UART\n");
   
@@ -598,21 +672,84 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   // Start DATA LED breathing during OTA
   startDataLedBreathing();
   
-  // Send PKT_OTA_READY via UART to net node
-  HueMixLinkPacket ready;
-  memset(&ready, 0, sizeof(HueMixLinkPacket));
-  ready.type = PKT_OTA_READY;
-  esp_read_mac(ready.sourceMAC, ESP_MAC_WIFI_STA);
-  memcpy(ready.targetMAC, pkt->sourceMAC, 6);
-  ready.payload.otaReady.firmware_size = expected_firmware_size;
-  ready.payload.otaReady.battery_mv = 0; // Not battery powered
-  ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
-  
-  SERIAL_COM.write(SERIAL_START);
-  SERIAL_COM.write((uint8_t*)&ready, sizeof(HueMixLinkPacket));
-  SERIAL_COM.write(SERIAL_END);
-  SERIAL_COM.flush();  // Wait for transmission to complete
-  SERIAL_DEBUG.println("[OTA] Sent READY via UART");
+  // Send PKT_OTA_READY via UART to net node (dual-stack v1/v2)
+  if (gwSecState.crypto_mode != SEC_MODE_V1) {
+    Payload_OtaReady r = {};
+    r.firmware_size = expected_firmware_size;
+    r.battery_mv = 0;
+    uint8_t myMac[6];
+    esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+    const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t v2Buf[96];
+    size_t v2Len = sec_device_encode_tx(
+        &gwSecState, &gwCounter, PKT_OTA_READY, myMac, backendMac, 0,
+        (const uint8_t*)&r, sizeof(r), v2Buf, sizeof(v2Buf)
+    );
+    if (v2Len > 0) {
+      sendSerialFrame(v2Buf, (uint16_t)v2Len);
+      SERIAL_DEBUG.println("[OTA] Sent v2 READY via UART");
+    }
+  } else {
+    HueMixLinkPacket ready;
+    memset(&ready, 0, sizeof(HueMixLinkPacket));
+    ready.type = PKT_OTA_READY;
+    esp_read_mac(ready.sourceMAC, ESP_MAC_WIFI_STA);
+    memcpy(ready.targetMAC, pkt->sourceMAC, 6);
+    ready.payload.otaReady.firmware_size = expected_firmware_size;
+    ready.payload.otaReady.battery_mv = 0; // Not battery powered
+    ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
+    
+    sendSerialFrame((uint8_t*)&ready, sizeof(HueMixLinkPacket));
+    SERIAL_DEBUG.println("[OTA] Sent READY via UART");
+  }
+}
+
+void handleOtaChunkRaw(uint16_t chunk_idx, const uint8_t* chunk_data, uint16_t data_len) {
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  last_ota_activity = millis();
+  if (chunk_idx < expected_chunk_index) {
+    return;
+  }
+  if (chunk_idx != expected_chunk_index) {
+    SERIAL_DEBUG.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
+    return;
+  }
+
+  if (otaAccumulatorIndex + data_len <= sizeof(otaAccumulator)) {
+    memcpy(&otaAccumulator[otaAccumulatorIndex], chunk_data, data_len);
+    otaAccumulatorIndex += data_len;
+  } else {
+    if (otaAccumulatorIndex > 0) {
+      esp_err_t err = esp_ota_write(update_handle, otaAccumulator, otaAccumulatorIndex);
+      if (err != ESP_OK) {
+        abortOta("Flash write failed");
+        return;
+      }
+      otaAccumulatorIndex = 0;
+    }
+    if (data_len <= sizeof(otaAccumulator)) {
+      memcpy(&otaAccumulator[0], chunk_data, data_len);
+      otaAccumulatorIndex = data_len;
+    } else {
+      esp_err_t err = esp_ota_write(update_handle, chunk_data, data_len);
+      if (err != ESP_OK) {
+        abortOta("Flash write failed");
+        return;
+      }
+    }
+  }
+
+  mbedtls_sha256_update(&sha256_ctx, chunk_data, data_len);
+  received_bytes += data_len;
+  expected_chunk_index++;
+
+  if (chunk_idx % 50 == 0) {
+    SERIAL_DEBUG.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n",
+      received_bytes, expected_firmware_size,
+      (received_bytes * 100.0) / expected_firmware_size);
+  }
 }
 
 void handleOtaChunk(HueMixLinkPacket* pkt) {
@@ -645,52 +782,28 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
     }
   }
   
-  last_ota_activity = millis();
-  
-  uint16_t chunk_idx = pkt->payload.otaChunk.chunk_index;
-  uint8_t data_len = pkt->payload.otaChunk.data_len;
-  
-  // Check chunk order: accept current or future chunks, ignore duplicates
-  if (chunk_idx < expected_chunk_index) {
-    // This is a duplicate chunk we already received - ignore it silently
-    SERIAL_DEBUG.printf("[OTA] Ignoring duplicate chunk %d (already at %d)\n", chunk_idx, expected_chunk_index);
-    return;
-  }
-  
-  if (chunk_idx != expected_chunk_index) {
-    SERIAL_DEBUG.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
-    return;
-  }
-
-  if (otaAccumulatorIndex + data_len <= sizeof(otaAccumulator)) {
-    memcpy(&otaAccumulator[otaAccumulatorIndex], pkt->payload.otaChunk.data, data_len);
-    otaAccumulatorIndex += data_len;
-  } else {
-    // If we hit RAM limit before checkpoint, we must write
-    esp_err_t err = esp_ota_write(update_handle, otaAccumulator, otaAccumulatorIndex);
-    if (err != ESP_OK) {
-        abortOta("Flash write failed");
-        return;
-    }
-    otaAccumulatorIndex = 0;
-    memcpy(&otaAccumulator[otaAccumulatorIndex], pkt->payload.otaChunk.data, data_len);
-    otaAccumulatorIndex += data_len;
-  }
-
-  // Update SHA256
-  mbedtls_sha256_update(&sha256_ctx, pkt->payload.otaChunk.data, data_len);
-  
-  received_bytes += data_len;
-  expected_chunk_index++;
-  
-  if (chunk_idx % 50 == 0) {
-    SERIAL_DEBUG.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n", 
-      received_bytes, expected_firmware_size, 
-      (received_bytes * 100.0) / expected_firmware_size);
-  }
+  handleOtaChunkRaw(pkt->payload.otaChunk.chunk_index, pkt->payload.otaChunk.data, pkt->payload.otaChunk.data_len);
 }
 
 void sendOtaChunkAck(uint16_t last_chunk_index) {
+  if (gwSecState.crypto_mode != SEC_MODE_V1) {
+    Payload_OtaChunkAck ack = {};
+    ack.last_chunk_index = last_chunk_index;
+    uint8_t myMac[6];
+    esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+    const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t v2Buf[96];
+    size_t v2Len = sec_device_encode_tx(
+        &gwSecState, &gwCounter, PKT_OTA_CHUNK_ACK, myMac, backendMac, 0,
+        (const uint8_t*)&ack, sizeof(ack), v2Buf, sizeof(v2Buf)
+    );
+    if (v2Len > 0) {
+      sendSerialFrame(v2Buf, (uint16_t)v2Len);
+      SERIAL_DEBUG.printf("[OTA] Sent v2 checkpoint ACK via UART: last_chunk=%d\n", last_chunk_index);
+    }
+    return;
+  }
+
   HueMixLinkPacket pkt;
   memset(&pkt, 0, sizeof(HueMixLinkPacket));
   pkt.type = PKT_OTA_CHUNK_ACK;
@@ -704,10 +817,7 @@ void sendOtaChunkAck(uint16_t last_chunk_index) {
   pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   
   // Send via UART to net node
-  SERIAL_COM.write(SERIAL_START);
-  SERIAL_COM.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
-  SERIAL_COM.write(SERIAL_END);
-  SERIAL_COM.flush();
+  sendSerialFrame((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
   
   SERIAL_DEBUG.printf("[OTA] Sent checkpoint ACK via UART: last_chunk=%d\n", last_chunk_index);
 }
@@ -743,7 +853,7 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
     return;
   }
 
-  if (otaAccumulatorIndex >= 0) {
+  if (otaAccumulatorIndex > 0) {
     SERIAL_DEBUG.printf("[OTA] Flushing %d bytes at checkpoint\n", otaAccumulatorIndex);
     esp_err_t err = esp_ota_write(update_handle, otaAccumulator, otaAccumulatorIndex);
     if (err != ESP_OK) {
@@ -892,47 +1002,231 @@ void handleOtaAbort(HueMixLinkPacket* pkt) {
   abortOta("Server abort");
 }
 
-// --- HANDLE PACKET FROM NET NODE ---
-void handleSerialPacket(uint8_t* data) {
+// --- HANDLE PACKET FROM NET NODE (v1 203 B or v2 39..1470 B) ---
+void handleSerialPacket(uint8_t* data, uint16_t len) {
+  if (len >= 1) {
+    uint8_t pt = data[0];
+    if (pt == PKT_OTA_NOTIFY || pt == PKT_OTA_CHUNK || pt == PKT_OTA_CHECKPOINT_REQ ||
+        pt == PKT_OTA_COMPLETE || pt == PKT_OTA_ABORT) {
+      lastOtaTrafficMs = millis();
+    }
+  }
+  // Security v2 variable-length frame (never 203 B)
+  if (len != sizeof(HueMixLinkPacket)) {
+    if (len < V2_MIN_FRAME_SIZE || len > V2_MAX_FRAME_ESP32 || data[1] != PROTO_VERSION_V2) {
+      return;
+    }
+    HueMixLinkHeaderV2 hdr;
+    memcpy(&hdr, data, V2_HEADER_SIZE);
+
+    uint8_t myMac[6];
+    esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+
+    // Gateway-targeted v2 PKT_PAIR_CONFIRM (151 B): complete ECDH handshake and return PKT_PAIR_ACK
+    if (hdr.type == PKT_PAIR_CONFIRM && len == V2_PAIR_CONFIRM_LEN && memcmp(hdr.targetMAC, myMac, 6) == 0) {
+      uint32_t newHomeId = 0;
+      uint8_t ackBuf[96];
+      size_t ackLen = 0;
+      if (sec_pairing_handle_confirm_v2(&gwSecState, myMac, data, len, &gwCounter, &newHomeId, ackBuf, sizeof(ackBuf), &ackLen)) {
+        if (newHomeId != 0 && newHomeId != HOME_ID) {
+          HOME_ID = newHomeId;
+          prefs.putUInt("hid", HOME_ID);
+        }
+        sendSerialFrame(ackBuf, (uint16_t)ackLen);
+        delay(150);
+        sendSerialFrame(ackBuf, (uint16_t)ackLen);  // Redundant send in case net node was mid-NVS-write
+        SERIAL_DEBUG.printf("[RADIO] PAIRED v2! K_own installed (epoch=%u)\n", gwSecState.key_epoch);
+      } else {
+        SERIAL_DEBUG.println("[RADIO] SECURITY: Gateway v2 PAIR_CONFIRM failed");
+      }
+      return;
+    }
+
+    // Gateway-targeted PKT_KEY_DISTRIB (0x07): decrypt with K_own[gw_rad] and update peer table.
+    // Always consume PKT_KEY_DISTRIB here (never relay over ESP-NOW if still in SEC_MODE_V1).
+    if (hdr.type == PKT_KEY_DISTRIB) {
+      if (memcmp(hdr.targetMAC, myMac, 6) == 0 && gwSecState.crypto_mode != SEC_MODE_V1) {
+        uint8_t pt[64];
+        size_t pt_len = 0;
+        if (sec_decode_v2(data, len, gwSecState.k_own, nullptr, pt, sizeof(pt), &pt_len)) {
+          sec_gw_handle_key_distrib(&gwPeerTable, pt, pt_len);
+          SERIAL_DEBUG.println("[RADIO] Updated Security v2 peer key entry");
+        } else {
+          SERIAL_DEBUG.println("[RADIO] SECURITY: Rejected invalid PKT_KEY_DISTRIB");
+        }
+      }
+      return;
+    }
+
+    // Gateway-targeted v2 PKT_SYS_CMD (CMD_SET_PIN, Night Mode)
+    if (hdr.type == PKT_SYS_CMD && memcmp(hdr.targetMAC, myMac, 6) == 0 && gwSecState.crypto_mode != SEC_MODE_V1) {
+      uint8_t pt[64];
+      size_t pt_len = 0;
+      if (sec_decode_v2(data, len, gwSecState.k_own, nullptr, pt, sizeof(pt), &pt_len) && pt_len >= 1) {
+        uint8_t rspBuf[96];
+        size_t rspLen = 0;
+        if (sec_device_handle_set_pin_cmd(&gwSecState, &gwCounter, myMac, pt, pt_len, rspBuf, sizeof(rspBuf), &rspLen)) {
+          sendSerialFrame(rspBuf, (uint16_t)rspLen);
+          SERIAL_DEBUG.println("[RADIO] Processed v2 CMD_SET_PIN and sent ACK");
+        } else if (pt[0] == 1) {
+          nightMode = true;
+          #if IS_SERIAL_GATEWAY
+            setDashboardScreenPower(false);
+          #endif
+        } else if (pt[0] == 2) {
+          nightMode = false;
+          #if IS_SERIAL_GATEWAY
+            setDashboardScreenPower(true);
+            renderDashboard();
+          #endif
+        } else if (pt[0] == 3 && pt_len >= 2) {
+          netNodeHasWiFi = (pt[1] == 1);
+          SERIAL_DEBUG.printf("[RADIO] v2 Net node WiFi status: %s\n", netNodeHasWiFi ? "CONNECTED" : "DISCONNECTED");
+        }
+      }
+      return;
+    }
+
+    // Gateway-targeted v2 PKT_GW_LIST_UPD
+    if (hdr.type == PKT_GW_LIST_UPD && memcmp(hdr.targetMAC, myMac, 6) == 0 && gwSecState.crypto_mode != SEC_MODE_V1) {
+      uint8_t pt[96];
+      size_t pt_len = 0;
+      if (sec_decode_v2(data, len, gwSecState.k_own, nullptr, pt, sizeof(pt), &pt_len) && pt_len >= sizeof(Payload_GatewayList)) {
+        memcpy(&activeGateways, pt, sizeof(Payload_GatewayList));
+        saveGateways();
+        SERIAL_DEBUG.printf("[RADIO] Updated v2 Gateways List (%d nodes)\n", activeGateways.count);
+      }
+      return;
+    }
+
+    // Gateway-targeted v2 PKT_PING (serial gateway)
+    #if IS_SERIAL_GATEWAY
+    if (hdr.type == PKT_PING && memcmp(hdr.targetMAC, myMac, 6) == 0 && gwSecState.crypto_mode != SEC_MODE_V1) {
+      uint8_t pt[32];
+      size_t pt_len = 0;
+      if (sec_decode_v2(data, len, gwSecState.k_own, nullptr, pt, sizeof(pt), &pt_len)) {
+        uint32_t uptime_seconds = millis() / 1000;
+        const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+        uint8_t pongBuf[96];
+        size_t pongLen = sec_device_encode_tx(
+            &gwSecState, &gwCounter, PKT_PING, myMac, backendMac, hdr.msgID,
+            (const uint8_t*)&uptime_seconds, sizeof(uptime_seconds),
+            pongBuf, sizeof(pongBuf)
+        );
+        if (pongLen > 0) sendSerialFrame(pongBuf, (uint16_t)pongLen);
+      }
+      return;
+    }
+    #endif
+
+    // Gateway-targeted v2 OTA packets
+    if ((hdr.type == PKT_OTA_NOTIFY || hdr.type == PKT_OTA_CHUNK ||
+         hdr.type == PKT_OTA_CHECKPOINT_REQ || hdr.type == PKT_OTA_COMPLETE ||
+         hdr.type == PKT_OTA_ABORT) &&
+        memcmp(hdr.targetMAC, myMac, 6) == 0 && gwSecState.crypto_mode != SEC_MODE_V1) {
+      static uint8_t otaPt[1440];
+      size_t pt_len = 0;
+      if (sec_decode_v2(data, len, gwSecState.k_own, nullptr, otaPt, sizeof(otaPt), &pt_len)) {
+        if (hdr.type == PKT_OTA_CHUNK && pt_len >= sizeof(Payload_OtaChunkV2Header)) {
+          Payload_OtaChunkV2Header ch;
+          memcpy(&ch, otaPt, sizeof(ch));
+          if (sizeof(ch) + ch.data_len <= pt_len) {
+            handleOtaChunkRaw(ch.chunk_index, otaPt + sizeof(ch), ch.data_len);
+          }
+        } else {
+          HueMixLinkPacket synth;
+          memset(&synth, 0, sizeof(synth));
+          synth.type = hdr.type;
+          memcpy(synth.sourceMAC, hdr.sourceMAC, 6);
+          memcpy(synth.targetMAC, myMac, 6);
+          synth.msgID = hdr.msgID;
+          size_t cp = (pt_len > sizeof(synth.payload.raw)) ? sizeof(synth.payload.raw) : pt_len;
+          memcpy(synth.payload.raw, otaPt, cp);
+          synth.signature = calculateHash(synth.payload.raw, 185, HOME_ID);
+          if (hdr.type == PKT_OTA_NOTIFY) handleOtaNotify(&synth);
+          else if (hdr.type == PKT_OTA_CHECKPOINT_REQ) handleOtaCheckpointReq(&synth);
+          else if (hdr.type == PKT_OTA_COMPLETE) handleOtaComplete(&synth);
+          else if (hdr.type == PKT_OTA_ABORT) handleOtaAbort(&synth);
+        }
+      }
+      return;
+    }
+
+    // Relay v2 frame verbatim over ESP-NOW to targetMAC
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, hdr.targetMAC, 6);
+    peer.channel = HUEMIXLINK_CHANNEL;
+    peer.encrypt = false;
+    if (!esp_now_is_peer_exist(hdr.targetMAC)) { esp_now_add_peer(&peer); }
+    // Skip per-packet delivery reports for OTA and ping packets (matching v1 behavior;
+    // OTA uses checkpoint ACKs so per-chunk delivery reports waste UART/counter/logs).
+    bool trackDelivery = (
+      hdr.type != PKT_OTA_NOTIFY &&
+      hdr.type != PKT_OTA_CHUNK &&
+      hdr.type != PKT_OTA_CHECKPOINT_REQ &&
+      hdr.type != PKT_OTA_COMPLETE &&
+      hdr.type != PKT_OTA_ABORT &&
+      hdr.type != PKT_PING_DEVICE
+    );
+    if (trackDelivery) {
+      lastMsgID = hdr.msgID;
+      memcpy(lastTargetMAC, hdr.targetMAC, 6);
+      waitingForDelivery = true;
+    }
+    esp_now_send(hdr.targetMAC, data, len);
+    return;
+  }
+
   memcpy(&radioTx, data, sizeof(HueMixLinkPacket));
   
   SERIAL_DEBUG.printf("[RADIO] Serial RX Type 0x%02X\n", radioTx.type);
 
-  // Handle OTA packets
-  if (radioTx.type == PKT_OTA_NOTIFY) {
-    handleOtaNotify(&radioTx);
-    return;
-  } else if (radioTx.type == PKT_OTA_CHUNK) {
-    handleOtaChunk(&radioTx);
-    return;
-  } else if (radioTx.type == PKT_OTA_CHECKPOINT_REQ) {
-    handleOtaCheckpointReq(&radioTx);
-    return;
-  } else if (radioTx.type == PKT_OTA_COMPLETE) {
-    handleOtaComplete(&radioTx);
-    return;
-  } else if (radioTx.type == PKT_OTA_ABORT) {
-    handleOtaAbort(&radioTx);
+  // Handle OTA packets (anti-downgrade: reject v1 OTA targeted to self once v2-paired)
+  if (radioTx.type == PKT_OTA_NOTIFY || radioTx.type == PKT_OTA_CHUNK ||
+      radioTx.type == PKT_OTA_CHECKPOINT_REQ || radioTx.type == PKT_OTA_COMPLETE ||
+      radioTx.type == PKT_OTA_ABORT) {
+    uint8_t myMacV1[6];
+    esp_read_mac(myMacV1, ESP_MAC_WIFI_STA);
+    if (memcmp(radioTx.targetMAC, myMacV1, 6) == 0 && gwSecState.crypto_mode != SEC_MODE_V1) {
+      SERIAL_DEBUG.printf("[RADIO] SECURITY: Rejected v1 OTA packet (type=0x%02X) while v2-paired\n", radioTx.type);
+      return;
+    }
+    if (radioTx.type == PKT_OTA_NOTIFY) handleOtaNotify(&radioTx);
+    else if (radioTx.type == PKT_OTA_CHUNK) handleOtaChunk(&radioTx);
+    else if (radioTx.type == PKT_OTA_CHECKPOINT_REQ) handleOtaCheckpointReq(&radioTx);
+    else if (radioTx.type == PKT_OTA_COMPLETE) handleOtaComplete(&radioTx);
+    else if (radioTx.type == PKT_OTA_ABORT) handleOtaAbort(&radioTx);
     return;
   }
 
   #if IS_SERIAL_GATEWAY
     if (radioTx.type == PKT_PING) {
-      HueMixLinkPacket pingRsp;
-      memset(&pingRsp, 0, sizeof(HueMixLinkPacket));
-      pingRsp.type = PKT_PING;
-      esp_read_mac(pingRsp.sourceMAC, ESP_MAC_WIFI_STA);
-      memcpy(pingRsp.targetMAC, radioTx.sourceMAC, 6);
-      pingRsp.msgID = radioTx.msgID;
-
       uint32_t uptime_seconds = millis() / 1000;
-      memcpy(&pingRsp.payload.raw[0], &uptime_seconds, sizeof(uptime_seconds));
-      pingRsp.signature = calculateHash(pingRsp.payload.raw, 185, HOME_ID);
-
-      SERIAL_COM.write(SERIAL_START);
-      SERIAL_COM.write((uint8_t*)&pingRsp, sizeof(HueMixLinkPacket));
-      SERIAL_COM.write(SERIAL_END);
-      SERIAL_COM.flush();
+      uint8_t myMac[6];
+      esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+      if (gwSecState.crypto_mode != SEC_MODE_V1) {
+        const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+        uint32_t ctr = 0;
+        if (sec_counter_next(&gwCounter, &ctr)) {
+          uint8_t pongBuf[96];
+          size_t pongLen = sec_encode_v2(
+              PKT_PING, myMac, backendMac, radioTx.msgID, ctr, gwSecState.key_epoch,
+              (const uint8_t*)&uptime_seconds, sizeof(uptime_seconds),
+              gwSecState.k_own, pongBuf, sizeof(pongBuf)
+          );
+          if (pongLen > 0) sendSerialFrame(pongBuf, (uint16_t)pongLen);
+        }
+      } else {
+        HueMixLinkPacket pingRsp;
+        memset(&pingRsp, 0, sizeof(HueMixLinkPacket));
+        pingRsp.type = PKT_PING;
+        memcpy(pingRsp.sourceMAC, myMac, 6);
+        memcpy(pingRsp.targetMAC, radioTx.sourceMAC, 6);
+        pingRsp.msgID = radioTx.msgID;
+        memcpy(&pingRsp.payload.raw[0], &uptime_seconds, sizeof(uptime_seconds));
+        pingRsp.signature = calculateHash(pingRsp.payload.raw, 185, HOME_ID);
+        sendSerialFrame((uint8_t*)&pingRsp, sizeof(HueMixLinkPacket));
+      }
       return;
     }
   #endif
@@ -966,6 +1260,53 @@ void handleSerialPacket(uint8_t* data) {
       netNodeHasWiFi = (radioTx.payload.raw[1] == 1);
       SERIAL_DEBUG.printf("[RADIO] Net node WiFi status: %s\n", netNodeHasWiFi ? "CONNECTED" : "DISCONNECTED");
       return;  // Don't forward this command via ESP-NOW
+    }
+    else if (radioTx.payload.sys.cmd == CMD_FACTORY_RESET) {
+      uint8_t myMac[6];
+      esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+      if (memcmp(radioTx.targetMAC, myMac, 6) == 0) {
+        SERIAL_DEBUG.println("[RADIO] Factory reset command received from net node!");
+        sec_device_on_factory_reset(&gwSecState);
+        prefs.remove("hid");
+        prefs.remove("gw");
+        delay(50);
+        ESP.restart();
+        return;
+      }
+      // Targeted at a downstream radio device: forward over ESP-NOW
+      esp_now_peer_info_t peer = {};
+      memcpy(peer.peer_addr, radioTx.targetMAC, 6);
+      peer.channel = HUEMIXLINK_CHANNEL;
+      peer.encrypt = false;
+      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      lastMsgID = radioTx.msgID;
+      memcpy(lastTargetMAC, radioTx.targetMAC, 6);
+      waitingForDelivery = true;
+      esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
+    }
+    else if (radioTx.payload.sys.cmd == CMD_UPGRADE_TO_V2) {
+      uint8_t myMac[6];
+      esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+      if (memcmp(radioTx.targetMAC, myMac, 6) == 0) {
+        if (gwSecState.crypto_mode != SEC_MODE_V1) {
+          SERIAL_DEBUG.println("[RADIO] Clearing stale v2 keys for re-pairing (CMD_UPGRADE_TO_V2)");
+          sec_pairing_clear_keys(&gwSecState);
+        }
+        SERIAL_DEBUG.println("[RADIO] Triggering in-place v2 upgrade HELLO");
+        lastSecHelloMs = millis();
+        sendRadioSecHello();
+        return;
+      }
+      // Targeted at a downstream radio device: forward over ESP-NOW
+      esp_now_peer_info_t peer = {};
+      memcpy(peer.peer_addr, radioTx.targetMAC, 6);
+      peer.channel = HUEMIXLINK_CHANNEL;
+      peer.encrypt = false;
+      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      lastMsgID = radioTx.msgID;
+      memcpy(lastTargetMAC, radioTx.targetMAC, 6);
+      waitingForDelivery = true;
+      esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
     }
     else {
       esp_now_peer_info_t peer = {};
@@ -1005,8 +1346,14 @@ void handleSerialPacket(uint8_t* data) {
       esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
     }
   } else if (radioTx.type == PKT_PAIR_CONFIRM) {
-    HOME_ID = radioTx.payload.pair.newHomeID;
-    prefs.putUInt("hid", HOME_ID);
+    // Anti-downgrade: only accept v1 HOME_ID update while still in v1 and signature is valid
+    if (sec_pairing_allow_v1_confirm(&gwSecState)) {
+      uint32_t expectedSig = calculateHash(radioTx.payload.raw, 185, 0);
+      if (radioTx.signature == expectedSig && radioTx.payload.pair.newHomeID != 0) {
+        HOME_ID = radioTx.payload.pair.newHomeID;
+        prefs.putUInt("hid", HOME_ID);
+      }
+    }
 
     uint8_t zeroMac[6] = {0};
     if (memcmp(radioTx.targetMAC, zeroMac, 6) != 0) {
@@ -1030,17 +1377,30 @@ void handleSerialPacket(uint8_t* data) {
 }
 
 void parseSerialByte(uint8_t b) {
+  // Inter-frame idle timeout: a 1470 B frame at 460800 baud takes ~32 ms continuously.
+  // If >100 ms elapsed mid-frame, reset to S_IDLE so a corrupted frame can never swallow
+  // subsequent packets (e.g. checkpoint requests).
+  if (rxState != S_IDLE && (millis() - last_serial_activity) > 100) {
+    SERIAL_DEBUG.printf("[RADIO] Serial frame timeout in state %d (got %u/%u B) - resync\n",
+                        rxState, rxIndex, rxExpectedLen);
+    rxState = S_IDLE;
+    rxIndex = 0;
+    rxExpectedLen = 0;
+  }
+
   switch(rxState) {
     case S_IDLE:
       if (b == SERIAL_START) { 
-        rxState = S_READING; 
+        rxState = S_LEN_LO; 
         rxIndex = 0; 
+        rxExpectedLen = 0;
         last_serial_activity = millis();
       } 
       else if (b == SERIAL_REQ_HANDSHAKE && (millis() - last_serial_activity) > SERIAL_IDLE_THRESHOLD) { 
         handshake_request_received = true;  // Mark that we got a request
         SERIAL_DEBUG.println("[RADIO] Received handshake request from net node");
         sendSerialHandshake(); 
+        lastSecHelloMs = 0;  // Re-advertise v2 HELLO so host/net-node syncs K_ack peer table
         last_serial_activity = millis();
       }
 #if IS_SERIAL_GATEWAY
@@ -1065,35 +1425,42 @@ void parseSerialByte(uint8_t b) {
       }
 #endif
       break;
+    case S_LEN_LO:
+      last_serial_activity = millis();
+      rxExpectedLen = b;
+      rxState = S_LEN_HI;
+      break;
+    case S_LEN_HI:
+      last_serial_activity = millis();
+      rxExpectedLen |= ((uint16_t)b << 8);
+      if (rxExpectedLen < V2_OVERHEAD || rxExpectedLen > V2_MAX_FRAME_ESP32) {
+        SERIAL_DEBUG.printf("[RADIO] Invalid serial frame len %u - resync\n", rxExpectedLen);
+        rxState = (b == SERIAL_START) ? S_LEN_LO : S_IDLE;
+        rxIndex = 0;
+        rxExpectedLen = 0;
+      } else {
+        rxIndex = 0;
+        rxState = S_READING;
+      }
+      break;
     case S_READING:
       last_serial_activity = millis();
       rxRawBuffer[rxIndex++] = b;
-      // Prevent buffer overflow
-      if (rxIndex > sizeof(HueMixLinkPacket)) {
-        SERIAL_DEBUG.printf("[RADIO] Buffer overflow - resync\n");
-        rxState = S_IDLE;
-        rxIndex = 0;
-        // Check if current byte is SERIAL_START for next packet
-        if (b == SERIAL_START) {
-          rxState = S_READING;
-          rxIndex = 0;
-        }
-      } else if (rxIndex >= sizeof(HueMixLinkPacket)) {
+      if (rxIndex >= rxExpectedLen) {
         rxState = S_FOOTER;
       }
       break;
     case S_FOOTER:
       last_serial_activity = millis();
       if (b == SERIAL_END) {
-        handleSerialPacket(rxRawBuffer);
+        handleSerialPacket(rxRawBuffer, rxExpectedLen);
         rxState = S_IDLE;
       } else if (b == SERIAL_START) {
-        // Possible packet corruption, but current byte could be start of next packet
         SERIAL_DEBUG.printf("[RADIO] Footer Err (got 0x%02X), resyncing to next packet\n", b);
-        rxState = S_READING;
+        rxState = S_LEN_LO;
         rxIndex = 0;
+        rxExpectedLen = 0;
       } else {
-        // Footer mismatch - garbage byte, resync
         SERIAL_DEBUG.printf("[RADIO] Footer Err (got 0x%02X), discarding packet\n", b);
         rxState = S_IDLE;
       }
@@ -1102,47 +1469,41 @@ void parseSerialByte(uint8_t b) {
 }
 
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  if (waitingForDelivery) {
-    HueMixLinkPacket rpt; 
-
-    memset(&rpt, 0, sizeof(HueMixLinkPacket));
-
-    rpt.type = PKT_DELIVERY_RPT;
-    esp_read_mac(rpt.sourceMAC, ESP_MAC_WIFI_STA);
-
-    rpt.payload.report.originalMsgID = lastMsgID;
-    rpt.payload.report.success = (status == ESP_NOW_SEND_SUCCESS);
-    memcpy(rpt.payload.report.targetMAC, lastTargetMAC, 6); // Use stored target MAC instead of callback parameter
-
-    rpt.signature = calculateHash(rpt.payload.raw, 185, HOME_ID);
-
-    SERIAL_COM.write(SERIAL_START); SERIAL_COM.write((uint8_t*)&rpt, sizeof(rpt)); SERIAL_COM.write(SERIAL_END);
-    SERIAL_COM.flush();
-    waitingForDelivery = false;
-    
+  if (waitingForDelivery && !pendingDeliveryRpt) {
+    pendingDeliveryPayload.originalMsgID = lastMsgID;
+    pendingDeliveryPayload.success = (status == ESP_NOW_SEND_SUCCESS);
+    memcpy(pendingDeliveryPayload.targetMAC, lastTargetMAC, 6);
+    pendingDeliveryRpt = true;
     triggerStatusLED();
   }
 }
 
 void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) {
-  if (len != sizeof(HueMixLinkPacket)) return;
-  if (pktReady) return; 
+  bool is_v1 = (len == (int)sizeof(HueMixLinkPacket));
+  bool is_v2 = (!is_v1 && len >= V2_MIN_FRAME_SIZE && len <= V2_MAX_FRAME_ESP32 && data[1] == PROTO_VERSION_V2);
+  if (!is_v1 && !is_v2) return;
 
-  memcpy(&radioRx, data, sizeof(HueMixLinkPacket));
-  memcpy(radioRx.sourceMAC, info->src_addr, 6);
-  
-  // Record RSSI for HELLO and PING_DEVICE responses
-  if (radioRx.type == PKT_HELLO) { 
-    radioRx.payload.raw[1] = (uint8_t)info->rx_ctrl->rssi; 
+  uint8_t nextHead = (uint8_t)((radioRxHead + 1) % RADIO_RX_QUEUE_SIZE);
+  if (nextHead == radioRxTail) return; // Queue full
+
+  RadioRxSlot &slot = radioRxQueue[radioRxHead];
+  memcpy(slot.buf, data, (size_t)len);
+  slot.len = (uint16_t)len;
+
+  if (is_v1) {
+    // Legacy v1: stamp sourceMAC at offset 5 and RSSI into payload hole
+    memcpy(slot.buf + 5, info->src_addr, 6);
+    if (slot.buf[0] == PKT_HELLO) {
+      slot.buf[18 + 1] = (uint8_t)info->rx_ctrl->rssi;
+    } else if (slot.buf[0] == PKT_PING_DEVICE) {
+      slot.buf[18 + 0] = (uint8_t)info->rx_ctrl->rssi;
+    }
+  } else {
+    // Security v2: stamp RSSI into header offset 21 (excluded from AAD)
+    slot.buf[21] = (uint8_t)info->rx_ctrl->rssi;
   }
-  else if (radioRx.type == PKT_PING_DEVICE) {
-    // Store RSSI in first byte of payload for Python to read
-    radioRx.payload.raw[0] = (uint8_t)info->rx_ctrl->rssi;
-  }
-  
-  memcpy(&bufferPkt, &radioRx, sizeof(HueMixLinkPacket));
-  pktReady = true;
-  
+
+  radioRxHead = nextHead;
   triggerStatusLED();
 }
 
@@ -1150,6 +1511,8 @@ void setup() {
   pinMode(PIN_LED_STATUS, OUTPUT);
 
   #if IS_SERIAL_GATEWAY
+    SERIAL_COM.setRxBufferSize(8192);
+    SERIAL_COM.setTxBufferSize(8192);
     SERIAL_COM.begin(460800);
     SERIAL_DEBUG.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX);
     initDashboardDisplay();
@@ -1163,6 +1526,14 @@ void setup() {
   WiFi.mode(WIFI_STA); 
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   if (esp_now_init() != ESP_OK) ESP.restart();
+  uint32_t espnow_ver = 0;
+  if (esp_now_get_version(&espnow_ver) == ESP_OK) {
+    SERIAL_DEBUG.printf("[RADIO] ESP-NOW version: %u (max frame %u B)\n",
+                        espnow_ver, (espnow_ver >= 2) ? V2_MAX_FRAME_ESP32 : V2_MAX_FRAME_ESP8266);
+  }
+  sec_pairing_load(&gwSecState);
+  sec_gw_table_init(&gwPeerTable);
+  sec_counter_init_default(&gwCounter);
 
   if(!prefs.begin("huemixlink", false)) {
     nvs_flash_erase(); nvs_flash_init(); prefs.begin("huemixlink", false);
@@ -1209,43 +1580,75 @@ void loop() {
     handshake_request_received = true;
   }
 
+  // Periodically advertise Security v2 gateway HELLO until paired (or once on boot to sync K_ack table)
+  if ((netNodeHasWiFi || IS_SERIAL_GATEWAY) &&
+      ((gwSecState.crypto_mode == SEC_MODE_V1 && (lastSecHelloMs == 0 || millis() - lastSecHelloMs > 5000)) ||
+       (gwSecState.crypto_mode != SEC_MODE_V1 && lastSecHelloMs == 0))) {
+    lastSecHelloMs = millis();
+    sendRadioSecHello();
+  }
+
   // OTA timeout check
   if (otaState == OTA_RECEIVING && millis() - last_ota_activity > 30000) {
     SERIAL_DEBUG.println("[OTA] Timeout - no activity for 30s");
     abortOta("Timeout");
   }
 
-  if (pktReady) {
-    SERIAL_COM.write(SERIAL_START);
-    SERIAL_COM.write((uint8_t*)&bufferPkt, sizeof(bufferPkt));
-    SERIAL_COM.write(SERIAL_END);
-    SERIAL_COM.flush();
-    
-    if (shouldAckInboundPacket(bufferPkt.type)) {
+  while (radioRxTail != radioRxHead) {
+    uint8_t* bufferPktBuf = radioRxQueue[radioRxTail].buf;
+    uint16_t bufferPktLen = radioRxQueue[radioRxTail].len;
+    sendSerialFrame(bufferPktBuf, bufferPktLen);
+
+    uint8_t inType = bufferPktBuf[0];
+    if (inType == PKT_OTA_READY || inType == PKT_OTA_CHUNK_ACK || inType == PKT_OTA_ABORT) {
+      lastOtaTrafficMs = millis();
+    }
+    bool inIsV2 = (bufferPktLen != sizeof(HueMixLinkPacket) && bufferPktLen >= V2_MIN_FRAME_SIZE && bufferPktBuf[1] == PROTO_VERSION_V2);
+    const uint8_t* inSrcMac = inIsV2 ? (bufferPktBuf + 2) : (bufferPktBuf + 5);
+
+    if (shouldAckInboundPacket(inType)) {
       // Only send ACK if net node has WiFi connectivity
       if (netNodeHasWiFi) {
-        HueMixLinkPacket ack; 
-        memset(&ack, 0, sizeof(HueMixLinkPacket));
-        ack.type = PKT_ACK_TO_BTN;
-        esp_read_mac(ack.sourceMAC, ESP_MAC_WIFI_STA);
-        memcpy(ack.targetMAC, bufferPkt.sourceMAC, 6);
-        ack.msgID = 0;
-        ack.payload.gwList = activeGateways;
-        
-        // Security: Sign the ACK packet with HOME_ID
-        ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
-        
-        esp_now_peer_info_t peer = {}; 
-        memcpy(peer.peer_addr, bufferPkt.sourceMAC, 6);
-        peer.channel = HUEMIXLINK_CHANNEL; 
+        esp_now_peer_info_t peer = {};
+        memcpy(peer.peer_addr, inSrcMac, 6);
+        peer.channel = HUEMIXLINK_CHANNEL;
         peer.encrypt = false;
-        if(!esp_now_is_peer_exist(bufferPkt.sourceMAC)) esp_now_add_peer(&peer);
-        esp_now_send(bufferPkt.sourceMAC, (uint8_t*)&ack, sizeof(ack));
+        if (!esp_now_is_peer_exist(inSrcMac)) esp_now_add_peer(&peer);
+
+        const SecGwPeerEntry* peerSec = inIsV2 ? sec_gw_table_find(&gwPeerTable, inSrcMac) : nullptr;
+        if (inIsV2 && peerSec != nullptr) {
+          // Security v2 ACK encrypted with K_ack[d] carrying activeGateways
+          uint8_t myMac[6];
+          esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+          uint32_t ackCtr = 0;
+          if (sec_counter_next(&gwCounter, &ackCtr)) {
+            uint8_t ackBuf[128];
+            size_t ackLen = sec_encode_v2(
+                PKT_ACK_TO_BTN, myMac, inSrcMac, 0, ackCtr, gwSecState.key_epoch,
+                (const uint8_t*)&activeGateways, sizeof(activeGateways),
+                peerSec->k_ack, ackBuf, sizeof(ackBuf)
+            );
+            if (ackLen > 0) {
+              esp_now_send(inSrcMac, ackBuf, ackLen);
+            }
+          }
+        } else if (!inIsV2) {
+          // Legacy v1 203-byte ACK
+          HueMixLinkPacket ack;
+          memset(&ack, 0, sizeof(HueMixLinkPacket));
+          ack.type = PKT_ACK_TO_BTN;
+          esp_read_mac(ack.sourceMAC, ESP_MAC_WIFI_STA);
+          memcpy(ack.targetMAC, inSrcMac, 6);
+          ack.msgID = 0;
+          ack.payload.gwList = activeGateways;
+          ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
+          esp_now_send(inSrcMac, (uint8_t*)&ack, sizeof(ack));
+        }
       } else {
         SERIAL_DEBUG.println("[RADIO] Button ACK suppressed - Net node has no WiFi");
       }
     }
-    pktReady = false;
+    radioRxTail = (uint8_t)((radioRxTail + 1) % RADIO_RX_QUEUE_SIZE);
   }
 
   // STATUS LED STATE MACHINE HANDLER
@@ -1258,6 +1661,38 @@ void loop() {
     statusLEDState = STATUS_LED_ON;
   }
 
+  if (pendingDeliveryRpt) {
+    Payload_Report rptPayload = pendingDeliveryPayload;
+    pendingDeliveryRpt = false;
+    uint8_t myMac[6];
+    esp_read_mac(myMac, ESP_MAC_WIFI_STA);
+
+    if (gwSecState.crypto_mode != SEC_MODE_V1) {
+      const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+      uint32_t ctr = 0;
+      if (sec_counter_next(&gwCounter, &ctr)) {
+        uint8_t v2Buf[96];
+        size_t v2Len = sec_encode_v2(
+            PKT_DELIVERY_RPT, myMac, backendMac, 0, ctr, gwSecState.key_epoch,
+            (const uint8_t*)&rptPayload, sizeof(Payload_Report),
+            gwSecState.k_own, v2Buf, sizeof(v2Buf)
+        );
+        if (v2Len > 0) {
+          sendSerialFrame(v2Buf, (uint16_t)v2Len);
+        }
+      }
+    } else {
+      HueMixLinkPacket rpt;
+      memset(&rpt, 0, sizeof(HueMixLinkPacket));
+      rpt.type = PKT_DELIVERY_RPT;
+      memcpy(rpt.sourceMAC, myMac, 6);
+      rpt.payload.report = rptPayload;
+      rpt.signature = calculateHash(rpt.payload.raw, 185, HOME_ID);
+      sendSerialFrame((uint8_t*)&rpt, sizeof(rpt));
+    }
+    waitingForDelivery = false;
+  }
+
   if (!waitingForDelivery) {
     while (SERIAL_COM.available() > 0) {
       parseSerialByte(SERIAL_COM.read());
@@ -1268,7 +1703,14 @@ void loop() {
 #if IS_SERIAL_GATEWAY
   if (dashboardDisplayReady && (millis() - lastDashboardRender) > 250) {
     lastDashboardRender = millis();
-    renderDashboard();
+    bool otaBusy = (otaState == OTA_RECEIVING) || (lastOtaTrafficMs != 0 && (millis() - lastOtaTrafficMs) < 1500);
+    if (otaBusy) {
+      if (dashboardStats.valid) {
+        dashboardStats.lastUpdateMs = millis();
+      }
+    } else {
+      renderDashboard();
+    }
   }
 #endif
 }

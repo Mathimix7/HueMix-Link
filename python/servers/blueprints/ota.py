@@ -9,12 +9,14 @@ import os
 import logging
 import requests
 import re
+import base64
 import json
 from werkzeug.utils import secure_filename
 from services.ota_manager import ota_manager
 from network.device_manager import device_manager
 from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, GITHUB_OWNER, GITHUB_REPO
 from network.network_server import network_server
+from network.security_store import security_store, build_esp32_nvs_pin_image
 from services.config_manager import config_manager
 from services.plugin_manager import plugin_manager
 
@@ -905,6 +907,77 @@ def get_firmware_binary():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@ota_bp.route('/api/ota/serial_provision_pin', methods=['POST'])
+def serial_provision_pin():
+    """Provision a 6-digit Security v2 PIN for a device being serial-flashed with v4.x firmware.
+
+    Request JSON:
+        {
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "version": "4.0.2",
+            "platform": "esp32" | "esp8266",
+            "label": "Normal Button (ESP32)" (optional)
+        }
+
+    Returns:
+        JSON with `pin`, normalized `mac`, and (for ESP32) `nvs_offset` (0x9000) + base64 `nvs_b64`.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        mac_raw = str(data.get('mac') or '').strip()
+        version_str = str(data.get('version') or '0.0.0').strip()
+        platform = str(data.get('platform') or 'esp32').strip().lower()
+        firmware_type = str(data.get('firmware_type') or '').strip().lower()
+        label = str(data.get('label') or '').strip() or None
+
+        if firmware_type.startswith('gateway'):
+            return jsonify({
+                'success': False,
+                'error': 'Gateways use TOFU Security v2 and do not use pairing PINs'
+            }), 400
+
+        if not mac_raw:
+            return jsonify({'success': False, 'error': 'Missing device MAC address'}), 400
+
+        m = re.match(r'^(\d+)\.(\d+)\.(\d+)', version_str)
+        if not m:
+            return jsonify({'success': False, 'error': f'Invalid firmware version: {version_str}'}), 400
+        major = int(m.group(1))
+        if major < 4 or major >= 5:
+            return jsonify({
+                'success': False,
+                'error': f'PIN provisioning is only supported for v4.x firmware (got v{version_str})'
+            }), 400
+
+        # Normalize MAC to AA:BB:CC:DD:EE:FF
+        hex_mac = re.sub(r'[^0-9A-Fa-f]', '', mac_raw).upper()
+        if len(hex_mac) != 12:
+            return jsonify({'success': False, 'error': f'Invalid MAC address: {mac_raw}'}), 400
+        norm_mac = ':'.join(hex_mac[i:i + 2] for i in range(0, 12, 2))
+
+        pin = security_store.provision_device_pin(norm_mac, last_name=label, reuse_existing=True)
+
+        nvs_offset = None
+        nvs_b64 = None
+        if platform == 'esp32':
+            nvs_bytes = build_esp32_nvs_pin_image(pin, partition_size=0x5000)
+            nvs_offset = 0x9000
+            nvs_b64 = base64.b64encode(nvs_bytes).decode('ascii')
+
+        logger.info(f"🔐 Serial-provisioned Security v2 PIN for {norm_mac} (v{version_str}, {platform})")
+        return jsonify({
+            'success': True,
+            'mac': norm_mac,
+            'pin': pin,
+            'platform': platform,
+            'nvs_offset': nvs_offset,
+            'nvs_b64': nvs_b64,
+        })
+    except Exception as e:
+        logger.error(f"Failed to provision serial PIN: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @ota_bp.route('/api/ota/start/<device_mac>', methods=['POST'])
 def start_ota(device_mac):
     """Start OTA update for a device.
@@ -1040,11 +1113,11 @@ def start_ota(device_mac):
                     elif not device_model_id:
                         logger.warning(f"Device {device_mac} has no model_id, allowing firmware upload")
         
-        # Check if update already in progress
-        if ota_manager.is_update_in_progress():
+        # Check if this specific device already has an active or queued update
+        if ota_manager.has_active_or_queued_session(device_mac):
             return jsonify({
                 'success': False,
-                'error': 'Another update is already in progress'
+                'error': 'An update is already active or queued for this device'
             }), 409
 
         if device_type is None:
@@ -1052,14 +1125,32 @@ def start_ota(device_mac):
                 'success': False,
                 'error': 'Unable to resolve device type for OTA'
             }), 400
+
+        # If queuing gateway_net while its paired gateway_radio is queued/active, enforce radio-first order
+        depends_on_mac = None
+        if device_type == DEV_GATEWAY and matched_gateway and firmware_type == 'gateway_net':
+            radio_mac = matched_gateway.get('radio_mac')
+            if radio_mac and radio_mac != device_mac and ota_manager.has_active_or_queued_session(radio_mac):
+                depends_on_mac = radio_mac
         
-        # Start OTA update (pass gateway preference for plugin devices)
-        success = network_server.start_ota_update(device_mac, device_type, firmware_path, gateway_preference=last_gateway_mac)
+        # Queue (or start immediately if active slot is free)
+        success = network_server.start_ota_update(
+            device_mac,
+            device_type,
+            firmware_path,
+            gateway_preference=last_gateway_mac,
+            depends_on_mac=depends_on_mac,
+        )
         
         if success:
+            session = ota_manager.get_session(device_mac)
+            session_dict = session.to_dict() if session else None
+            is_queued = bool(session_dict and session_dict.get('state') == 'queued')
             return jsonify({
                 'success': True,
-                'message': f'OTA update started for {device_mac}'
+                'queued': is_queued,
+                'session': session_dict,
+                'message': f'OTA update {"queued" if is_queued else "started"} for {device_mac}'
             })
         else:
             return jsonify({
@@ -1267,6 +1358,26 @@ def get_devices_with_versions():
                 'plugin_display_name': display['name'],
             })
         
+        # Attach Security v2 metadata to every device entry
+        for dev in devices:
+            mac = dev.get('mac_address')
+            if mac:
+                try:
+                    dev['crypto_mode'] = security_store.get_crypto_mode(mac)
+                    dev['has_pin'] = bool(security_store.get_device_pin(mac))
+                    dev['pending_v2_upgrade'] = security_store.is_pending_v2_upgrade(mac)
+                    dev['pending_pin'] = bool(security_store.get_pending_pin(mac))
+                except ValueError:
+                    dev['crypto_mode'] = 'v1'
+                    dev['has_pin'] = False
+                    dev['pending_v2_upgrade'] = False
+                    dev['pending_pin'] = False
+            else:
+                dev['crypto_mode'] = 'v1'
+                dev['has_pin'] = False
+                dev['pending_v2_upgrade'] = False
+                dev['pending_pin'] = False
+
         return jsonify({
             'success': True,
             'devices': devices
@@ -1274,4 +1385,52 @@ def get_devices_with_versions():
         
     except Exception as e:
         logger.error(f"Failed to get devices: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@ota_bp.route('/api/ota/security/upgrade-v2/<device_mac>', methods=['POST'])
+def upgrade_device_to_v2(device_mac):
+    """Trigger an in-place v1 -> v2 TOFU upgrade for a 4.x.x device."""
+    try:
+        result = network_server.request_v2_upgrade(device_mac)
+        status = 200 if result.get('success') else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.error(f"Failed to trigger v2 upgrade for {device_mac}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@ota_bp.route('/api/ota/security/create-pin/<device_mac>', methods=['POST'])
+def create_device_pin(device_mac):
+    """Generate and provision a write-once 6-digit PIN over an encrypted v2 link."""
+    try:
+        result = network_server.request_create_pin(device_mac)
+        status = 200 if result.get('success') else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.error(f"Failed to create PIN for {device_mac}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@ota_bp.route('/api/ota/security/pin/<device_mac>', methods=['GET'])
+def get_device_pin(device_mac):
+    """Return the stored 6-digit PIN for a device so the user can view or print it."""
+    try:
+        pin = security_store.get_device_pin(device_mac)
+        if not pin:
+            return jsonify({'success': False, 'error': 'No PIN stored for this device'}), 404
+        return jsonify({'success': True, 'mac': device_mac, 'pin': pin})
+    except Exception as e:
+        logger.error(f"Failed to read PIN for {device_mac}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@ota_bp.route('/api/ota/security/cancel-pending/<device_mac>', methods=['POST'])
+def cancel_pending_security(device_mac):
+    """Cancel a queued v2 upgrade or PIN provisioning action."""
+    try:
+        result = network_server.cancel_pending_security_action(device_mac)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Failed to cancel pending security action for {device_mac}: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500

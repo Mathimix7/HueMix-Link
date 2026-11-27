@@ -210,8 +210,9 @@ def get_button_config_route(device_id):
 
 @buttons_bp.route('/api/devices/<device_id>', methods=['DELETE'])
 def delete_device(device_id):
-    """Delete a device."""
+    """Delete a device and revoke its Security v2 radio trust (keeping its saved PIN)."""
     buttons = get_buttons()
+    deleted_btn = next((b for b in buttons if b['id'] == device_id), None)
     
     # Find and remove the device
     original_length = len(buttons)
@@ -221,6 +222,17 @@ def delete_device(device_id):
         return jsonify({"success": False, "error": "Device not found"}), 404
     
     save_buttons(buttons)
+
+    if deleted_btn and deleted_btn.get('mac_address'):
+        try:
+            from network.network_server import network_server
+            network_server.revoke_device(
+                deleted_btn['mac_address'],
+                keep_pin=True,
+                last_name=deleted_btn.get('name'),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to revoke Security v2 access for button {deleted_btn.get('mac_address')}: {e}")
     
     # Notify UDP server about the deletion
     config_notifier.notify_change('button_delete', {

@@ -54,6 +54,9 @@
             <h2 class="text-xl font-semibold text-gray-800">
                 <i class="fas fa-microchip mr-2 text-orange-600"></i>Available Devices
             </h2>
+            <button id="queueAllBtn" onclick="queueAllUpdates()" class="hidden px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors inline-flex items-center text-sm font-medium">
+                <i class="fas fa-layer-group mr-2"></i><span id="queueAllBtnLabel">Queue All Updates</span>
+            </button>
         </div>
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200">
@@ -61,6 +64,7 @@
                     <tr>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Security</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Version</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Available Version</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
@@ -68,7 +72,7 @@
                 </thead>
                 <tbody id="devicesTable" class="bg-white divide-y divide-gray-200">
                     <tr>
-                        <td colspan="5" class="px-6 py-8 text-center text-gray-500">
+                        <td colspan="6" class="px-6 py-8 text-center text-gray-500">
                             <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-gray-400" fill="none" viewBox="0 0 24 24">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -199,6 +203,43 @@
     </div>
 </div>
 
+<!-- Device PIN Modal -->
+<div id="pinModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-xl shadow-xl max-w-sm w-full mx-4 p-6">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold text-gray-800">
+                <i class="fas fa-key text-green-600 mr-2"></i>Device Pairing PIN
+            </h3>
+            <button onclick="closePinModal()" class="text-gray-400 hover:text-gray-600">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="text-center mb-4">
+            <div id="pinModalDeviceName" class="text-sm font-semibold text-gray-800"></div>
+            <div id="pinModalDeviceMac" class="text-xs font-mono text-gray-500 mb-3"></div>
+            <div class="bg-gray-50 border-2 border-dashed border-gray-300 rounded-xl py-4 px-6">
+                <div class="text-xs font-bold uppercase tracking-wider text-gray-700 mb-2">HueMix-Link</div>
+                <div id="pinModalQr" class="flex justify-center mb-2"></div>
+                <div id="pinModalValue" class="text-3xl font-mono font-bold tracking-widest text-gray-900">------</div>
+            </div>
+            <p class="text-xs text-gray-500 mt-3">
+                Saved on the device and in your server's security store. Print or stick this on the device for future re-pairing.
+            </p>
+        </div>
+        <div class="flex gap-2">
+            <button onclick="copyModalPin()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                <i class="fas fa-copy mr-1"></i>Copy PIN
+            </button>
+            <button onclick="printModalPin()" class="flex-1 bg-zinc-800 hover:bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                <i class="fas fa-print mr-1"></i>Print Label
+            </button>
+        </div>
+        <button onclick="copyModalNfcUrl()" class="w-full mt-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            <i class="fas fa-wifi mr-1"></i>Copy NFC Pairing URL
+        </button>
+    </div>
+</div>
+
 <!-- Serial Flash Modal -->
 <div id="serialModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
     <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4">
@@ -220,6 +261,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Baud Rate</label>
                     <select id="serialBaudRate" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                        <option value="115200">115200 (Most Reliable)</option>
                         <option value="460800">460800 (Stable)</option>
                         <option value="921600" selected>921600 (Fast)</option>
                     </select>
@@ -229,6 +271,30 @@
             <!-- Terminal Output -->
             <div id="serialTerminal" class="bg-black text-green-400 p-4 rounded-lg h-64 overflow-y-auto font-mono text-xs mb-4">
                 <p>> Ready to connect...</p>
+            </div>
+
+            <!-- Provisioned Security v2 PIN Banner (shown for v4.x flashes) -->
+            <div id="serialPinBanner" class="hidden mb-4 bg-emerald-50 border-2 border-dashed border-emerald-400 rounded-xl p-4">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div>
+                        <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">
+                            <i class="fas fa-shield-alt mr-1"></i>Security v2 Pairing PIN Flashed
+                        </div>
+                        <div id="serialPinDeviceInfo" class="text-xs font-mono text-gray-600 mt-0.5"></div>
+                        <div id="serialPinValue" class="text-3xl font-mono font-bold tracking-widest text-gray-900 mt-1">------</div>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button id="copySerialPinBtn" type="button" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition">
+                            <i class="fas fa-copy mr-1"></i>Copy PIN
+                        </button>
+                        <button id="copySerialNfcUrlBtn" type="button" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-medium transition" title="Copy NFC tap-to-pair URL (/pairing#pin=...)">
+                            <i class="fas fa-wifi mr-1"></i>Copy NFC URL
+                        </button>
+                        <button id="printSerialPinBtn" type="button" class="bg-zinc-800 hover:bg-zinc-900 text-white px-3 py-2 rounded-lg text-xs font-medium transition">
+                            <i class="fas fa-print mr-1"></i>Print Label
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <div class="flex gap-3">
@@ -251,7 +317,10 @@ let availableFirmwares = {};
 let devices = [];
 let currentUpdateMac = null;
 let progressPollInterval = null;
-let activeSessions = {}; // Track active OTA sessions
+let sessionPollInterval = null;
+let securityPollInterval = null;
+let watchingPinMacs = new Set();
+let activeSessions = {}; // mac -> session object for queued/active OTA sessions
 
 // Load devices on page load
 document.addEventListener('DOMContentLoaded', async () => {
@@ -281,6 +350,7 @@ async function loadDevices() {
         if (data.success) {
             devices = data.devices;
             renderDevicesTable();
+            manageSecurityPolling();
         }
     } catch (error) {
         console.error('Failed to load devices:', error);
@@ -294,8 +364,8 @@ async function loadActiveSessions() {
         const data = await response.json();
         
         if (data.success && data.sessions) {
-            activeSessions = {};
-            console.log('Active OTA sessions:', data.sessions);
+            const prevMacs = Object.keys(activeSessions);
+            const nextSessions = {};
             
             // Handle both array and object formats
             const sessionsList = Array.isArray(data.sessions) 
@@ -303,16 +373,56 @@ async function loadActiveSessions() {
                 : Object.values(data.sessions);
             
             sessionsList.forEach(session => {
-                // Only track sessions that are in progress
-                if (['waiting_ready', 'transferring', 'validating'].includes(session.state)) {
-                    activeSessions[session.device_mac] = true;
+                // Track queued and in-progress sessions
+                if (['queued', 'waiting_ready', 'transferring', 'validating'].includes(session.state)) {
+                    nextSessions[session.device_mac] = session;
                 }
             });
+
+            const finishedAny = prevMacs.some(mac => !nextSessions[mac]);
+            activeSessions = nextSessions;
             renderDevicesTable();
+            manageSessionPolling();
+
+            // Refresh device firmware versions when a session completes/ends
+            if (finishedAny) {
+                loadDevices();
+            }
         }
     } catch (error) {
         console.error('Failed to load sessions:', error);
     }
+}
+
+function manageSessionPolling() {
+    const hasAny = Object.keys(activeSessions).length > 0;
+    if (hasAny && !sessionPollInterval) {
+        sessionPollInterval = setInterval(loadActiveSessions, 3000);
+    } else if (!hasAny && sessionPollInterval) {
+        clearInterval(sessionPollInterval);
+        sessionPollInterval = null;
+    }
+}
+
+function renderSessionButton(mac, deviceType, session, compact = false) {
+    const pad = compact ? 'px-3 py-1 text-xs' : 'px-4 py-1.5';
+    if (session.state === 'queued') {
+        return `
+            <button onclick="reopenProgressModal('${mac}', '${deviceType}')"
+                    class="bg-amber-500 hover:bg-amber-600 text-white ${pad} rounded transition inline-flex items-center justify-center gap-1">
+                <i class="fas fa-clock text-xs"></i> Queued
+            </button>
+        `;
+    }
+    const label = session.state === 'transferring'
+        ? `Updating ${Math.round(session.progress_percent || 0)}%`
+        : 'View Progress';
+    return `
+        <button onclick="reopenProgressModal('${mac}', '${deviceType}')"
+                class="bg-blue-600 hover:bg-blue-700 text-white ${pad} rounded transition">
+            ${label}
+        </button>
+    `;
 }
 
 function renderDevicesTable() {
@@ -321,7 +431,7 @@ function renderDevicesTable() {
     if (devices.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="5" class="px-6 py-12 text-center text-gray-500">
+                <td colspan="6" class="px-6 py-12 text-center text-gray-500">
                     <p class="text-lg">No devices found</p>
                     <p class="text-sm mt-1">Devices will appear here automatically once detected.</p>
                 </td>
@@ -400,8 +510,9 @@ function renderDevicesTable() {
         const radioAvailable = availableFirmwares['gateway_radio']?.version || '--';
         const netHasUpdate = gateway.net && netAvailable !== '--' && compareVersions(netAvailable, netVersion) > 0;
         const radioHasUpdate = gateway.radio && radioAvailable !== '--' && compareVersions(radioAvailable, radioVersion) > 0;
-        const netHasActiveOta = gateway.net && activeSessions[gateway.net.mac_address] || false;
-        const radioHasActiveOta = gateway.radio && activeSessions[gateway.radio.mac_address] || false;
+        const netSession = gateway.net ? activeSessions[gateway.net.mac_address] : null;
+        const radioSession = gateway.radio ? activeSessions[gateway.radio.mac_address] : null;
+        const netBlockedByRadio = netHasUpdate && radioHasUpdate && !radioSession;
         
         return `
             <tr class="hover:bg-gray-50 ${gateway.hasUpdate ? 'bg-orange-50/30' : ''}">
@@ -422,6 +533,12 @@ function renderDevicesTable() {
                     </span>
                 </td>
                 <td class="px-6 py-4">
+                    <div class="flex flex-col space-y-1.5">
+                        ${gateway.net ? `<div class="flex items-center space-x-2"><span class="text-xs text-gray-500 w-12">Net:</span>${renderSecurityControl(gateway.net)}</div>` : ''}
+                        ${gateway.radio ? `<div class="flex items-center space-x-2"><span class="text-xs text-gray-500 w-12">Radio:</span>${renderSecurityControl(gateway.radio)}</div>` : ''}
+                    </div>
+                </td>
+                <td class="px-6 py-4">
                     <div class="flex flex-col space-y-1">
                         <div class="flex items-center space-x-2">
                             <span class="text-xs text-gray-500 w-12">Net:</span>
@@ -438,7 +555,7 @@ function renderDevicesTable() {
                         <div class="flex items-center space-x-2">
                             <span class="text-xs text-gray-500 w-12">Net:</span>
                             <span class="text-sm ${netHasUpdate ? 'text-orange-600 font-semibold' : 'text-gray-500'}">${netAvailable}</span>
-                            ${netHasUpdate && radioHasUpdate ? '<i class="fas fa-lock text-xs text-gray-400" title="Update Radio first"></i>' : ''}
+                            ${netBlockedByRadio ? '<i class="fas fa-lock text-xs text-gray-400" title="Update or queue Radio first"></i>' : ''}
                         </div>
                         <div class="flex items-center space-x-2">
                             <span class="text-xs text-gray-500 w-12">Radio:</span>
@@ -448,13 +565,8 @@ function renderDevicesTable() {
                 </td>
                 <td class="px-6 py-4">
                     <div class="flex flex-col space-y-1">
-                        ${netHasActiveOta ? `
-                            <button onclick="reopenProgressModal('${gateway.net.mac_address}', 'gateway_net')"
-                                    class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs transition">
-                                View Progress
-                            </button>
-                        ` : netHasUpdate && radioHasUpdate ? `
-                            <button disabled title="Update Radio node first"
+                        ${netSession ? renderSessionButton(gateway.net.mac_address, 'gateway_net', netSession, true) : netBlockedByRadio ? `
+                            <button disabled title="Update or queue Radio node first"
                                     class="bg-gray-400 cursor-not-allowed text-white px-4 py-1 rounded text-xs flex items-center justify-center gap-1">
                                 <i class="fas fa-lock text-xs"></i> Update
                             </button>
@@ -466,12 +578,7 @@ function renderDevicesTable() {
                         ` : `
                             <span class="text-gray-400 text-xs">Up to date</span>
                         `}
-                        ${radioHasActiveOta ? `
-                            <button onclick="reopenProgressModal('${gateway.radio.mac_address}', 'gateway_radio')"
-                                    class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs transition">
-                                View Progress
-                            </button>
-                        ` : radioHasUpdate ? `
+                        ${radioSession ? renderSessionButton(gateway.radio.mac_address, 'gateway_radio', radioSession, true) : radioHasUpdate ? `
                             <button onclick="startUpdate('${gateway.radio.mac_address}', 'gateway_radio', 'gateway_radio')" 
                                     class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-1 rounded text-xs transition">
                                 Update
@@ -494,7 +601,7 @@ function renderDevicesTable() {
         // Model label for lightstrips
         const modelLabel = device.type === 'lightstrip' && device.model_id ? ` (Model ${device.model_id}: ${modelNames[device.model_id] || 'Unknown'})` : '';
         
-        const hasActiveOta = activeSessions[device.mac_address] || false;
+        const deviceSession = activeSessions[device.mac_address] || null;
         
         // Plugin devices use home_box_color for styling
         const pluginColor = device.is_plugin ? (device.home_box_color || '#6366f1') : null;
@@ -505,7 +612,6 @@ function renderDevicesTable() {
         if (device.is_plugin) {
             const pluginIcon = device.home_box_icon || 'fa-puzzle-piece';
             const pluginName = device.plugin_display_name || 'Plugin';
-            console.log(device)
             iconHtml = `
                 <div class="flex-shrink-0 h-10 w-10 flex items-center justify-center rounded-full" style="background-color: ${pluginColor}20; color: ${pluginColor}">
                     <i class="fas ${pluginIcon}"></i>
@@ -534,16 +640,14 @@ function renderDevicesTable() {
                 <td class="px-6 py-4 whitespace-nowrap">
                     ${badgeHtml}
                 </td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    ${renderSecurityControl(device)}
+                </td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${device.version}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm ${device.hasUpdate ? 'text-orange-600 font-semibold' : 'text-gray-500'}">${availableVersion}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm">
                     <div class="flex flex-col space-y-1">
-                        ${hasActiveOta ? `
-                            <button onclick="reopenProgressModal('${device.mac_address}', '${device.type}')"
-                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded transition">
-                                View Progress
-                            </button>
-                        ` : device.hasUpdate ? `
+                        ${deviceSession ? renderSessionButton(device.mac_address, device.type, deviceSession, false) : device.hasUpdate ? `
                             <button onclick="startUpdate('${device.mac_address}', '${device.type}', '${firmwareKey}')" 
                                     class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-1.5 rounded transition">
                                 Update
@@ -560,6 +664,112 @@ function renderDevicesTable() {
     }).join('');
     
     tbody.innerHTML = html;
+
+    // Update "Queue All Updates" button visibility and count
+    const pendingTargets = collectUpdatableTargets(sortedGateways, sortedOthers);
+    const queueAllBtn = document.getElementById('queueAllBtn');
+    const queueAllLabel = document.getElementById('queueAllBtnLabel');
+    if (queueAllBtn && queueAllLabel) {
+        if (pendingTargets.length > 0) {
+            queueAllLabel.textContent = `Queue All Updates (${pendingTargets.length})`;
+            queueAllBtn.classList.remove('hidden');
+        } else {
+            queueAllBtn.classList.add('hidden');
+        }
+    }
+}
+
+function collectUpdatableTargets(sortedGateways, sortedOthers) {
+    const targets = [];
+    // Gateways: always queue Radio before Net
+    sortedGateways.forEach(gw => {
+        if (gw.radio && availableFirmwares['gateway_radio'] &&
+            compareVersions(availableFirmwares['gateway_radio'].version, gw.radio.version) > 0 &&
+            !activeSessions[gw.radio.mac_address]) {
+            targets.push({ mac: gw.radio.mac_address, deviceType: 'gateway_radio', firmwareKey: 'gateway_radio' });
+        }
+        if (gw.net && availableFirmwares['gateway_net'] &&
+            compareVersions(availableFirmwares['gateway_net'].version, gw.net.version) > 0 &&
+            !activeSessions[gw.net.mac_address]) {
+            const radioNeedsUpdate = gw.radio && availableFirmwares['gateway_radio'] &&
+                compareVersions(availableFirmwares['gateway_radio'].version, gw.radio.version) > 0 &&
+                !activeSessions[gw.radio.mac_address];
+            targets.push({
+                mac: gw.net.mac_address,
+                deviceType: 'gateway_net',
+                firmwareKey: 'gateway_net',
+                dependsOnRadioMac: radioNeedsUpdate ? gw.radio.mac_address : null,
+            });
+        }
+    });
+    // All other devices
+    sortedOthers.forEach(device => {
+        if (device.hasUpdate && !activeSessions[device.mac_address]) {
+            targets.push({ mac: device.mac_address, deviceType: device.type, firmwareKey: device.firmwareKey || device.type });
+        }
+    });
+    return targets;
+}
+
+async function queueAllUpdates() {
+    const btn = document.getElementById('queueAllBtn');
+    if (btn) btn.disabled = true;
+
+    try {
+        // Recompute targets in safe order (radio before net, then other devices)
+        const gatewayGroups = {};
+        const otherDevices = [];
+        devices.forEach(device => {
+            if (device.type === 'gateway_net' || device.type === 'gateway_radio') {
+                const name = device.name;
+                if (!gatewayGroups[name]) gatewayGroups[name] = { net: null, radio: null, name };
+                if (device.type === 'gateway_net') gatewayGroups[name].net = device;
+                else gatewayGroups[name].radio = device;
+            } else {
+                otherDevices.push(device);
+            }
+        });
+        const targets = collectUpdatableTargets(Object.values(gatewayGroups), otherDevices);
+        if (targets.length === 0) {
+            showInfo('All available updates are already queued or up to date');
+            return;
+        }
+
+        // Download each distinct GitHub firmware once; skip gateway_net if its paired gateway_radio failed
+        const downloadedPaths = {};
+        const failedRadioMacs = new Set();
+        let queuedCount = 0;
+        let failedCount = 0;
+
+        for (const t of targets) {
+            if (t.dependsOnRadioMac && failedRadioMacs.has(t.dependsOnRadioMac)) {
+                failedCount++;
+                continue;
+            }
+            const ok = await startUpdate(t.mac, t.deviceType, t.firmwareKey, { quiet: true, downloadedPaths });
+            if (ok) {
+                queuedCount++;
+            } else {
+                failedCount++;
+                if (t.deviceType === 'gateway_radio') {
+                    failedRadioMacs.add(t.mac);
+                }
+            }
+        }
+
+        await loadActiveSessions();
+        if (queuedCount > 0) {
+            showToast(
+                'Updates Queued',
+                `Queued ${queuedCount} device update(s) — running one at a time.${failedCount ? ` (${failedCount} failed to queue)` : ''}`,
+                failedCount ? 'warning' : 'success'
+            );
+        } else {
+            showError('Failed to queue updates');
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
 function getTypeColor(type) {
@@ -649,82 +859,65 @@ async function checkForUpdates() {
     }
 }
 
-async function startUpdate(deviceMac, deviceType, firmwareType) {
+async function startUpdate(deviceMac, deviceType, firmwareType, options = {}) {
+    const { quiet = false, downloadedPaths = null } = options;
     const firmware = availableFirmwares[firmwareType];
     if (!firmware) {
-        showError('No firmware available for this device type');
-        return;
+        if (!quiet) showError('No firmware available for this device type');
+        return false;
     }
     
-    // If firmware is from local upload, use it directly
-    if (firmware.source === 'local') {
-        // Start OTA update with local firmware
-        try {
-            const response = await fetch(`/api/ota/start/${deviceMac}`, {
+    try {
+        let firmwarePath = null;
+        if (firmware.source === 'local') {
+            firmwarePath = firmware.filepath;
+        } else if (downloadedPaths && downloadedPaths[firmwareType]) {
+            firmwarePath = downloadedPaths[firmwareType];
+        } else {
+            const downloadResponse = await fetch(`/api/ota/download`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    firmware_path: firmware.filepath,
-                    firmware_type: firmwareType
+                    download_url: firmware.download_url,
+                    filename: firmware.filename
                 })
             });
-            
-            const data = await response.json();
-            if (data.success) {
-                currentUpdateMac = deviceMac;
-                activeSessions[deviceMac] = true; // Mark as active
-                showProgressModal(deviceMac, deviceType);
-                renderDevicesTable(); // Update button to "View Progress"
-            } else {
-                showError(data.error || 'Failed to start update');
+            const downloadData = await downloadResponse.json();
+            if (!downloadData.success) {
+                if (!quiet) showError(downloadData.error || 'Failed to download firmware');
+                return false;
             }
-        } catch (error) {
-            console.error('Failed to start update:', error);
-            showError('Failed to start update');
+            firmwarePath = downloadData.filepath;
+            if (downloadedPaths) downloadedPaths[firmwareType] = firmwarePath;
         }
-        return;
-    }
-    
-    // Download firmware from GitHub first
-    try {
-        // Map firmware type to device type code for download endpoint
-        const downloadResponse = await fetch(`/api/ota/download`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                download_url: firmware.download_url,
-                filename: firmware.filename
-            })
-        });
-        
-        const downloadData = await downloadResponse.json();
-        if (!downloadData.success) {
-            showError(downloadData.error || 'Failed to download firmware');
-            return;
-        }
-        
-        // Start OTA update
+
         const response = await fetch(`/api/ota/start/${deviceMac}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                firmware_path: downloadData.filepath,
+                firmware_path: firmwarePath,
                 firmware_type: firmwareType
             })
         });
         
         const data = await response.json();
         if (data.success) {
-            currentUpdateMac = deviceMac;
-            activeSessions[deviceMac] = true; // Mark as active
-            showProgressModal(deviceMac, deviceType);
-            renderDevicesTable(); // Update button to "View Progress"
+            activeSessions[deviceMac] = data.session || { device_mac: deviceMac, state: data.queued ? 'queued' : 'waiting_ready' };
+            manageSessionPolling();
+            renderDevicesTable();
+            if (!quiet) {
+                currentUpdateMac = deviceMac;
+                showProgressModal(deviceMac, deviceType);
+            }
+            return true;
         } else {
-            showError(data.error || 'Failed to start update');
+            if (!quiet) showError(data.error || 'Failed to start update');
+            return false;
         }
     } catch (error) {
         console.error('Failed to start update:', error);
-        showError('Failed to start update');
+        if (!quiet) showError('Failed to start update');
+        return false;
     }
 }
 
@@ -733,16 +926,42 @@ function reopenProgressModal(deviceMac, deviceType) {
     showProgressModal(deviceMac, deviceType);
 }
 
+function getBatteryInstructionText(device, deviceType, sessionState) {
+    const isBattery = ['button', 'remote', 'motion_sensor', 'door_sensor'].includes(deviceType);
+    if (isBattery) {
+        const isV2 = device && (device.crypto_mode === 'v2' || device.crypto_mode === 'v2-unverified');
+        return isV2
+            ? 'Queued — press any button or trigger the sensor to start update automatically (skipped if battery < 20%, runs when no other update is active)'
+            : 'Double-tap the reset button to begin update';
+    }
+    if (sessionState === 'queued') {
+        return 'Queued — waiting for the current update to finish. Will start automatically.';
+    }
+    return null;
+}
+
 function showProgressModal(deviceMac, deviceType) {
     const device = devices.find(d => d.mac_address === deviceMac);
+    const existingSession = activeSessions[deviceMac];
     document.getElementById('progressDevice').textContent = `Device: ${device?.name || deviceMac}`;
+    document.getElementById('progressPercent').textContent = `${existingSession?.progress_percent ?? 0}%`;
+    document.getElementById('progressBar').style.width = `${existingSession?.progress_percent ?? 0}%`;
+    document.getElementById('progressBar').classList.remove('bg-green-600', 'bg-red-600');
+    document.getElementById('progressBar').classList.add('bg-blue-600');
+    document.getElementById('progressStatus').textContent = existingSession?.state === 'queued' ? 'Queued' : 'Loading...';
+    document.getElementById('progressChunks').textContent = `${existingSession?.chunks_sent ?? 0} / ${existingSession?.total_chunks ?? 0}`;
+    document.getElementById('progressSpeed').textContent = `${existingSession?.transfer_speed_kbps ?? 0} KB/s`;
+    document.getElementById('progressElapsed').textContent = `${Math.floor(existingSession?.elapsed_seconds ?? 0)}s`;
+    document.getElementById('abortBtn').classList.remove('hidden');
+    document.getElementById('retryBtn').classList.add('hidden');
     document.getElementById('progressModal').classList.remove('hidden');
     
-    // Show instructions for devices that require reset-button OTA entry.
-    if (deviceType === 'button' || deviceType === 'remote' || deviceType === 'motion_sensor' || deviceType === 'door_sensor') {
+    const instruction = getBatteryInstructionText(device, deviceType, existingSession?.state);
+    if (instruction) {
         document.getElementById('progressInstructions').classList.remove('hidden');
-        document.getElementById('instructionsText').textContent = 
-            'Double-tap the reset button to begin update';
+        document.getElementById('instructionsText').textContent = instruction;
+    } else {
+        document.getElementById('progressInstructions').classList.add('hidden');
     }
     
     // Start polling
@@ -767,6 +986,7 @@ async function updateProgress() {
         
         if (data.success && data.has_session) {
             const session = data.session;
+            const device = devices.find(d => d.mac_address === currentUpdateMac);
             
             document.getElementById('progressPercent').textContent = `${session.progress_percent}%`;
             document.getElementById('progressBar').style.width = `${session.progress_percent}%`;
@@ -775,6 +995,8 @@ async function updateProgress() {
             let formattedState = session.state;
             if (formattedState === 'waiting_ready') {
                 formattedState = 'Waiting Ready';
+            } else if (formattedState === 'queued') {
+                formattedState = 'Queued';
             } else {
                 formattedState = formattedState.charAt(0).toUpperCase() + formattedState.slice(1);
             }
@@ -786,27 +1008,42 @@ async function updateProgress() {
             // Show integer seconds only
             document.getElementById('progressElapsed').textContent = `${Math.floor(session.elapsed_seconds)}s`;
             
-            // Hide double-tap instruction once state moves past waiting_ready
+            // Update instructions and abort button label based on state
             const instructionsEl = document.getElementById('progressInstructions');
-            if (session.state !== 'waiting_ready' && session.state !== 'idle') {
+            const abortBtn = document.getElementById('abortBtn');
+            if (session.state === 'queued' || session.state === 'waiting_ready') {
+                const instruction = getBatteryInstructionText(device, device?.type, session.state);
+                if (instruction) {
+                    instructionsEl.classList.remove('hidden');
+                    document.getElementById('instructionsText').textContent = instruction;
+                } else {
+                    instructionsEl.classList.add('hidden');
+                }
+                abortBtn.textContent = session.state === 'queued' ? 'Remove from Queue' : 'Abort Update';
+            } else {
                 instructionsEl.classList.add('hidden');
+                abortBtn.textContent = 'Abort Update';
             }
             
             if (session.state === 'complete') {
                 stopProgressPolling();
-                document.getElementById('abortBtn').classList.add('hidden');
+                abortBtn.classList.add('hidden');
                 document.getElementById('progressBar').classList.remove('bg-blue-600');
                 document.getElementById('progressBar').classList.add('bg-green-600');
                 showSuccess('Firmware update completed successfully!');
                 // Don't auto-close - let user dismiss manually
             } else if (session.state === 'failed' || session.state === 'aborted') {
                 stopProgressPolling();
-                document.getElementById('abortBtn').classList.add('hidden');
+                abortBtn.classList.add('hidden');
                 document.getElementById('retryBtn').classList.remove('hidden');
                 document.getElementById('progressBar').classList.remove('bg-blue-600');
                 document.getElementById('progressBar').classList.add('bg-red-600');
                 showError(`Update ${session.state}: ${session.failure_reason || 'Unknown error'}`);
             }
+        } else if (data.success && !data.has_session) {
+            stopProgressPolling();
+            document.getElementById('progressStatus').textContent = 'No active session';
+            document.getElementById('abortBtn').classList.add('hidden');
         }
     } catch (error) {
         console.error('Failed to update progress:', error);
@@ -821,7 +1058,6 @@ function stopProgressPolling() {
 }
 
 async function closeProgressModal() {
-    console.log("asd")
     stopProgressPolling();
     document.getElementById('progressModal').classList.add('hidden');
     document.getElementById('progressInstructions').classList.add('hidden');
@@ -846,9 +1082,12 @@ async function abortUpdate() {
         if (data.success) {
             showInfo('Update aborted');
             // Don't close modal - let user see the aborted state
+        } else {
+            showError(data.error || 'Failed to abort update');
         }
     } catch (error) {
         console.error('Failed to abort update:', error);
+        showError('Failed to abort update');
     }
 }
 
@@ -862,10 +1101,12 @@ async function retryUpdate() {
         return;
     }
     
-    // Determine firmware type based on device type and platform
-    let firmwareKey = device.type;
+    // Determine firmware type based on device type, platform, or lightstrip model_id
+    let firmwareKey = device.firmwareKey || device.type;
     if ((device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor' || device.type === 'door_sensor') && device.platform) {
         firmwareKey = `${device.type}_${device.platform}`;
+    } else if (device.type === 'lightstrip' && device.model_id) {
+        firmwareKey = `lightstrip_model${device.model_id}`;
     }
     
     // Reset UI
@@ -877,15 +1118,20 @@ async function retryUpdate() {
     document.getElementById('progressPercent').textContent = '0%';
     document.getElementById('progressStatus').textContent = 'Initializing...';
     
-    // Show instructions again for devices that require reset-button OTA entry.
-    if (device.type === 'button' || device.type === 'remote' || device.type === 'motion_sensor' || device.type === 'door_sensor') {
+    // Show instructions again for devices that need them
+    const instruction = getBatteryInstructionText(device, device.type, 'queued');
+    if (instruction) {
         document.getElementById('progressInstructions').classList.remove('hidden');
-        document.getElementById('instructionsText').textContent = 
-            'Double-tap the reset button to begin update';
+        document.getElementById('instructionsText').textContent = instruction;
     }
     
-    // Start the update again
-    startUpdate(currentUpdateMac, device.type, firmwareKey);
+    // Start the update again and restore retry button if initiation fails
+    const ok = await startUpdate(currentUpdateMac, device.type, firmwareKey);
+    if (!ok) {
+        document.getElementById('abortBtn').classList.add('hidden');
+        document.getElementById('retryBtn').classList.remove('hidden');
+        document.getElementById('progressStatus').textContent = 'Failed';
+    }
 }
 
 async function uploadFirmware(e) {
@@ -1014,7 +1260,220 @@ function showSuccess(message) {
 function showInfo(message) {
     showToast('Info', message, 'info');
 }
+
+function isV2CapableVersion(version) {
+    if (!version || version === '--') return false;
+    return compareVersions(version, '4.0.0') >= 0;
+}
+
+function isGatewayType(type) {
+    return type === 'gateway_net' || type === 'gateway_radio' || type === 'gateway_radio_python';
+}
+
+function renderSecurityBadge(mode, isGateway = false) {
+    if (isGateway) {
+        if (mode === 'v2' || mode === 'v2-unverified') {
+            return `<span class="px-2.5 py-0.5 inline-flex items-center text-xs font-medium rounded-full bg-green-100 text-green-800 whitespace-nowrap"><i class="fas fa-lock mr-1.5 text-[10px]"></i>v2</span>`;
+        }
+        return `<span class="px-2.5 py-0.5 inline-flex items-center text-xs font-medium rounded-full bg-gray-100 text-gray-600 whitespace-nowrap">Legacy v1</span>`;
+    }
+    if (mode === 'v2') {
+        return `<span class="px-2.5 py-0.5 inline-flex items-center text-xs font-medium rounded-full bg-green-100 text-green-800 whitespace-nowrap"><i class="fas fa-lock mr-1.5 text-[10px]"></i>v2 Verified</span>`;
+    }
+    if (mode === 'v2-unverified') {
+        return `<span class="px-2.5 py-0.5 inline-flex items-center text-xs font-medium rounded-full bg-amber-100 text-amber-800 whitespace-nowrap"><i class="fas fa-shield-alt mr-1.5 text-[10px]"></i>v2 Unverified</span>`;
+    }
+    return `<span class="px-2.5 py-0.5 inline-flex items-center text-xs font-medium rounded-full bg-gray-100 text-gray-600 whitespace-nowrap">Legacy v1</span>`;
+}
+
+function renderSecurityControl(device) {
+    if (!device || !device.mac_address) return '';
+    const mode = device.crypto_mode || 'v1';
+    const mac = device.mac_address;
+    const isGw = isGatewayType(device.type);
+    const badge = renderSecurityBadge(mode, isGw);
+    const safeName = (device.name || mac).replace(/'/g, "\\'");
+
+    // Gateways auto-upgrade to v2 over local WiFi/UART and do not require a PIN
+    if (isGw) {
+        if (mode === 'v1' && isV2CapableVersion(device.version)) {
+            return `
+                <div class="inline-flex items-center gap-2 whitespace-nowrap">
+                    ${badge}
+                    <button onclick="upgradeDeviceToV2('${mac}', '${safeName}')"
+                            class="text-xs font-medium text-orange-600 hover:text-orange-700 hover:bg-orange-50 px-2 py-0.5 rounded-full transition">
+                        Upgrade
+                    </button>
+                </div>`;
+        }
+        return `<div class="inline-flex items-center whitespace-nowrap">${badge}</div>`;
+    }
+
+    let actionHtml = '';
+    if (device.pending_v2_upgrade) {
+        actionHtml = `
+            <span class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full whitespace-nowrap">
+                <i class="fas fa-circle-notch fa-spin text-[10px]"></i>Waiting for wake
+                <button onclick="cancelPendingSecurity('${mac}')" title="Cancel" class="text-blue-400 hover:text-red-600 ml-0.5 leading-none">&times;</button>
+            </span>`;
+    } else if (device.pending_pin) {
+        actionHtml = `
+            <span class="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 px-2.5 py-0.5 rounded-full whitespace-nowrap">
+                <i class="fas fa-circle-notch fa-spin text-[10px]"></i>Sending PIN
+                <button onclick="cancelPendingSecurity('${mac}')" title="Cancel" class="text-indigo-400 hover:text-red-600 ml-0.5 leading-none">&times;</button>
+            </span>`;
+    } else if (mode === 'v1' && isV2CapableVersion(device.version)) {
+        actionHtml = `
+            <button onclick="upgradeDeviceToV2('${mac}', '${safeName}')"
+                    class="inline-flex items-center gap-1 text-xs font-medium text-orange-700 bg-orange-50 hover:bg-orange-100 px-2.5 py-0.5 rounded-full transition whitespace-nowrap">
+                <i class="fas fa-arrow-up text-[10px]"></i>Upgrade to v2
+            </button>`;
+    } else if (mode === 'v2-unverified') {
+        actionHtml = `
+            <button onclick="createDevicePin('${mac}', '${safeName}')"
+                    class="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-0.5 rounded-full transition whitespace-nowrap">
+                <i class="fas fa-key text-[10px]"></i>Create PIN
+            </button>`;
+    } else if (mode === 'v2' && device.has_pin) {
+        actionHtml = `
+            <button onclick="viewDevicePin('${mac}', '${safeName}')"
+                    title="View pairing PIN"
+                    class="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-100 px-2 py-0.5 rounded-full transition whitespace-nowrap">
+                <i class="fas fa-key text-[10px]"></i>PIN
+            </button>`;
+    }
+
+    return `<div class="inline-flex items-center gap-2 whitespace-nowrap">${badge}${actionHtml}</div>`;
+}
+
+function manageSecurityPolling() {
+    // Auto-open PIN modal when a watched device finishes PIN provisioning
+    devices.forEach(d => {
+        if (watchingPinMacs.has(d.mac_address) && d.has_pin && !d.pending_pin) {
+            watchingPinMacs.delete(d.mac_address);
+            viewDevicePin(d.mac_address, d.name || d.mac_address);
+        }
+    });
+
+    const hasPending = devices.some(d => d.pending_v2_upgrade || d.pending_pin);
+    if (hasPending && !securityPollInterval) {
+        securityPollInterval = setInterval(loadDevices, 2500);
+    } else if (!hasPending && securityPollInterval) {
+        clearInterval(securityPollInterval);
+        securityPollInterval = null;
+    }
+}
+
+async function upgradeDeviceToV2(mac, name) {
+    try {
+        const res = await fetch(`/api/ota/security/upgrade-v2/${encodeURIComponent(mac)}`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+            showError(data.error || 'Failed to start v2 upgrade');
+            return;
+        }
+        showInfo(`Queued Security v2 upgrade for ${name}. Always-on devices upgrade immediately; battery devices upgrade on next button press or wake.`);
+        await loadDevices();
+    } catch (err) {
+        console.error(err);
+        showError('Failed to start v2 upgrade');
+    }
+}
+
+async function createDevicePin(mac, name) {
+    try {
+        const res = await fetch(`/api/ota/security/create-pin/${encodeURIComponent(mac)}`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+            showError(data.error || 'Failed to create PIN');
+            return;
+        }
+        if (data.already_set && data.pin) {
+            openPinModal(name, mac, data.pin);
+            return;
+        }
+        watchingPinMacs.add(mac);
+        showInfo(`Sending encrypted 6-digit PIN to ${name}. Battery devices will receive and confirm it on their next wake.`);
+        await loadDevices();
+    } catch (err) {
+        console.error(err);
+        showError('Failed to create PIN');
+    }
+}
+
+async function viewDevicePin(mac, name) {
+    try {
+        const res = await fetch(`/api/ota/security/pin/${encodeURIComponent(mac)}`);
+        const data = await res.json();
+        if (!data.success) {
+            showError(data.error || 'PIN not found');
+            return;
+        }
+        openPinModal(name, mac, data.pin);
+    } catch (err) {
+        console.error(err);
+        showError('Failed to load PIN');
+    }
+}
+
+async function cancelPendingSecurity(mac) {
+    try {
+        await fetch(`/api/ota/security/cancel-pending/${encodeURIComponent(mac)}`, { method: 'POST' });
+        watchingPinMacs.delete(mac);
+        await loadDevices();
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+let currentModalPin = '';
+let currentModalDeviceName = '';
+let currentModalDeviceMac = '';
+
+function openPinModal(name, mac, pin) {
+    currentModalPin = pin;
+    currentModalDeviceName = name;
+    currentModalDeviceMac = mac;
+    document.getElementById('pinModalDeviceName').textContent = name;
+    document.getElementById('pinModalDeviceMac').textContent = mac;
+    document.getElementById('pinModalValue').textContent = `${pin.slice(0, 3)} ${pin.slice(3)}`;
+    const qrEl = document.getElementById('pinModalQr');
+    if (qrEl && window.HueMixQR) {
+        const pairingUrl = `${window.location.origin}/pairing#pin=${pin}`;
+        qrEl.innerHTML = window.HueMixQR.generateQrSvg(pairingUrl, 148);
+    }
+    document.getElementById('pinModal').classList.remove('hidden');
+}
+
+function closePinModal() {
+    document.getElementById('pinModal').classList.add('hidden');
+}
+
+function copyModalPin() {
+    if (!currentModalPin) return;
+    navigator.clipboard.writeText(currentModalPin).then(() => {
+        showSuccess(`Copied PIN ${currentModalPin} to clipboard`);
+    }).catch(() => {
+        showError('Could not copy PIN to clipboard');
+    });
+}
+
+function copyModalNfcUrl() {
+    if (!currentModalPin) return;
+    const url = `${window.location.origin}/pairing#pin=${currentModalPin}`;
+    navigator.clipboard.writeText(url).then(() => {
+        showSuccess('Copied NFC pairing URL to clipboard');
+    }).catch(() => {
+        showError('Could not copy NFC URL to clipboard');
+    });
+}
+
+function printModalPin() {
+    if (!currentModalPin) return;
+    window.printHueMixPinLabel(currentModalPin);
+}
 </script>
 
-<script type="module" src="{{ url_for('static', filename='js/pages/ota.js') }}"></script>
+<script src="{{ url_for('static', filename='js/qr_label.js') }}?v=2"></script>
+<script type="module" src="{{ url_for('static', filename='js/pages/ota.js') }}?v=2"></script>
 {% endblock %}

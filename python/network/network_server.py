@@ -8,6 +8,7 @@ import socket
 import threading
 import queue
 import logging
+import secrets
 import time
 from typing import Dict, Optional, List, Tuple
 from datetime import datetime
@@ -21,18 +22,24 @@ from services.hue_service import hue_service
 from constants import (
     DEFAULT_UDP_IP, DEFAULT_UDP_PORT, DEFAULT_GATEWAY_PORT,
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_GW_LIST_UPD, PKT_PING, PKT_PING_DEVICE, PKT_MOTION_EVENT, PKT_DOOR_EVENT,
-    PKT_OTA_READY, PKT_OTA_CHUNK_ACK, PKT_OTA_ABORT,
+    PKT_SYS_CMD,
+    PKT_OTA_NOTIFY, PKT_OTA_READY, PKT_OTA_CHUNK, PKT_OTA_COMPLETE, PKT_OTA_ABORT, PKT_OTA_CHUNK_ACK, PKT_OTA_CHECKPOINT_REQ,
     DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, DEV_PLUGIN_MARKER,
     MAX_GATEWAY_ATTEMPTS, GATEWAY_DELIVERY_TIMEOUT_SECONDS,
     TIMEOUT_SOCKET, OTA_READY_TIMEOUT, OTA_CHUNK_DATA_SIZE,
     OTA_CHUNK_ACK_TIMEOUT, OTA_CHUNK_MAX_RETRIES, OTA_CHECKPOINT_INTERVAL,
-    OTA_POST_UPDATE_TIMEOUT,
+    OTA_POST_UPDATE_TIMEOUT, OTA_MIN_BATTERY_PERCENT,
     RSSI_AUTO_PAIR_THRESHOLD, MAX_GATEWAYS_PER_PACKET,
     FILE_GATEWAYS, FILE_LIGHTSTRIPS, FILE_MOTION_SENSORS,
-    CMD_SET_MOTION_COOLDOWN, CMD_SET_MOTION_SLEEP, CMD_NIGHT_MODE_ON, CMD_NIGHT_MODE_OFF, CMD_NETNODE_WIFI_STATUS
+    CMD_SET_MOTION_COOLDOWN, CMD_SET_MOTION_SLEEP, CMD_NIGHT_MODE_ON, CMD_NIGHT_MODE_OFF, CMD_NETNODE_WIFI_STATUS,
+    CMD_UPGRADE_TO_V2, CMD_SET_PIN, CMD_SET_PIN_ACK, PIN_ACK_OK, PIN_ACK_ALREADY_SET,
+    CRYPTO_MODE_V1, CRYPTO_MODE_V2, CRYPTO_MODE_V2_UNVERIFIED, PACKET_TOTAL_SIZE,
+    V2_UDP_BUFFER_SIZE, V2_OVERHEAD, V2_MIN_FRAME_SIZE, V2_MAX_FRAME_ESP8266, V2_MAX_FRAME_ESP32, PROTO_VERSION_V2, PKT_PAIR_ACK,
 )
 from network.pairing_manager import pairing_manager
-from .packet_protocol import PacketEncoder, PacketDecoder, MACFormatter
+from .packet_protocol import PacketEncoder, PacketDecoder, PacketEncoderV2, PacketDecoderV2, MACFormatter, decode_dual
+from .security_store import security_store
+from .pairing_v2 import pairing_v2_manager, encode_key_distrib, KEY_DISTRIB_UPSERT, KEY_DISTRIB_REMOVE
 from .device_manager import device_manager
 from .serial_gateway_transport import SerialGatewayTransport
 
@@ -120,6 +127,8 @@ class NetworkServer:
         # OTA chunk ACK tracking: device_mac -> {event, last_chunk_index}
         self._ota_ack_events: Dict[str, Dict] = {}
         self._ota_ack_lock = threading.RLock()
+        self._ota_queue_lock = threading.Lock()
+        ota_manager.set_slot_released_callback(self._schedule_ota_queue_processing)
         
         # Gateway LED state tracking
         self._gateway_leds_enabled = True
@@ -331,6 +340,54 @@ class NetworkServer:
         """
 
         return self._send_with_fallback(target_mac, packet, wait_for_delivery, msg_id, gateway_preference)
+
+    def send_packet_to_device(
+        self,
+        target_mac: str,
+        pkt_type: int,
+        payload: bytes,
+        wait_for_delivery: bool = False,
+        msg_id: Optional[int] = None,
+        gateway_preference: Optional[str] = None,
+    ) -> bool:
+        """Dual-stack v1/v2 packet sender for plugins and custom device protocols.
+
+        Automatically encrypts `payload` with AES-128-GCM (Security v2) when `target_mac`
+        is v2-paired and `security_v2_send` is enabled, or falls back to a legacy 203-byte
+        FNV-signed v1 frame when `target_mac` is still on v1.
+        """
+        raw_payload = bytes(payload or b"")
+        if wait_for_delivery and msg_id is None:
+            msg_id = self.get_message_id()
+        effective_msg_id = 0 if msg_id is None else (int(msg_id) & 0xFF)
+
+        if self._use_v2_for_peer(target_mac):
+            max_pt = security_store.get_max_frame(target_mac) - V2_OVERHEAD
+            if len(raw_payload) > max_pt:
+                logger.error(
+                    f"Plugin v2 payload for {target_mac} (type={pkt_type:#x}) too large: "
+                    f"{len(raw_payload)} > {max_pt} B"
+                )
+                return False
+            if len(raw_payload) == 0:
+                raw_payload = b"\x00"
+            packet = self._encode_v2_for_peer(pkt_type, target_mac, raw_payload, msg_id=effective_msg_id)
+        else:
+            if len(raw_payload) > 185:
+                logger.error(
+                    f"Plugin v1 payload for {target_mac} (type={pkt_type:#x}) too large: "
+                    f"{len(raw_payload)} > 185 B"
+                )
+                return False
+            packet = self.encoder.encode_custom(pkt_type, target_mac, raw_payload, msg_id=effective_msg_id)
+
+        return self._send_with_fallback(
+            target_mac,
+            packet,
+            wait_for_delivery=wait_for_delivery,
+            msg_id=effective_msg_id if wait_for_delivery else msg_id,
+            gateway_preference=gateway_preference,
+        )
 
     def set_automation_engine(self, engine):
         """Set reference to the automation engine.
@@ -716,13 +773,17 @@ class NetworkServer:
         return True
 
     def _sync_serial_gateway_home_id(self, radio_mac: str) -> bool:
-        """Push the current HOME_ID to the direct serial radio node."""
+        """Push the current HOME_ID to the direct serial radio node (v1 only; v2 gateways receive HOME_ID during ECDH)."""
         if not self._serial_transport or not self._serial_transport.available:
             return False
 
         endpoint = self._serial_endpoint
         if not endpoint:
             return False
+
+        if self._use_v2_for_peer(radio_mac):
+            logger.debug(f"Skipping legacy v1 HOME_ID sync for v2-paired serial radio {radio_mac}")
+            return True
 
         packet = self.encoder.encode_pair_confirm('00:00:00:00:00:00', self.home_id)
         success = self._send_packet_to_gateway(endpoint, packet)
@@ -743,6 +804,11 @@ class NetworkServer:
 
         # Restore routing list in radio and in paired devices after radio reboot.
         self._broadcast_gateway_list(only_gateways=False)
+
+        # Sync all v2 device K_ack keys into the serial gateway's in-RAM peer table
+        # so it can immediately ACK v2 buttons/remotes/sensors after boot or reconnect.
+        if self._serial_endpoint and security_store.is_v2_device(radio_mac):
+            self._sync_all_v2_keys_to_gateway(radio_mac, self._serial_endpoint)
 
 
     def _serial_receive_loop(self):
@@ -786,7 +852,6 @@ class NetworkServer:
                     logger.warning("Serial gateway transport became unavailable; will reconnect")
                     self._drop_serial_transport(clear_gateway_entry=False)
                     break
-                time.sleep(0.01)
                 continue
 
             # Reuse existing processing path by using a synthetic sender endpoint.
@@ -842,8 +907,11 @@ class NetworkServer:
                 transport = self._serial_transport
                 endpoint = self._serial_endpoint
                 if transport and endpoint and self._is_serial_endpoint(endpoint) and transport.available:
-                    line = self._build_serial_dashboard_line()
-                    transport.send_dashboard_line(line)
+                    active_ota_mac = ota_manager.active_session_mac
+                    active_ota = ota_manager.get_session(active_ota_mac) if active_ota_mac else None
+                    if not (active_ota and active_ota.state == OTAState.TRANSFERRING):
+                        line = self._build_serial_dashboard_line()
+                        transport.send_dashboard_line(line)
             except Exception as e:
                 logger.debug(f"Serial dashboard publish error: {e}")
 
@@ -961,7 +1029,7 @@ class NetworkServer:
                 time.sleep(0.1)
                 continue
             try:
-                data, addr = self.sock.recvfrom(1024)
+                data, addr = self.sock.recvfrom(V2_UDP_BUFFER_SIZE)
                 
                 # Queue packet for processing
                 self.packet_queue.put((data, addr))
@@ -1002,6 +1070,13 @@ class NetworkServer:
 
     def _send_packet_to_gateway(self, gateway_endpoint: str, packet: bytes) -> bool:
         """Send packet to a gateway endpoint over UDP or serial transport."""
+        # Enforce allow_v1 on outbound traffic too (every legacy v1 frame is exactly 203 B; v2 is never 203 B)
+        if len(packet) == PACKET_TOTAL_SIZE and not config_manager.get_security_flags().get('allow_v1', True):
+            logger.debug(
+                f"SECURITY: Blocked outbound legacy v1 packet (type=0x{packet[0]:02X}) to {gateway_endpoint} because allow_v1=false"
+            )
+            return False
+
         if self._is_serial_endpoint(gateway_endpoint):
             if not self._serial_transport:
                 logger.warning(f"Serial gateway not available for endpoint {gateway_endpoint}")
@@ -1163,6 +1238,103 @@ class NetworkServer:
                 logger.error(f"Error in LED scheduler: {e}", exc_info=True)
                 time.sleep(60)
     
+    def _is_known_paired_mac(self, mac: str) -> bool:
+        """Return True if mac belongs to a registered gateway, device, or plugin binding."""
+        if not mac or mac == "00:00:00:00:00:00":
+            return False
+
+        with self._gateway_lock:
+            if mac in self._gateway_table:
+                return True
+            for info in self._gateway_table.values():
+                if info.get('wifi_mac') == mac:
+                    return True
+
+        if (
+            device_manager.get_gateway_by_wifi_mac(mac)
+            or device_manager.get_gateway_by_radio_mac(mac)
+            or device_manager.get_button_by_mac(mac)
+            or device_manager.get_light_by_mac(mac)
+            or device_manager.get_motion_sensor_by_mac(mac)
+            or device_manager.get_door_sensor_by_mac(mac)
+        ):
+            return True
+
+        if self._plugin_manager and self._plugin_manager.get_plugin_for_mac(mac):
+            return True
+
+        return False
+
+    def _try_reregister_authenticated_v2_device(
+        self, pkt_type: int, src_mac: str, payload: bytes, sender_ip: str
+    ) -> bool:
+        """Re-register an already AES-GCM-authenticated v2 device if pairing mode is open."""
+        gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
+
+        if pkt_type == PKT_BTN_EVENT:
+            parsed = self.decoder.parse_button_event(payload) or {}
+            btn_idx = parsed.get('button_index', -1)
+            raw_btn_count = parsed.get('button_count') or 0
+            is_remote = (btn_idx >= 0) or (raw_btn_count > 1)
+            btn_count = raw_btn_count if raw_btn_count > 0 else 4
+            dev_type = DEV_REMOTE if is_remote else DEV_BUTTON
+            if not pairing_manager.is_pairing_allowed(src_mac, dev_type, 0):
+                return False
+            if is_remote:
+                name = f"Remote {src_mac[-8:]}"
+                device_manager.add_button(src_mac, name, device_type=DEV_REMOTE, button_count=btn_count)
+                if gateway_radio_mac:
+                    device_manager.update_button_tracking(
+                        src_mac, gateway_radio_mac, 0,
+                        version=parsed.get('version'), platform=parsed.get('platform'), button_count=btn_count
+                    )
+            else:
+                name = f"Button {src_mac[-8:]}"
+                device_manager.add_button(src_mac, name)
+                if gateway_radio_mac:
+                    device_manager.update_button_tracking(
+                        src_mac, gateway_radio_mac, 0,
+                        version=parsed.get('version'), platform=parsed.get('platform')
+                    )
+            pairing_manager.record_device_paired(src_mac, dev_type, name, 'long_range')
+        elif pkt_type == PKT_MOTION_EVENT:
+            if not pairing_manager.is_pairing_allowed(src_mac, DEV_MOTION, 0):
+                return False
+            parsed = self.decoder.parse_motion_event(payload) or {}
+            name = f"Motion Sensor {src_mac[-8:]}"
+            device_manager.add_motion_sensor(src_mac, name)
+            if gateway_radio_mac:
+                device_manager.update_motion_sensor_tracking(
+                    src_mac, gateway_radio_mac, 0,
+                    version=parsed.get('version'), platform=parsed.get('platform')
+                )
+            pairing_manager.record_device_paired(src_mac, DEV_MOTION, name, 'long_range')
+        elif pkt_type == PKT_DOOR_EVENT:
+            if not pairing_manager.is_pairing_allowed(src_mac, DEV_DOOR, 0):
+                return False
+            parsed = self.decoder.parse_door_event(payload) or {}
+            name = f"Door Sensor {src_mac[-8:]}"
+            device_manager.add_door_sensor(src_mac, name)
+            if gateway_radio_mac:
+                device_manager.update_door_sensor_tracking(
+                    src_mac, gateway_radio_mac, 0,
+                    version=parsed.get('version'), platform=parsed.get('platform')
+                )
+            pairing_manager.record_device_paired(src_mac, DEV_DOOR, name, 'long_range')
+        else:
+            return False
+
+        # Ensure gateways also have its K_ack synced
+        self._push_key_distrib_to_gateways(
+            target_mac=src_mac,
+            crypto_mode=security_store.get_crypto_mode(src_mac),
+            max_frame=security_store.get_max_frame(src_mac),
+            k_ack=security_store.derive_k_ack(src_mac),
+            action=KEY_DISTRIB_UPSERT,
+        )
+        logger.info(f"🔄 Re-registered authenticated v2 device {src_mac} during pairing window")
+        return True
+
     def _handle_packet(self, data: bytes, addr: Tuple[str, int]):
         """Handle incoming packet.
         
@@ -1172,8 +1344,53 @@ class NetworkServer:
         """
         sender_ip, sender_port = addr
         
-        # Decode packet
-        packet = self.decoder.decode(data)
+        # Decode packet (dual-stack v1/v2 with runtime safety flags)
+        sec_flags = config_manager.get_security_flags()
+
+        # Intercept Flight 3 (PKT_PAIR_ACK) for active v2 pairing handshakes before general decode
+        if sec_flags['security_v2_pair'] and len(data) >= 39 and data[0] == PKT_PAIR_ACK and data[1] == PROTO_VERSION_V2:
+            result = pairing_v2_manager.handle_pair_ack(data, security_store)
+            if result:
+                self._finalize_v2_paired_device(result)
+            return
+
+        packet = decode_dual(
+            data,
+            self.decoder,
+            security_store,
+            allow_v2=sec_flags['security_v2_decode'],
+            allow_v1=sec_flags['allow_v1'],
+        )
+        if not packet and sec_flags['security_v2_decode'] and len(data) >= V2_MIN_FRAME_SIZE and data[1] == PROTO_VERSION_V2:
+            # Self-heal split-brain if a gateway committed v2 to NVS but its UDP PKT_PAIR_ACK
+            # was lost: verify the frame directly under our deterministic HKDF K_own.
+            hdr_v2 = PacketDecoderV2.parse_header(data)
+            if hdr_v2:
+                cand_mac = hdr_v2['source_mac']
+                is_known_gw = bool(
+                    device_manager.get_gateway_by_wifi_mac(cand_mac)
+                    or device_manager.get_gateway_by_radio_mac(cand_mac)
+                )
+                if (
+                    is_known_gw
+                    and not security_store.is_v2_device(cand_mac)
+                    and hdr_v2['key_epoch'] == security_store.epoch
+                ):
+                    cand_key = security_store.derive_k_own(cand_mac, epoch=security_store.epoch)
+                    recovered = PacketDecoderV2.decode_with_key(data, cand_key)
+                    if recovered is not None:
+                        security_store.set_device_record(
+                            cand_mac,
+                            CRYPTO_MODE_V2_UNVERIFIED,
+                            max_frame=V2_MAX_FRAME_ESP32,
+                            key_epoch=security_store.epoch,
+                        )
+                        security_store.set_pending_v2_upgrade(cand_mac, False)
+                        logger.info(
+                            f"🔐 Recovered Security v2 state for gateway {cand_mac} "
+                            f"from authenticated v2 packet (lost PKT_PAIR_ACK)"
+                        )
+                        packet = recovered
         if not packet:
             return  # Invalid packet
         
@@ -1181,6 +1398,41 @@ class NetworkServer:
         src_mac = packet['source_mac']
         is_paired = packet['is_paired']
         payload = packet['payload']
+        proto_ver = packet.get('protocol_version', 1)
+
+        # Replay protection & duplicate-retransmit dedupe for v2 packets
+        if proto_ver == PROTO_VERSION_V2:
+            replay_status = security_store.check_and_update_replay(
+                src_mac, packet['counter'], packet['ciphertext']
+            )
+            if replay_status == 'duplicate':
+                logger.debug(f"Duplicate v2 retransmission from {src_mac} counter={packet['counter']}; ignoring")
+                return
+            if replay_status == 'reject':
+                logger.warning(
+                    f"SECURITY: Rejected replayed/out-of-order v2 packet from {src_mac} "
+                    f"counter={packet['counter']}"
+                )
+                return
+
+        # Security Phase 0a: drop any non-HELLO packet from an unpaired or unknown source
+        if pkt_type != PKT_HELLO:
+            if not is_paired or not self._is_known_paired_mac(src_mac):
+                # If a previously v2-paired device was removed from the UI (but not factory-reset
+                # or revoked from security.json), it has ALREADY passed AES-128-GCM + replay checks.
+                # Allow it to re-register cleanly when the user opens Pairing mode.
+                if (
+                    proto_ver == PROTO_VERSION_V2
+                    and is_paired
+                    and self._try_reregister_authenticated_v2_device(pkt_type, src_mac, payload, sender_ip)
+                ):
+                    pass
+                else:
+                    logger.warning(
+                        f"SECURITY: Dropped non-HELLO packet type={pkt_type:#x} from "
+                        f"unpaired/unknown source {src_mac} (is_paired={is_paired})"
+                    )
+                    return
         
         if pkt_type != PKT_PING:
             with self._gateway_lock:
@@ -1206,6 +1458,7 @@ class NetworkServer:
                 'msg_id': packet['msg_id'],
                 'payload': payload,
                 'is_paired': is_paired,
+                'protocol_version': proto_ver,
                 'sender_ip': sender_ip,
                 'gateway_radio_mac': gateway_radio_mac,
             })
@@ -1230,7 +1483,8 @@ class NetworkServer:
             self._handle_ping_response(src_mac, payload, sender_ip)
         
         elif pkt_type == PKT_PING_DEVICE:
-            self._handle_ping_device_response(src_mac, payload, sender_ip)
+            rssi_v2 = packet.get('rssi') if proto_ver == PROTO_VERSION_V2 else None
+            self._handle_ping_device_response(src_mac, payload, sender_ip, rssi_v2=rssi_v2)
         
         elif pkt_type == PKT_OTA_READY:
             self._handle_ota_ready(src_mac, payload, sender_ip)
@@ -1241,9 +1495,16 @@ class NetworkServer:
         elif pkt_type == PKT_OTA_ABORT:
             self._handle_ota_abort_from_device(src_mac, payload)
         
+        elif pkt_type == PKT_SYS_CMD and proto_ver == PROTO_VERSION_V2:
+            self._handle_v2_sys_cmd(src_mac, payload, sender_ip)
+
         elif pkt_type == PKT_GW_LIST_UPD:
             # Gateway received our list - no action needed
             pass
+
+        # Deliver any queued v2 upgrade or PIN provisioning command while sleepy device is awake
+        if is_paired and pkt_type != PKT_SYS_CMD:
+            self._flush_pending_security_actions(src_mac, sender_ip, proto_ver)
     
     def _handle_hello(self, src_mac: str, payload: bytes, sender_ip: str, is_paired: bool):
         """Handle HELLO packet from device.
@@ -1260,6 +1521,19 @@ class NetworkServer:
             return
         
         dev_type = hello_data['device_type']
+
+        # In-place v1 -> v2 TOFU upgrade triggered from the OTA page
+        if (
+            is_paired
+            and dev_type != DEV_GATEWAY
+            and security_store.is_pending_v2_upgrade(src_mac)
+            and not security_store.is_v2_device(src_mac)
+            and hello_data.get('proto_version', 1) >= PROTO_VERSION_V2
+            and hello_data.get('ecdh_pub')
+        ):
+            logger.info(f"🔐 Processing in-place v2 upgrade HELLO from {src_mac} (type={dev_type})")
+            if self._try_start_v2_pairing(src_mac, dev_type, hello_data, sender_ip):
+                return
         
         # Handle plugin device (unpaired, sends with UUID marker)
         if dev_type == DEV_PLUGIN_MARKER:
@@ -1298,7 +1572,100 @@ class NetworkServer:
         if not radio_mac or radio_mac == "00:00:00:00:00:00":
             logger.warning(f"Gateway {wifi_mac} HELLO missing radio_mac")
             return
+
+        # Radio-node Security v2 bootstrap HELLO (sourceMAC == radio_mac)
+        if wifi_mac.upper() == radio_mac.upper():
+            sec_flags = config_manager.get_security_flags()
+            is_known_gateway_radio = bool(device_manager.get_gateway_by_radio_mac(radio_mac))
+            has_v2_ecdh = (
+                sec_flags['security_v2_pair']
+                and hello_data.get('proto_version', 1) >= PROTO_VERSION_V2
+                and bool(hello_data.get('ecdh_pub'))
+            )
+            # SECURITY: Never run DEV_GATEWAY v2 pairing for a non-gateway MAC (blocks forged
+            # DEV_GATEWAY HELLO key-extraction attacks against buttons/lightstrips/sensors).
+            # Gateways on the local LAN are TOFU-only and auto-pair / auto-re-pair as Security v2.
+            if security_store.is_v2_device(radio_mac):
+                if not is_known_gateway_radio:
+                    logger.warning(
+                        f"SECURITY: Ignored forged/unexpected DEV_GATEWAY HELLO for already-v2 MAC {radio_mac}"
+                    )
+                    return
+                if has_v2_ecdh:
+                    frame = pairing_v2_manager.handle_hello_v2(
+                        device_mac=radio_mac,
+                        device_type=DEV_GATEWAY,
+                        hello_data=hello_data,
+                        home_id=self.home_id,
+                        sender_ip=sender_ip,
+                        store=security_store,
+                        active_pin=None,
+                    )
+                    if frame:
+                        self._send_packet_to_gateway(sender_ip, frame)
+                        logger.info(f"🔐 Re-pairing gateway radio node as Security v2: {radio_mac}")
+                    return
+                self._sync_all_v2_keys_to_gateway(radio_mac, sender_ip)
+                return
+
+            if has_v2_ecdh:
+                is_other_registered_device = (
+                    not is_known_gateway_radio
+                    and self._is_known_paired_mac(radio_mac)
+                )
+                if is_other_registered_device:
+                    logger.warning(
+                        f"SECURITY: Rejected DEV_GATEWAY v2 HELLO impersonating non-gateway device {radio_mac}"
+                    )
+                    return
+
+                frame = pairing_v2_manager.handle_hello_v2(
+                    device_mac=radio_mac,
+                    device_type=DEV_GATEWAY,
+                    hello_data=hello_data,
+                    home_id=self.home_id,
+                    sender_ip=sender_ip,
+                    store=security_store,
+                    active_pin=None,
+                )
+                if frame:
+                    self._send_packet_to_gateway(sender_ip, frame)
+            return
         
+        sec_flags = config_manager.get_security_flags()
+        is_v2_capable_gw = (
+            hello_data.get('proto_version', 1) >= PROTO_VERSION_V2
+            and bool(hello_data.get('ecdh_pub'))
+        )
+
+        # Prevent a deleted/revoked gateway that was NOT factory-reset from silently
+        # re-registering itself as a legacy v1 device when it reconnects with stale HOME_ID/v2 keys.
+        existing_gw = (
+            device_manager.get_gateway_by_wifi_mac(wifi_mac)
+            or device_manager.get_gateway_by_radio_mac(radio_mac)
+        )
+        if not existing_gw:
+            is_stale_v2_gw = (
+                is_paired
+                and hello_data.get('proto_version', 1) >= PROTO_VERSION_V2
+                and not hello_data.get('ecdh_pub')
+            )
+            is_revoked_unreset = (
+                is_paired
+                and (security_store.is_revoked(wifi_mac) or security_store.is_revoked(radio_mac))
+            )
+            if is_stale_v2_gw or is_revoked_unreset:
+                logger.warning(
+                    f"SECURITY: Ignored HELLO from removed/revoked gateway {wifi_mac} (radio={radio_mac}) "
+                    f"— factory reset the gateway to re-pair"
+                )
+                return
+            if sec_flags.get('require_v2') and not is_v2_capable_gw:
+                logger.warning(
+                    f"SECURITY: Refused legacy v1 gateway {wifi_mac} (require_v2=true)"
+                )
+                return
+
         # Update gateway table
         is_new_gateway = False
         with self._gateway_lock:
@@ -1372,20 +1739,80 @@ class NetworkServer:
                     logger.info(f"Syncing LED ON to newly online gateway {wifi_mac} (schedule-based)")
                     self.set_gateway_leds(wifi_mac, True)
         
-        # If unpaired, send pairing confirmation
+        # If unpaired, send pairing confirmation (prefer v2 handshake when enabled; respect require_v2)
         if not is_paired:
-            # Auto-pair gateways
-            self._send_pair_confirm(wifi_mac, sender_ip)
-            logger.info(f"Auto-paired gateway: {wifi_mac}")
-            # Record in pairing manager
-            pairing_manager.record_device_paired(wifi_mac, DEV_GATEWAY, f"Gateway {wifi_mac[-8:]}", 'wifi')
+            if sec_flags['security_v2_pair'] and is_v2_capable_gw:
+                frame = pairing_v2_manager.handle_hello_v2(
+                    device_mac=wifi_mac,
+                    device_type=DEV_GATEWAY,
+                    hello_data=hello_data,
+                    home_id=self.home_id,
+                    sender_ip=sender_ip,
+                    store=security_store,
+                    active_pin=None,
+                )
+                if frame:
+                    self._send_packet_to_gateway(sender_ip, frame)
+                    logger.info(f"🔐 Started Security v2 pairing for gateway net node: {wifi_mac}")
+            elif sec_flags.get('require_v2'):
+                logger.warning(f"SECURITY: Refused legacy v1 auto-pairing for gateway {wifi_mac} (require_v2=true)")
+            else:
+                # Auto-pair legacy v1 gateways
+                self._send_pair_confirm(wifi_mac, sender_ip)
+                logger.info(f"Auto-paired gateway: {wifi_mac}")
+                pairing_manager.record_device_paired(wifi_mac, DEV_GATEWAY, f"Gateway {wifi_mac[-8:]}", 'wifi')
         
-        if is_new_gateway:
+        if is_new_gateway and is_paired:
             pairing_manager.record_device_paired(wifi_mac, DEV_GATEWAY, f"Gateway {wifi_mac[-8:]}", 'wifi')
 
         if is_paired:
             self._broadcast_gateway_list((not is_new_gateway))
+            if security_store.is_v2_device(radio_mac):
+                self._sync_all_v2_keys_to_gateway(radio_mac, sender_ip)
+
+        # Net-node Security v2 in-place upgrade (only for already-paired v1 gateways)
+        if (
+            is_paired
+            and sec_flags['security_v2_pair']
+            and is_v2_capable_gw
+            and not security_store.is_v2_device(wifi_mac)
+        ):
+            frame = pairing_v2_manager.handle_hello_v2(
+                device_mac=wifi_mac,
+                device_type=DEV_GATEWAY,
+                hello_data=hello_data,
+                home_id=self.home_id,
+                sender_ip=sender_ip,
+                store=security_store,
+                active_pin=pairing_manager.get_active_pin(),
+            )
+            if frame:
+                self._send_packet_to_gateway(sender_ip, frame)
     
+    def _can_secure_short_range_auto_pair(self, device_mac: str, hello_data: Dict, rssi: int) -> bool:
+        """Return True ONLY when short-range auto-pairing is enabled AND the device is a
+        non-revoked Security v2 device with a saved 6-digit PIN closer than -50 dBm.
+        Never permits legacy v1 or TOFU auto-pairing.
+        """
+        if not config_manager.get_allow_rssi_auto_pair():
+            return False
+        if rssi <= RSSI_AUTO_PAIR_THRESHOLD:
+            return False
+        sec_flags = config_manager.get_security_flags()
+        if not sec_flags.get('security_v2_pair'):
+            return False
+        if hello_data.get('proto_version', 1) < PROTO_VERSION_V2:
+            return False
+        if not hello_data.get('has_pin') or not hello_data.get('ecdh_pub') or not hello_data.get('nonce_d'):
+            return False
+        if security_store.is_revoked(device_mac):
+            logger.info(f"SECURITY: Refused short-range auto-pair for revoked device {device_mac}")
+            return False
+        saved_pin = security_store.get_device_pin(device_mac)
+        if not saved_pin or len(saved_pin) != 6 or not saved_pin.isdigit():
+            return False
+        return True
+
     def _handle_button_hello(self, button_mac: str, hello_data: Dict, sender_ip: str, is_paired: bool):
         """Handle HELLO from button.
         
@@ -1427,11 +1854,13 @@ class NetworkServer:
                     should_pair = True
                     pairing_mode_active = True
             
-            # If pairing mode not active, check RSSI threshold
-            if not pairing_mode_active and rssi > RSSI_AUTO_PAIR_THRESHOLD:
+            # If pairing mode not active, only allow secure v2 Known-PIN short-range auto-pair (> -50 dBm)
+            if not pairing_mode_active and self._can_secure_short_range_auto_pair(button_mac, hello_data, rssi):
                 should_pair = True
             
             if should_pair:
+                if self._try_start_v2_pairing(button_mac, DEV_BUTTON, hello_data, sender_ip):
+                    return
                 self._send_pair_confirm(button_mac, sender_ip)
                 device_manager.add_button(button_mac, f"Button {button_mac[-8:]}")
                 
@@ -1497,11 +1926,13 @@ class NetworkServer:
                     should_pair = True
                     pairing_mode_active = True
             
-            # If pairing mode not active, check RSSI threshold
-            if not pairing_mode_active and rssi > RSSI_AUTO_PAIR_THRESHOLD:
+            # If pairing mode not active, only allow secure v2 Known-PIN short-range auto-pair (> -50 dBm)
+            if not pairing_mode_active and self._can_secure_short_range_auto_pair(light_mac, hello_data, rssi):
                 should_pair = True
             
             if should_pair:
+                if self._try_start_v2_pairing(light_mac, DEV_LIGHT, hello_data, sender_ip):
+                    return
                 self._send_pair_confirm(light_mac, sender_ip)
                 device_manager.add_lightstrip(
                     light_mac, 
@@ -1526,7 +1957,7 @@ class NetworkServer:
                 with self._gateway_lock:
                     all_gateway_macs = list(self._gateway_table.keys())
                     if all_gateway_macs:
-                        light_packet = self.encoder.encode_gateway_list_for_device(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
+                        light_packet = self._encode_gateway_list_dual(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
                         if self._send_packet_to_gateway(sender_ip, light_packet):
                             logger.debug(f"Sent initial gateway list to {light_mac}")
                 
@@ -1568,7 +1999,7 @@ class NetworkServer:
                 with self._gateway_lock:
                     all_gateway_macs = list(self._gateway_table.keys())
                     if all_gateway_macs:
-                        light_packet = self.encoder.encode_gateway_list_for_device(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
+                        light_packet = self._encode_gateway_list_dual(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
                         if self._send_packet_to_gateway(sender_ip, light_packet):
                             logger.debug(f"Sent initial gateway list to {light_mac}")
             
@@ -1582,7 +2013,10 @@ class NetworkServer:
                     platform=hello_data.get('platform'),
                     model_id=hello_data.get('model_id')
                 )
-                logger.debug(f"Light {light_mac} online via {gateway_radio_mac} / {sender_ip} (RSSI: {rssi} dBm)")
+                logger.info(
+                    f"💡 Light {light_mac} HELLO via {gateway_radio_mac} / {sender_ip} "
+                    f"(v{hello_data.get('version', '?')}, RSSI: {rssi} dBm)"
+                )
             else:
                 logger.warning(f"Light {light_mac} HELLO from unknown gateway {sender_ip}")
             
@@ -1630,11 +2064,13 @@ class NetworkServer:
                     should_pair = True
                     pairing_mode_active = True
             
-            # If pairing mode not active, check RSSI threshold
-            if not pairing_mode_active and rssi > RSSI_AUTO_PAIR_THRESHOLD:
+            # If pairing mode not active, only allow secure v2 Known-PIN short-range auto-pair (> -50 dBm)
+            if not pairing_mode_active and self._can_secure_short_range_auto_pair(remote_mac, hello_data, rssi):
                 should_pair = True
             
             if should_pair:
+                if self._try_start_v2_pairing(remote_mac, DEV_REMOTE, hello_data, sender_ip):
+                    return
                 self._send_pair_confirm(remote_mac, sender_ip)
                 button_count = hello_data.get('button_count', 4)
                 device_name = f"Remote {remote_mac[-8:]}"
@@ -1700,8 +2136,11 @@ class NetworkServer:
         if not is_paired:
             # UNPAIRED - Check pairing mode
             pairing_mode_active = pairing_manager.is_pairing_allowed(sensor_mac, DEV_MOTION, rssi)
-            
-            if rssi >= RSSI_AUTO_PAIR_THRESHOLD or pairing_mode_active:
+            rssi_auto_pair = self._can_secure_short_range_auto_pair(sensor_mac, hello_data, rssi)
+
+            if rssi_auto_pair or pairing_mode_active:
+                if self._try_start_v2_pairing(sensor_mac, DEV_MOTION, hello_data, sender_ip):
+                    return
                 # AUTO-PAIR or PAIRING MODE
                 logger.info(f"📡 Motion sensor {sensor_mac} RSSI: {rssi} dBm → Pairing...")
                 self._send_pair_confirm(sensor_mac, sender_ip)
@@ -1767,8 +2206,11 @@ class NetworkServer:
         if not is_paired:
             # UNPAIRED - Check pairing mode
             pairing_mode_active = pairing_manager.is_pairing_allowed(sensor_mac, DEV_DOOR, rssi)
+            rssi_auto_pair = self._can_secure_short_range_auto_pair(sensor_mac, hello_data, rssi)
 
-            if rssi >= RSSI_AUTO_PAIR_THRESHOLD or pairing_mode_active:
+            if rssi_auto_pair or pairing_mode_active:
+                if self._try_start_v2_pairing(sensor_mac, DEV_DOOR, hello_data, sender_ip):
+                    return
                 # AUTO-PAIR or PAIRING MODE
                 logger.info(f"🚪 Door sensor {sensor_mac} RSSI: {rssi} dBm → Pairing...")
                 self._send_pair_confirm(sensor_mac, sender_ip)
@@ -1871,7 +2313,14 @@ class NetworkServer:
             except Exception:
                 pairing_mode_active = False
 
-            if rssi >= RSSI_AUTO_PAIR_THRESHOLD or pairing_mode_active:
+            rssi_auto_pair = self._can_secure_short_range_auto_pair(device_mac, hello_data, rssi)
+            if rssi_auto_pair or pairing_mode_active:
+                sec_flags = config_manager.get_security_flags()
+                if sec_flags.get('require_v2') and hello_data.get('proto_version', 1) < PROTO_VERSION_V2:
+                    logger.warning(f"SECURITY: Refused legacy v1 pairing for plugin device {device_mac} (require_v2=true)")
+                    return
+                if self._try_start_v2_pairing(device_mac, DEV_PLUGIN_MARKER, hello_data, sender_ip):
+                    return
                 # Confirm pairing to device via gateway
                 try:
                     self._send_pair_confirm(device_mac, sender_ip)
@@ -2065,10 +2514,10 @@ class NetworkServer:
                             msg_id = self._next_msg_id
                             self._next_msg_id = (self._next_msg_id + 1) % 256
                         
-                        # Encode packet with uint32 cooldown value
-                        packet = self.encoder.encode_sys_cmd(
-                            sensor_mac, 
-                            CMD_SET_MOTION_COOLDOWN, 
+                        # Encode packet with uint32 cooldown value (dual-stack v1/v2)
+                        packet = self._encode_sys_cmd_dual(
+                            sensor_mac,
+                            CMD_SET_MOTION_COOLDOWN,
                             value=0,
                             msg_id=msg_id,
                             value_uint32=cooldown_seconds
@@ -2180,10 +2629,10 @@ class NetworkServer:
                 msg_id = self._next_msg_id
                 self._next_msg_id = (self._next_msg_id + 1) % 256
             
-            # Encode packet with uint32 sleep duration
-            packet = self.encoder.encode_sys_cmd(
-                sensor_mac, 
-                CMD_SET_MOTION_SLEEP, 
+            # Encode packet with uint32 sleep duration (dual-stack v1/v2)
+            packet = self._encode_sys_cmd_dual(
+                sensor_mac,
+                CMD_SET_MOTION_SLEEP,
                 value=0,
                 msg_id=msg_id,
                 value_uint32=sleep_seconds
@@ -2256,6 +2705,598 @@ class NetworkServer:
         packet = self.encoder.encode_pair_confirm(target_mac, self.home_id)
         if self._send_packet_to_gateway(gateway_ip, packet):
             logger.debug(f"Sent PAIR_CONFIRM to {target_mac} via {gateway_ip}")
+
+    def _try_start_v2_pairing(self, device_mac: str, device_type: int, hello_data: Dict, sender_ip: str) -> bool:
+        """Initiate Security v2 ECDH+PIN/TOFU handshake if enabled and device supports v2.
+
+        Returns True if handled as v2 (or blocked from legacy v1 fallback).
+        """
+        sec_flags = config_manager.get_security_flags()
+        proto_ver = hello_data.get('proto_version', 1)
+        active_pin = pairing_manager.get_active_pin()
+
+        if sec_flags['security_v2_pair']:
+            if proto_ver >= PROTO_VERSION_V2 and hello_data.get('ecdh_pub'):
+                frame = pairing_v2_manager.handle_hello_v2(
+                    device_mac=device_mac,
+                    device_type=device_type,
+                    hello_data=hello_data,
+                    home_id=self.home_id,
+                    sender_ip=sender_ip,
+                    store=security_store,
+                    active_pin=active_pin,
+                )
+                if frame:
+                    self._send_packet_to_gateway(sender_ip, frame)
+                return True
+
+            # Never fall back to v1 if device advertised v2 (e.g. in PIN backoff),
+            # has an active/locked-out v2 handshake, or the user entered a 6-digit PIN.
+            if (
+                proto_ver >= PROTO_VERSION_V2
+                or pairing_v2_manager.has_pending(device_mac)
+                or pairing_v2_manager.is_locked_out(device_mac)
+                or active_pin
+            ):
+                logger.warning(
+                    f"SECURITY: Refused v1 fallback for {device_mac} "
+                    f"(proto_ver={proto_ver}, pin_entered={bool(active_pin)}, "
+                    f"pending_v2={pairing_v2_manager.has_pending(device_mac)})"
+                )
+                return True
+
+        if sec_flags['require_v2']:
+            logger.warning(
+                f"SECURITY: Refused v1 pairing for {device_mac} (type={device_type}) because require_v2 is enabled"
+            )
+            return True
+
+        return False
+
+    def _push_key_distrib_to_gateways(self, target_mac: str, crypto_mode: str, max_frame: int, k_ack: bytes, action: int = KEY_DISTRIB_UPSERT):
+        """Push per-device K_ack & mode entry to all v2-capable gateways."""
+        with self._gateway_lock:
+            gateways_snapshot = list(self._gateway_table.items())
+
+        for radio_mac, info in gateways_snapshot:
+            if not security_store.is_v2_device(radio_mac):
+                continue
+            try:
+                pkt = encode_key_distrib(
+                    gw_radio_mac=radio_mac,
+                    target_mac=target_mac,
+                    crypto_mode=crypto_mode,
+                    max_frame=max_frame,
+                    k_ack=k_ack,
+                    action=action,
+                    store=security_store,
+                )
+                self._send_packet_to_gateway(info['ip_address'], pkt)
+            except Exception as exc:
+                logger.error(f"Failed to push PKT_KEY_DISTRIB for {target_mac} to gateway {radio_mac}: {exc}")
+
+    def _sync_all_v2_keys_to_gateway(self, gw_radio_mac: str, gateway_endpoint: str):
+        """Push K_ack & mode entries for all v2 devices (and prune revoked ones) to one v2-paired gateway."""
+        if not security_store.is_v2_device(gw_radio_mac):
+            return
+        devices = security_store.get_all_devices_snapshot()
+        pushed = 0
+        pruned = 0
+        for dev_mac, rec in devices.items():
+            if dev_mac.upper() == gw_radio_mac.upper():
+                continue
+            if rec.get("revoked"):
+                try:
+                    pkt = encode_key_distrib(
+                        gw_radio_mac=gw_radio_mac,
+                        target_mac=dev_mac,
+                        crypto_mode=CRYPTO_MODE_V1,
+                        max_frame=V2_MAX_FRAME_ESP8266,
+                        k_ack=b"\x00" * 16,
+                        action=KEY_DISTRIB_REMOVE,
+                        store=security_store,
+                    )
+                    if self._send_packet_to_gateway(gateway_endpoint, pkt):
+                        pruned += 1
+                except Exception as exc:
+                    logger.error(f"Failed pruning revoked K_ack for {dev_mac} on gateway {gw_radio_mac}: {exc}")
+                continue
+            mode = rec.get("crypto_mode", "v1")
+            if mode not in ("v2", "v2-unverified"):
+                continue
+            try:
+                pkt = encode_key_distrib(
+                    gw_radio_mac=gw_radio_mac,
+                    target_mac=dev_mac,
+                    crypto_mode=mode,
+                    max_frame=int(rec.get("max_frame", 250)),
+                    k_ack=security_store.derive_k_ack(dev_mac),
+                    action=KEY_DISTRIB_UPSERT,
+                    store=security_store,
+                )
+                if self._send_packet_to_gateway(gateway_endpoint, pkt):
+                    pushed += 1
+            except Exception as exc:
+                logger.error(f"Failed syncing K_ack for {dev_mac} to gateway {gw_radio_mac}: {exc}")
+        if pushed > 0 or pruned > 0:
+            logger.info(f"🔑 Synced {pushed} v2 device K_ack key(s) and pruned {pruned} revoked key(s) on gateway {gw_radio_mac}")
+
+    def _finalize_v2_paired_device(self, result: Dict):
+        """Register a device after its Flight 3 PKT_PAIR_ACK succeeds and push K_ack to gateways."""
+        mac = result['device_mac']
+        dev_type = result['device_type']
+        sender_ip = result['sender_ip']
+        hello_data = result.get('hello_data', {})
+        rssi = hello_data.get('rssi', -100)
+        gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
+
+        was_upgrade = security_store.is_pending_v2_upgrade(mac)
+        security_store.set_pending_v2_upgrade(mac, False)
+
+        if dev_type == DEV_GATEWAY:
+            gw = device_manager.get_gateway_by_radio_mac(mac) or device_manager.get_gateway_by_wifi_mac(mac)
+            gw_wifi_mac = gw.get('mac_address', mac) if gw else mac
+            gw_name = gw.get('name', f"Gateway {gw_wifi_mac[-8:]}") if gw else f"Gateway {mac[-8:]}"
+            pairing_manager.record_device_paired(gw_wifi_mac, DEV_GATEWAY, gw_name, 'wifi')
+            logger.info(f"🌐 Gateway node {mac} upgraded to Security v2 ({result['crypto_mode']})")
+            # Only push K_ack peer table to the radio node (not the WiFi net node)
+            if gw and gw.get('radio_mac', '').upper() == mac.upper():
+                self._sync_all_v2_keys_to_gateway(mac, sender_ip)
+            return
+
+        if dev_type == DEV_BUTTON:
+            existing = device_manager.get_button_by_mac(mac)
+            name = existing.get('name', f"Button {mac[-8:]}") if existing else f"Button {mac[-8:]}"
+            if not existing:
+                device_manager.add_button(mac, name)
+            if gateway_radio_mac:
+                device_manager.update_button_tracking(mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
+            if not was_upgrade:
+                pairing_manager.record_device_paired(mac, DEV_BUTTON, name, 'long_range')
+        elif dev_type == DEV_REMOTE:
+            existing = device_manager.get_button_by_mac(mac)
+            name = existing.get('name', f"Remote {mac[-8:]}") if existing else f"Remote {mac[-8:]}"
+            btn_count = hello_data.get('button_count', 4)
+            if not existing:
+                device_manager.add_button(mac, name, device_type=DEV_REMOTE, button_count=btn_count)
+            if gateway_radio_mac:
+                device_manager.update_button_tracking(mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'), button_count=btn_count)
+            if not was_upgrade:
+                pairing_manager.record_device_paired(mac, DEV_REMOTE, name, 'long_range')
+        elif dev_type == DEV_LIGHT:
+            existing = device_manager.get_light_by_mac(mac)
+            name = existing.get('name', f"Light {mac[-8:]}") if existing else f"Light {mac[-8:]}"
+            if not existing:
+                device_manager.add_lightstrip(mac, name, hello_data.get('num_leds', 60), hello_data.get('is_rgbw', False), model_id=hello_data.get('model_id'))
+            if gateway_radio_mac:
+                device_manager.update_light_gateway(mac, gateway_radio_mac, rssi=rssi, version=hello_data.get('version'), platform=hello_data.get('platform'), model_id=hello_data.get('model_id'))
+            if not was_upgrade:
+                pairing_manager.record_device_paired(mac, DEV_LIGHT, name, 'long_range')
+        elif dev_type == DEV_MOTION:
+            existing = device_manager.get_motion_sensor_by_mac(mac)
+            name = existing.get('name', f"Motion Sensor {mac[-8:]}") if existing else f"Motion Sensor {mac[-8:]}"
+            if not existing:
+                device_manager.add_motion_sensor(mac, name)
+            if gateway_radio_mac:
+                device_manager.update_motion_sensor_tracking(mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'))
+            if not was_upgrade:
+                pairing_manager.record_device_paired(mac, DEV_MOTION, name, 'long_range')
+        elif dev_type == DEV_DOOR:
+            existing = device_manager.get_door_sensor_by_mac(mac)
+            name = existing.get('name', f"Door Sensor {mac[-8:]}") if existing else f"Door Sensor {mac[-8:]}"
+            if not existing:
+                device_manager.add_door_sensor(mac, name)
+            device_manager.update_door_sensor_tracking(mac, gateway_radio_mac, rssi, version=hello_data.get('version'), platform=hello_data.get('platform'), battery_type=hello_data.get('battery_type', 'li_ion'))
+            if not was_upgrade:
+                pairing_manager.record_device_paired(mac, DEV_DOOR, name, 'long_range')
+        elif dev_type == DEV_PLUGIN_MARKER:
+            plugin_uuid = hello_data.get('plugin_uuid')
+            plugin_device_type = hello_data.get('plugin_device_type', 0)
+            plugin = self._plugin_manager.get_plugin_by_uuid(plugin_uuid) if (self._plugin_manager and plugin_uuid) else None
+            plugin_id = (plugin.get('plugin_id') or plugin.get('id') or plugin_uuid) if plugin else plugin_uuid
+            if self._plugin_manager and plugin_id:
+                try:
+                    self._plugin_manager.bind_mac_to_plugin(mac, plugin_id)
+                except Exception:
+                    logger.exception(f"Failed to bind v2 plugin device {mac} to plugin {plugin_id}")
+            device_name = "Plugin Device"
+            if plugin:
+                try:
+                    for device in (plugin.get('devices') or []):
+                        if int(device.get('device_type', -1)) == int(plugin_device_type):
+                            manifest_name = str(device.get('name') or '').strip()
+                            if manifest_name:
+                                device_name = manifest_name
+                            break
+                except Exception:
+                    logger.exception(f"Failed to resolve manifest device name for v2 plugin device {mac}")
+            if not was_upgrade and plugin_id:
+                pairing_manager.record_device_paired(
+                    mac,
+                    f"{plugin_device_type}:{plugin_id}",
+                    f"{device_name} {mac[-8:]}",
+                    'long_range',
+                )
+            if self._plugin_manager and plugin_id:
+                try:
+                    self._plugin_manager.dispatch_event('plugin_hello', {
+                        'device_mac': mac,
+                        'plugin_uuid': plugin_uuid,
+                        'plugin_device_type': plugin_device_type,
+                        'plugin_id': plugin_id,
+                        'rssi': rssi,
+                        'version': hello_data.get('version'),
+                        'platform': hello_data.get('platform'),
+                        'sender_ip': sender_ip,
+                        'gateway_radio_mac': gateway_radio_mac,
+                        'is_paired': True,
+                    })
+                except Exception:
+                    logger.exception(f"Failed to dispatch plugin_hello for v2 device {mac} to plugin {plugin_id}")
+
+        self._push_key_distrib_to_gateways(
+            target_mac=mac,
+            crypto_mode=result['crypto_mode'],
+            max_frame=result['max_frame'],
+            k_ack=result['k_ack'],
+            action=KEY_DISTRIB_UPSERT,
+        )
+
+    def _resolve_gateway_endpoint_for_mac(self, mac: str) -> Optional[str]:
+        """Resolve the best gateway endpoint (IP or serial://) to reach a given device MAC."""
+        norm = MACFormatter.format_with_colons(mac)
+        gw = device_manager.get_gateway_by_wifi_mac(norm) or device_manager.get_gateway_by_radio_mac(norm)
+        if gw:
+            return gw.get('transport_endpoint') or gw.get('ip_address')
+
+        preferred_gw_mac = None
+        light = device_manager.get_light_by_mac(norm)
+        if light:
+            preferred_gw_mac = light.get('gateway_mac') or light.get('last_gateway')
+        if not preferred_gw_mac:
+            btn = device_manager.get_button_by_mac(norm)
+            if btn:
+                preferred_gw_mac = btn.get('last_gateway') or btn.get('gateway_mac')
+        if not preferred_gw_mac:
+            motion = device_manager.get_motion_sensor_by_mac(norm)
+            if motion:
+                preferred_gw_mac = motion.get('last_gateway') or motion.get('gateway_mac')
+        if not preferred_gw_mac:
+            door = device_manager.get_door_sensor_by_mac(norm)
+            if door:
+                preferred_gw_mac = door.get('last_gateway') or door.get('gateway_mac')
+
+        with self._gateway_lock:
+            if preferred_gw_mac and preferred_gw_mac in self._gateway_table:
+                return self._gateway_table[preferred_gw_mac]['ip_address']
+            for info in self._gateway_table.values():
+                if info.get('ip_address'):
+                    return info['ip_address']
+        return None
+
+    def _use_v2_for_peer(self, mac: str) -> bool:
+        """Return True if outbound packets to `mac` should be encrypted under Security v2."""
+        sec_flags = config_manager.get_security_flags()
+        return bool(sec_flags.get('security_v2_send') and security_store.is_v2_device(mac))
+
+    def _encode_v2_for_peer(self, pkt_type: int, target_mac: str, plaintext: bytes, msg_id: int = 0) -> bytes:
+        return PacketEncoderV2.encode(
+            pkt_type=pkt_type,
+            src_mac="00:00:00:00:00:00",
+            dst_mac=target_mac,
+            msg_id=msg_id,
+            counter=security_store.next_backend_tx_counter(),
+            key_epoch=security_store.epoch,
+            plaintext=plaintext,
+            key=security_store.derive_k_own(target_mac),
+        )
+
+    def _encode_sys_cmd_dual(self, target_mac: str, command: int, value: int = 0, msg_id: int = 0, value_uint32: Optional[int] = None) -> bytes:
+        if self._use_v2_for_peer(target_mac):
+            if value_uint32 is not None:
+                pt = struct.pack('<BBI', command & 0xFF, value & 0xFF, value_uint32 & 0xFFFFFFFF)
+            else:
+                pt = struct.pack('<BB', command & 0xFF, value & 0xFF)
+            return self._encode_v2_for_peer(PKT_SYS_CMD, target_mac, pt, msg_id)
+        return self.encoder.encode_sys_cmd(target_mac, command, value, msg_id, value_uint32)
+
+    def _encode_gateway_list_dual(self, target_mac: str, gateway_macs: List[str], msg_id: int = 0) -> bytes:
+        if self._use_v2_for_peer(target_mac):
+            macs = gateway_macs[:MAX_GATEWAYS_PER_PACKET]
+            pt = bytearray(1 + MAX_GATEWAYS_PER_PACKET * 6)
+            pt[0] = len(macs)
+            for idx, m in enumerate(macs):
+                pt[1 + idx * 6:1 + (idx + 1) * 6] = MACFormatter.to_bytes(m)
+            return self._encode_v2_for_peer(PKT_GW_LIST_UPD, target_mac, bytes(pt), msg_id)
+        return self.encoder.encode_gateway_list_for_device(target_mac, gateway_macs, msg_id)
+
+    def _encode_ping_dual(self, gateway_mac: str, msg_id: int = 0) -> bytes:
+        if self._use_v2_for_peer(gateway_mac):
+            return self._encode_v2_for_peer(PKT_PING, gateway_mac, b'\x00', msg_id)
+        return self.encoder.encode_ping(gateway_mac)
+
+    def _encode_ping_device_dual(self, device_mac: str, msg_id: int = 0) -> bytes:
+        if self._use_v2_for_peer(device_mac):
+            return self._encode_v2_for_peer(PKT_PING_DEVICE, device_mac, b'\x00', msg_id)
+        return self.encoder.encode_ping_device(device_mac)
+
+    def _encode_ota_notify_dual(self, target_mac: str, firmware_size: int, sha256_hash: bytes, version: Tuple[int, int, int, int], msg_id: int = 0) -> bytes:
+        if self._use_v2_for_peer(target_mac):
+            pt = struct.pack('<I', firmware_size & 0xFFFFFFFF) + sha256_hash[:32] + bytes(version[:4])
+            return self._encode_v2_for_peer(PKT_OTA_NOTIFY, target_mac, pt, msg_id)
+        return self.encoder.encode_ota_notify(target_mac, firmware_size, sha256_hash, version, msg_id)
+
+    def _encode_ota_chunk_dual(self, target_mac: str, chunk_index: int, chunk_data: bytes, msg_id: int = 0) -> bytes:
+        if self._use_v2_for_peer(target_mac):
+            return PacketEncoderV2.encode_ota_chunk_v2(
+                target_mac=target_mac,
+                chunk_index=chunk_index,
+                chunk_data=chunk_data,
+                counter=security_store.next_backend_tx_counter(),
+                key_epoch=security_store.epoch,
+                key=security_store.derive_k_own(target_mac),
+                max_frame=security_store.get_max_frame(target_mac),
+                msg_id=msg_id,
+            )
+        return self.encoder.encode_ota_chunk(target_mac, chunk_index, chunk_data, msg_id)
+
+    def _encode_ota_checkpoint_req_dual(self, target_mac: str, msg_id: int = 0) -> bytes:
+        if self._use_v2_for_peer(target_mac):
+            return self._encode_v2_for_peer(PKT_OTA_CHECKPOINT_REQ, target_mac, b'\x00', msg_id)
+        return self.encoder.encode_ota_checkpoint_req(target_mac, msg_id)
+
+    def _encode_ota_complete_dual(self, target_mac: str, sha256_hash: bytes, msg_id: int = 0) -> bytes:
+        if self._use_v2_for_peer(target_mac):
+            return self._encode_v2_for_peer(PKT_OTA_COMPLETE, target_mac, sha256_hash[:32], msg_id)
+        return self.encoder.encode_ota_complete(target_mac, sha256_hash, msg_id)
+
+    def _encode_ota_abort_dual(self, target_mac: str, reason_code: int = 0, msg_id: int = 0) -> bytes:
+        if self._use_v2_for_peer(target_mac):
+            return self._encode_v2_for_peer(PKT_OTA_ABORT, target_mac, bytes([reason_code & 0xFF]), msg_id)
+        return self.encoder.encode_ota_abort(target_mac, reason_code=reason_code, msg_id=msg_id)
+
+    def _ota_chunk_size_for_peer(self, target_mac: str) -> int:
+        if self._use_v2_for_peer(target_mac):
+            max_frame = security_store.get_max_frame(target_mac)
+            # 38 B v2 overhead + 4 B Payload_OtaChunkV2Header, capped at 1024 B so UART/ESP-NOW
+            # buffers never overflow during batched checkpoint transfers.
+            return max(64, min(max_frame - V2_OVERHEAD - 4, 1024))
+        return OTA_CHUNK_DATA_SIZE
+
+    def _send_v2_set_pin(self, target_mac: str, pin: str, gateway_endpoint: str) -> bool:
+        """Send encrypted v2 PKT_SYS_CMD (CMD_SET_PIN) containing a 6-digit ASCII PIN."""
+        if not security_store.is_v2_device(target_mac):
+            return False
+        if not pin or len(pin) != 6 or not pin.isdigit():
+            return False
+        plaintext = bytes([CMD_SET_PIN, 0x00]) + pin.encode('ascii')
+        frame = PacketEncoderV2.encode(
+            pkt_type=PKT_SYS_CMD,
+            src_mac="00:00:00:00:00:00",
+            dst_mac=target_mac,
+            msg_id=0,
+            counter=security_store.next_backend_tx_counter(),
+            key_epoch=security_store.epoch,
+            plaintext=plaintext,
+            key=security_store.derive_k_own(target_mac),
+        )
+        return self._send_packet_to_gateway(gateway_endpoint, frame)
+
+    def _handle_v2_sys_cmd(self, src_mac: str, payload: bytes, sender_ip: str):
+        """Handle authenticated v2 PKT_SYS_CMD responses from devices (e.g. CMD_SET_PIN_ACK)."""
+        if len(payload) < 2:
+            return
+        cmd = payload[0]
+        status = payload[1]
+        if cmd == CMD_SET_PIN_ACK:
+            pending_pin = security_store.get_pending_pin(src_mac)
+            if status == PIN_ACK_OK and pending_pin:
+                security_store.commit_pin(src_mac, pending_pin)
+                logger.info(f"🔐 Confirmed 6-digit PIN provisioned on {src_mac}; upgraded to v2 Verified")
+                rec = security_store.get_device_record(src_mac) or {}
+                self._push_key_distrib_to_gateways(
+                    target_mac=src_mac,
+                    crypto_mode=CRYPTO_MODE_V2,
+                    max_frame=int(rec.get('max_frame', 250)),
+                    k_ack=security_store.derive_k_ack(src_mac),
+                    action=KEY_DISTRIB_UPSERT,
+                )
+            elif status == PIN_ACK_ALREADY_SET:
+                security_store.set_pending_pin(src_mac, None)
+                logger.warning(f"🔐 Device {src_mac} refused CMD_SET_PIN: PIN already provisioned on device")
+            else:
+                security_store.set_pending_pin(src_mac, None)
+                logger.warning(f"🔐 Device {src_mac} rejected CMD_SET_PIN (status={status:#x})")
+
+    def _get_device_battery_percent(self, mac: str) -> Optional[int]:
+        """Return the latest recorded battery percentage for a battery device, or None if unavailable."""
+        btn = device_manager.get_button_by_mac(mac)
+        if btn and btn.get('battery_percent') is not None:
+            return int(btn['battery_percent'])
+        motion = device_manager.get_motion_sensor_by_mac(mac)
+        if motion and motion.get('battery_percent') is not None:
+            return int(motion['battery_percent'])
+        door = device_manager.get_door_sensor_by_mac(mac)
+        if door and door.get('battery_percent') is not None:
+            return int(door['battery_percent'])
+        return None
+
+    def _flush_pending_security_actions(self, src_mac: str, sender_ip: str, proto_ver: int):
+        """Deliver queued v2 upgrade, PIN provisioning, or v2 auto-OTA while a device is awake."""
+        if proto_ver == 1 and security_store.is_pending_v2_upgrade(src_mac) and not security_store.is_v2_device(src_mac):
+            sec_flags = config_manager.get_security_flags()
+            if sec_flags['security_v2_pair']:
+                pkt = self.encoder.encode_sys_cmd(src_mac, CMD_UPGRADE_TO_V2, 0)
+                if self._send_packet_to_gateway(sender_ip, pkt):
+                    logger.info(f"🔐 Sent queued CMD_UPGRADE_TO_V2 to {src_mac} via {sender_ip}")
+        elif proto_ver == PROTO_VERSION_V2:
+            pending_pin = security_store.get_pending_pin(src_mac)
+            if pending_pin:
+                if self._send_v2_set_pin(src_mac, pending_pin, sender_ip):
+                    logger.info(f"🔐 Sent queued encrypted CMD_SET_PIN to {src_mac} via {sender_ip}")
+
+            # Wake-triggered auto-OTA for v2-authenticated battery devices (one active OTA at a time)
+            session = ota_manager.get_session(src_mac)
+            if session and session.state in (OTAState.QUEUED, OTAState.WAITING_READY) and self._use_v2_for_peer(src_mac):
+                bat_pct = self._get_device_battery_percent(src_mac)
+                if bat_pct is not None and bat_pct < OTA_MIN_BATTERY_PERCENT:
+                    logger.warning(
+                        f"🔋 Skipping auto-OTA for {src_mac}: battery is {bat_pct}% (< {OTA_MIN_BATTERY_PERCENT}%)"
+                    )
+                    return
+
+                just_claimed = False
+                if session.state == OTAState.QUEUED:
+                    if not ota_manager.claim_active_session(src_mac):
+                        logger.info(
+                            f"⏳ Deferring wake auto-OTA for {src_mac}: another OTA is active ({ota_manager.active_session_mac})"
+                        )
+                        return
+                    ota_manager.update_session_state(src_mac, OTAState.WAITING_READY)
+                    just_claimed = True
+
+                with self._delivery_lock:
+                    msg_id = self._next_msg_id
+                    self._next_msg_id = (self._next_msg_id + 1) % 256
+                pkt = self._encode_ota_notify_dual(
+                    src_mac,
+                    session.firmware_size,
+                    session.sha256_hash,
+                    session.version,
+                    msg_id,
+                )
+                if self._send_packet_to_gateway(sender_ip, pkt):
+                    logger.info(f"📡 Auto-triggered queued v2 OTA_NOTIFY for {src_mac} on wake via {sender_ip}")
+                    if just_claimed:
+                        threading.Thread(
+                            target=self._ota_ready_timeout,
+                            args=(src_mac, session.ready_timeout_token),
+                            daemon=True,
+                            name=f"OTA-Ready-Timeout-{src_mac[-8:]}"
+                        ).start()
+                elif just_claimed:
+                    ota_manager.requeue_session(src_mac, "Failed to send wake OTA_NOTIFY; re-queued")
+
+    def request_v2_upgrade(self, mac: str) -> Dict:
+        """Queue and immediately attempt an in-place v1 -> v2 TOFU upgrade for a 4.x.x device."""
+        norm = MACFormatter.format_with_colons(mac)
+        sec_flags = config_manager.get_security_flags()
+        if not sec_flags.get('security_v2_pair'):
+            return {'success': False, 'error': 'Enable Security v2 pairing first (Pairing page / security flags)'}
+        if security_store.is_v2_device(norm):
+            return {'success': False, 'error': 'Device is already using Security v2'}
+
+        security_store.set_pending_v2_upgrade(norm, True)
+        endpoint = self._resolve_gateway_endpoint_for_mac(norm)
+        sent_now = False
+        if endpoint:
+            pkt = self.encoder.encode_sys_cmd(norm, CMD_UPGRADE_TO_V2, 0)
+            sent_now = self._send_packet_to_gateway(endpoint, pkt)
+            if sent_now:
+                logger.info(f"🔐 Sent CMD_UPGRADE_TO_V2 to {norm} via {endpoint}")
+            # If this is a gateway that already committed v2 to NVS (e.g. lost PKT_PAIR_ACK),
+            # a PING elicits a v2 response so Python can self-heal via K_own without reflashing.
+            if device_manager.get_gateway_by_wifi_mac(norm) or device_manager.get_gateway_by_radio_mac(norm):
+                try:
+                    self._send_packet_to_gateway(endpoint, self.encoder.encode_ping(norm, msg_id=0))
+                except Exception:
+                    pass
+        return {
+            'success': True,
+            'mac': norm,
+            'sent_now': sent_now,
+            'pending_v2_upgrade': True,
+        }
+
+    def request_create_pin(self, mac: str) -> Dict:
+        """Generate a 6-digit PIN and send it over the encrypted v2 channel (write-once)."""
+        norm = MACFormatter.format_with_colons(mac)
+        if device_manager.get_gateway_by_wifi_mac(norm) or device_manager.get_gateway_by_radio_mac(norm):
+            return {'success': False, 'error': 'Gateways use TOFU Security v2 and do not use pairing PINs'}
+        if not security_store.is_v2_device(norm):
+            return {'success': False, 'error': 'Device must be upgraded to Security v2 first'}
+        existing_pin = security_store.get_device_pin(norm)
+        if existing_pin:
+            return {
+                'success': True,
+                'mac': norm,
+                'already_set': True,
+                'pin': existing_pin,
+                'pending_pin': False,
+            }
+
+        pin = security_store.get_pending_pin(norm) or f"{secrets.randbelow(1_000_000):06d}"
+        security_store.set_pending_pin(norm, pin)
+        endpoint = self._resolve_gateway_endpoint_for_mac(norm)
+        sent_now = False
+        if endpoint:
+            sent_now = self._send_v2_set_pin(norm, pin, endpoint)
+            if sent_now:
+                logger.info(f"🔐 Sent encrypted CMD_SET_PIN to {norm} via {endpoint}")
+        return {
+            'success': True,
+            'mac': norm,
+            'already_set': False,
+            'sent_now': sent_now,
+            'pending_pin': True,
+        }
+
+    def cancel_pending_security_action(self, mac: str) -> Dict:
+        """Cancel any pending v2 upgrade or pending PIN provisioning for a device."""
+        norm = MACFormatter.format_with_colons(mac)
+        security_store.set_pending_v2_upgrade(norm, False)
+        security_store.set_pending_pin(norm, None)
+        return {'success': True, 'mac': norm}
+
+    def revoke_device(self, mac: str, keep_pin: bool = True, last_name: Optional[str] = None) -> Dict:
+        """Revoke active v2 trust for a deleted device and prune K_ack from all gateways."""
+        norm = MACFormatter.format_with_colons(mac)
+        pairing_v2_manager.cancel_pending(norm)
+        security_store.revoke_device(norm, keep_pin=keep_pin, last_name=last_name)
+        try:
+            self._push_key_distrib_to_gateways(
+                target_mac=norm,
+                crypto_mode=CRYPTO_MODE_V1,
+                max_frame=V2_MAX_FRAME_ESP8266,
+                k_ack=b"\x00" * 16,
+                action=KEY_DISTRIB_REMOVE,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to push KEY_DISTRIB_REMOVE for {norm}: {e}")
+        logger.info(f"🔒 Revoked Security v2 access for {norm} (keep_pin={keep_pin})")
+        return {'success': True, 'mac': norm, 'keep_pin': keep_pin}
+
+    def auto_upgrade_v2_gateways(self) -> int:
+        """Automatically trigger in-place v2 upgrade for any 4.x.x gateway node still on v1."""
+        sec_flags = config_manager.get_security_flags()
+        if not sec_flags.get('security_v2_pair'):
+            return 0
+
+        def _is_v4(ver: Optional[str]) -> bool:
+            try:
+                major = int(str(ver or '0').split('.')[0])
+                return major == 4
+            except (ValueError, IndexError):
+                return False
+
+        triggered = 0
+        for gw in device_manager.get_all_gateways():
+            endpoint = gw.get('transport_endpoint') or gw.get('ip_address')
+            if not endpoint:
+                continue
+            wifi_mac = gw.get('mac_address')
+            radio_mac = gw.get('radio_mac')
+            if wifi_mac and _is_v4(gw.get('version_net')) and not security_store.is_v2_device(wifi_mac):
+                pkt = self.encoder.encode_sys_cmd(wifi_mac, CMD_UPGRADE_TO_V2, 0)
+                if self._send_packet_to_gateway(endpoint, pkt):
+                    triggered += 1
+                    logger.info(f"🌐 Auto-triggered v2 upgrade for gateway net node {wifi_mac}")
+            if radio_mac and _is_v4(gw.get('version_radio')) and not security_store.is_v2_device(radio_mac):
+                pkt = self.encoder.encode_sys_cmd(radio_mac, CMD_UPGRADE_TO_V2, 0)
+                if self._send_packet_to_gateway(endpoint, pkt):
+                    triggered += 1
+                    logger.info(f"🌐 Auto-triggered v2 upgrade for gateway radio node {radio_mac}")
+        return triggered
     
     def _send_with_fallback(self, target_mac: str, packet: bytes, wait_for_delivery: bool = True, msg_id: Optional[int] = None, gateway_preference: Optional[str] = None) -> bool:
         """Send packet to device with automatic gateway failover.
@@ -2279,7 +3320,7 @@ class NetworkServer:
         
         with self._gateway_lock:
             for radio_mac, info in self._gateway_table.items():
-                if info['wifi_mac'] == target_mac:
+                if info['wifi_mac'] == target_mac or radio_mac == target_mac:
                     gateway_ip = info['ip_address']
                     is_gateway = True
                     break
@@ -2434,13 +3475,15 @@ class NetworkServer:
             if not all_gateway_macs:
                 return
             
-            # Encode gateway list packet (max gateways per packet)
-            packet = self.encoder.encode_gateway_list(all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
-            
-            # Send to all gateways
+            # Send to all gateways (dual-stack: v2 encrypted per radio node, or v1 broadcast)
+            v1_packet = self.encoder.encode_gateway_list(all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
             for radio_mac, info in self._gateway_table.items():
                 gateway_ip = info['ip_address']
-                self._send_packet_to_gateway(gateway_ip, packet)
+                if self._use_v2_for_peer(radio_mac):
+                    gw_packet = self._encode_gateway_list_dual(radio_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET])
+                    self._send_packet_to_gateway(gateway_ip, gw_packet)
+                else:
+                    self._send_packet_to_gateway(gateway_ip, v1_packet)
             
             logger.info(f"Broadcasted gateway list to gateways: {len(all_gateway_macs)} gateways")
             
@@ -2455,8 +3498,8 @@ class NetworkServer:
                             msg_id = self._next_msg_id
                             self._next_msg_id = (self._next_msg_id + 1) % 256
                         
-                        # Encode gateway list packet for this light with msg_id
-                        light_packet = self.encoder.encode_gateway_list_for_device(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET], msg_id)
+                        # Encode gateway list packet for this light with msg_id (dual-stack v1/v2)
+                        light_packet = self._encode_gateway_list_dual(light_mac, all_gateway_macs[:MAX_GATEWAYS_PER_PACKET], msg_id)
                         
                         # Send in background thread to avoid blocking (each light update happens in parallel)
                         threading.Thread(
@@ -2483,8 +3526,21 @@ class NetworkServer:
             msg_id = self._next_msg_id
             self._next_msg_id = (self._next_msg_id + 1) % 256
         
-        # Encode packet
-        packet = self.encoder.encode_light_raw(light_mac, rgb_data, brightness, msg_id)
+        # Encode packet (v2 AES-128-GCM if enabled & peer is v2-paired, else v1 frozen 203 B)
+        sec_flags = config_manager.get_security_flags()
+        if sec_flags['security_v2_send'] and security_store.is_v2_device(light_mac):
+            packet = PacketEncoderV2.encode_light_raw_v2(
+                target_mac=light_mac,
+                rgb_data=rgb_data,
+                brightness=brightness,
+                counter=security_store.next_backend_tx_counter(),
+                key_epoch=security_store.epoch,
+                key=security_store.derive_k_own(light_mac),
+                max_frame=security_store.get_max_frame(light_mac),
+                msg_id=msg_id,
+            )
+        else:
+            packet = self.encoder.encode_light_raw(light_mac, rgb_data, brightness, msg_id)
         
         # Send with fallback and delivery tracking
         success = self._send_with_fallback(light_mac, packet, wait_for_delivery=True, msg_id=msg_id)
@@ -2542,8 +3598,8 @@ class NetworkServer:
             }
         
         try:
-            # Encode and send ping packet
-            packet = self.encoder.encode_ping(gateway_mac)
+            # Encode and send ping packet (dual-stack v1/v2)
+            packet = self._encode_ping_dual(gateway_mac)
             if self._send_packet_to_gateway(gateway_ip, packet):
                 logger.info(f"📡 Ping sent to gateway {gateway_mac} ({gateway_ip})")
             
@@ -2589,10 +3645,14 @@ class NetworkServer:
         
         # Check if target is a gateway (send directly) or device (use routing)
         is_gateway = False
+        gateway_radio_mac = None
+        gateway_ip = None
         with self._gateway_lock:
             for radio_mac, info in self._gateway_table.items():
                 if info['wifi_mac'] == target_mac:
                     is_gateway = True
+                    gateway_radio_mac = radio_mac
+                    gateway_ip = info['ip_address']
                     break
         
         # Generate message ID (always needed for packet encoding)
@@ -2600,11 +3660,17 @@ class NetworkServer:
             msg_id = self._next_msg_id
             self._next_msg_id = (self._next_msg_id + 1) % 256
         
-        # Encode packet
-        packet = self.encoder.encode_sys_cmd(target_mac, command, value, msg_id)
+        # Encode packet (dual-stack v1/v2)
+        packet = self._encode_sys_cmd_dual(target_mac, command, value, msg_id)
         
         # Send with fallback (delivery tracking for devices, direct send for gateways)
         success = self._send_with_fallback(target_mac, packet, wait_for_delivery=(not is_gateway), msg_id=msg_id)
+
+        # For v2 WiFi gateways, also send night mode command encrypted to the radio node
+        if is_gateway and gateway_radio_mac and gateway_ip and command in (CMD_NIGHT_MODE_ON, CMD_NIGHT_MODE_OFF):
+            if self._use_v2_for_peer(gateway_radio_mac):
+                radio_pkt = self._encode_sys_cmd_dual(gateway_radio_mac, command, value, msg_id)
+                self._send_packet_to_gateway(gateway_ip, radio_pkt)
         
         if success:
             logger.info(f"⚙️  System command sent to {target_mac}: {cmd_name}")
@@ -2708,8 +3774,8 @@ class NetworkServer:
         for radio_mac, info in gateway_list:
             gateway_ip = info['ip_address']
             
-            # Encode ping device packet
-            packet = self.encoder.encode_ping_device(device_mac)
+            # Encode ping device packet (dual-stack v1/v2)
+            packet = self._encode_ping_device_dual(device_mac)
             
             try:
                 if self._send_packet_to_gateway(gateway_ip, packet):
@@ -2786,8 +3852,8 @@ class NetworkServer:
         
         logger.debug(f"🏓 Pinging device {device_mac} via gateway {gateway_radio_mac} ({gateway_ip})...")
         
-        # Send ping via the specific gateway
-        packet = self.encoder.encode_ping_device(device_mac)
+        # Send ping via the specific gateway (dual-stack v1/v2)
+        packet = self._encode_ping_device_dual(device_mac)
         
         try:
             if not self._send_packet_to_gateway(gateway_ip, packet):
@@ -2823,18 +3889,22 @@ class NetworkServer:
                     del self._pending_device_pings[device_mac]
             return None
     
-    def _handle_ping_device_response(self, src_mac: str, payload: bytes, sender_ip: str):
+    def _handle_ping_device_response(self, src_mac: str, payload: bytes, sender_ip: str, rssi_v2: Optional[int] = None):
         """Handle ping device response from gateway.
         
         Args:
             src_mac: Device MAC address (source of response)
-            payload: Raw payload with RSSI in first byte
+            payload: Raw payload with RSSI in first byte (v1)
             sender_ip: Gateway IP
+            rssi_v2: Parsed RSSI from v2 header byte 21 (when proto_ver == 2)
         """
         try:
-            # RSSI is stored in payload[0] by gateway radio node
-            rssi_byte = payload[0] if len(payload) > 0 else 0
-            rssi_dbm = MACFormatter.parse_rssi(rssi_byte)
+            if rssi_v2 is not None:
+                rssi_dbm = rssi_v2
+            else:
+                # RSSI is stored in payload[0] by gateway radio node (v1)
+                rssi_byte = payload[0] if len(payload) > 0 else 0
+                rssi_dbm = MACFormatter.parse_rssi(rssi_byte)
             
             # Find gateway radio MAC by sender endpoint
             gateway_radio_mac = self._resolve_gateway_radio_mac_by_sender(sender_ip)
@@ -2862,35 +3932,93 @@ class NetworkServer:
         except Exception as e:
             logger.error(f"Failed to parse ping device response: {e}")
     
-    def start_ota_update(self, device_mac: str, device_type: int, firmware_path: str, gateway_preference: Optional[str] = None) -> bool:
-        """Start OTA firmware update for a device.
+    def start_ota_update(self, device_mac: str, device_type: int, firmware_path: str,
+                         gateway_preference: Optional[str] = None,
+                         depends_on_mac: Optional[str] = None) -> bool:
+        """Queue (and immediately start if the active OTA slot is free) an OTA update.
+        
+        Multiple devices may be queued concurrently; only one device transfers at a time.
+        v2 battery devices stay queued until their next wake (and only claim the active
+        slot when no other transfer is running and battery >= OTA_MIN_BATTERY_PERCENT).
         
         Args:
             device_mac: Target device MAC address
             device_type: Device type constant
             firmware_path: Path to firmware binary file
             gateway_preference: Preferred gateway MAC (e.g., plugin device's last_seen_gateway)
+            depends_on_mac: Optional dependency MAC that must complete OTA first
             
         Returns:
-            True if OTA initiated successfully, False otherwise
+            True if OTA was queued/initiated successfully, False otherwise
         """
-        # Create OTA session
-        session = ota_manager.create_session(device_mac, device_type, firmware_path)
+        is_v2_battery = (
+            self._use_v2_for_peer(device_mac)
+            and device_type in (DEV_BUTTON, DEV_REMOTE, DEV_MOTION, DEV_DOOR)
+        )
+
+        # Create queued OTA session
+        session = ota_manager.create_session(
+            device_mac,
+            device_type,
+            firmware_path,
+            wake_triggered=is_v2_battery,
+            preferred_gateway_mac=gateway_preference,
+            depends_on_mac=depends_on_mac,
+        )
         if not session:
             logger.error(f"Failed to create OTA session for {device_mac}")
             return False
-        
-        # Store gateway preference on session so chunk transfer can use it
-        session.preferred_gateway_mac = gateway_preference
-        
+
+        if is_v2_battery:
+            logger.info(
+                f"⏳ Queued v2 auto-OTA for battery device {device_mac} "
+                f"(will start on next wake when slot is free and battery >= {OTA_MIN_BATTERY_PERCENT}%)"
+            )
+            return True
+
+        # Try to start immediately if slot is free and dependency (if any) is satisfied
+        self._process_ota_queue(delay=0.0)
+        return True
+
+    def _schedule_ota_queue_processing(self):
+        """Schedule background advancement of the OTA queue after an active slot frees up."""
+        if not self.running:
+            return
+        threading.Thread(
+            target=self._process_ota_queue,
+            args=(1.0,),
+            daemon=True,
+            name="OTA-Queue-Advance",
+        ).start()
+
+    def _process_ota_queue(self, delay: float = 0.0):
+        """Start the next eligible queued always-on OTA session if the active slot is free."""
+        if delay > 0:
+            time.sleep(delay)
+
+        with self._ota_queue_lock:
+            while True:
+                next_session = ota_manager.get_next_queued_session()
+                if not next_session:
+                    return
+                if not ota_manager.claim_active_session(next_session.device_mac):
+                    return
+                if self._activate_ota_session(next_session):
+                    return
+                # If activation failed immediately, slot was released; loop to try next queued session
+
+    def _activate_ota_session(self, session) -> bool:
+        """Send PKT_OTA_NOTIFY and move a claimed session into WAITING_READY."""
+        device_mac = session.device_mac
+        gateway_preference = session.preferred_gateway_mac
         try:
             # Generate message ID
             with self._delivery_lock:
                 msg_id = self._next_msg_id
                 self._next_msg_id = (self._next_msg_id + 1) % 256
             
-            # Send OTA_NOTIFY packet
-            packet = self.encoder.encode_ota_notify(
+            # Send OTA_NOTIFY packet (dual-stack v1/v2)
+            packet = self._encode_ota_notify_dual(
                 device_mac,
                 session.firmware_size,
                 session.sha256_hash,
@@ -2931,10 +4059,9 @@ class NetworkServer:
             # Update session state
             ota_manager.update_session_state(device_mac, OTAState.WAITING_READY)
             
-            # Start timeout thread
             threading.Thread(
                 target=self._ota_ready_timeout,
-                args=(device_mac,),
+                args=(device_mac, session.ready_timeout_token),
                 daemon=True,
                 name=f"OTA-Ready-Timeout-{device_mac[-8:]}"
             ).start()
@@ -2946,18 +4073,23 @@ class NetworkServer:
             ota_manager.update_session_state(device_mac, OTAState.FAILED, str(e))
             return False
     
-    def _ota_ready_timeout(self, device_mac: str):
+    def _ota_ready_timeout(self, device_mac: str, token: int = 0):
         """Timeout thread waiting for PKT_OTA_READY response.
         
         Args:
             device_mac: Device MAC address
+            token: ready_timeout_token captured when WAITING_READY began
         """
         time.sleep(OTA_READY_TIMEOUT)
         
         session = ota_manager.get_session(device_mac)
-        if session and session.state == OTAState.WAITING_READY:
-            logger.warning(f"⏱️  OTA ready timeout for {device_mac}")
-            ota_manager.update_session_state(device_mac, OTAState.FAILED, "Timeout waiting for OTA_READY")
+        if session and session.state == OTAState.WAITING_READY and session.ready_timeout_token == token:
+            if session.wake_triggered:
+                logger.info(f"⏱️  No OTA_READY from v2 battery device {device_mac} on this wake; re-queuing for next wake")
+                ota_manager.requeue_session(device_mac, "No OTA_READY on wake; re-queued for next wake")
+            else:
+                logger.warning(f"⏱️  OTA ready timeout for {device_mac}")
+                ota_manager.update_session_state(device_mac, OTAState.FAILED, "Timeout waiting for OTA_READY")
     
     def _handle_ota_ready(self, src_mac: str, payload: bytes, sender_ip: str):
         """Handle OTA_READY response from device.
@@ -2988,7 +4120,17 @@ class NetworkServer:
         
         # If firmware_size is 0, this is an unsolicited PKT_OTA_READY from device waking up
         # The device is in OTA_WAITING_NOTIFY state and needs PKT_OTA_NOTIFY to transition
-        if firmware_size_in_ready == 0 and session.state == OTAState.WAITING_READY:
+        if firmware_size_in_ready == 0 and session.state in (OTAState.QUEUED, OTAState.WAITING_READY):
+            just_claimed = False
+            if session.state == OTAState.QUEUED:
+                if not ota_manager.claim_active_session(src_mac):
+                    logger.info(
+                        f"⏳ Ignoring unsolicited OTA_READY from queued {src_mac}: another OTA is active ({ota_manager.active_session_mac})"
+                    )
+                    return
+                ota_manager.update_session_state(src_mac, OTAState.WAITING_READY)
+                just_claimed = True
+
             logger.info(f"📡 Device {src_mac} woke up in OTA mode - re-sending OTA_NOTIFY")
             
             # Small delay to allow ESP-NOW peer connection to stabilize after device wakeup
@@ -2999,8 +4141,8 @@ class NetworkServer:
                 msg_id = self._next_msg_id
                 self._next_msg_id = (self._next_msg_id + 1) % 256
             
-            # Re-send OTA_NOTIFY packet
-            packet = self.encoder.encode_ota_notify(
+            # Re-send OTA_NOTIFY packet (dual-stack v1/v2)
+            packet = self._encode_ota_notify_dual(
                 src_mac,
                 session.firmware_size,
                 session.sha256_hash,
@@ -3012,14 +4154,32 @@ class NetworkServer:
             success = self._send_with_fallback(src_mac, packet, wait_for_delivery=False)
             if success:
                 logger.info(f"📡 OTA_NOTIFY re-sent to {src_mac}")
+                if just_claimed:
+                    threading.Thread(
+                        target=self._ota_ready_timeout,
+                        args=(src_mac, session.ready_timeout_token),
+                        daemon=True,
+                        name=f"OTA-Ready-Timeout-{src_mac[-8:]}"
+                    ).start()
             else:
                 logger.error(f"Failed to re-send OTA_NOTIFY to {src_mac}")
+                if just_claimed:
+                    if session.wake_triggered:
+                        ota_manager.requeue_session(src_mac, "Failed to send OTA_NOTIFY")
+                    else:
+                        ota_manager.update_session_state(src_mac, OTAState.FAILED, "Failed to send OTA_NOTIFY")
             return
         
         # Normal PKT_OTA_READY response (firmware_size matches session)
-        if session.state != OTAState.WAITING_READY:
-            logger.warning(f"Unexpected OTA_READY from {src_mac} in state {session.state}")
-            return
+        # Atomically claim TRANSFERRING under session.lock so duplicate OTA_READY
+        # packets (e.g. forwarded by multiple gateways) cannot spawn two transfer threads.
+        with session.lock:
+            if session.state != OTAState.WAITING_READY:
+                logger.warning(f"Unexpected OTA_READY from {src_mac} in state {session.state}")
+                return
+            session.state = OTAState.TRANSFERRING
+            if not session.transfer_start_time:
+                session.transfer_start_time = datetime.now()
         
         # Start chunk transfer in background thread
         threading.Thread(
@@ -3089,8 +4249,9 @@ class NetworkServer:
             with open(session.firmware_path, 'rb') as f:
                 firmware_data = f.read()
             
-            # Calculate chunks
-            total_chunks = (len(firmware_data) + OTA_CHUNK_DATA_SIZE - 1) // OTA_CHUNK_DATA_SIZE
+            # Calculate chunks (adaptive v2 chunk size or frozen 182 B for v1)
+            chunk_data_size = self._ota_chunk_size_for_peer(device_mac)
+            total_chunks = (len(firmware_data) + chunk_data_size - 1) // chunk_data_size
             session.total_chunks = total_chunks
             
             # Lock to one gateway IP for entire transfer.
@@ -3114,14 +4275,20 @@ class NetworkServer:
                         is_radio_node = True
                         break
             
-            # Set chunk delay based on target type
+            # Set chunk delay based on target type and chunk size:
+            # Only large ESP-NOW v2 frames (>= 512 B, i.e. ESP32 1024 B chunks) need the longer delay;
+            # ESP8266 v2 chunks are 208 B (ESP-NOW v1 250 B cap) and only need a tiny BearSSL margin.
+            is_large_v2 = chunk_data_size >= 512
+            is_small_v2 = (not is_large_v2) and (chunk_data_size > OTA_CHUNK_DATA_SIZE)
             if is_gateway and not is_radio_node:
-                chunk_delay = 0.010  # Net node direct
+                chunk_delay = 0.015 if is_large_v2 else 0.010  # Net node direct WiFi UDP
+            elif is_radio_node:
+                chunk_delay = 0.035 if is_large_v2 else 0.016  # 460800 baud UART (~23ms/1066B + flash write)
             else:
-                chunk_delay = 0.016  # Other devices via ESP-NOW
+                chunk_delay = 0.045 if is_large_v2 else (0.018 if is_small_v2 else 0.016)  # UART + ESP-NOW + flash write
             
             if is_gateway and locked_gateway_ip and self._is_serial_endpoint(locked_gateway_ip):
-                chunk_delay = 0.000
+                chunk_delay = 0.035 if is_large_v2 else 0.000  # 460800 baud (~23ms/1070B) + AES-GCM + 4KB flash writes
                        
             logger.info(f"📦 Starting OTA transfer to {device_mac}: {len(firmware_data)} bytes in {total_chunks} chunks (is_gateway={is_gateway}, is_radio_node={is_radio_node}, delay={chunk_delay}s)")
                    
@@ -3129,6 +4296,8 @@ class NetworkServer:
             # Send chunks with checkpoint-based ACK
             chunk_idx = 0
             retry_count = 0
+            stall_chunk_idx = -1
+            stall_retries = 0
             
             while chunk_idx < total_chunks:
                 # Check if session still active
@@ -3149,16 +4318,16 @@ class NetworkServer:
                 
                 for i in range(batch_start, batch_end):
                     # Extract chunk data
-                    offset = i * OTA_CHUNK_DATA_SIZE
-                    chunk_data = firmware_data[offset:offset + OTA_CHUNK_DATA_SIZE]
+                    offset = i * chunk_data_size
+                    chunk_data = firmware_data[offset:offset + chunk_data_size]
                     
                     # Generate message ID
                     with self._delivery_lock:
                         msg_id = self._next_msg_id
                         self._next_msg_id = (self._next_msg_id + 1) % 256
                     
-                    # Encode chunk packet
-                    packet = self.encoder.encode_ota_chunk(device_mac, i, chunk_data, msg_id)
+                    # Encode chunk packet (dual-stack v1/v2)
+                    packet = self._encode_ota_chunk_dual(device_mac, i, chunk_data, msg_id)
                     
                     # Send chunk
                     success = False
@@ -3247,8 +4416,8 @@ class NetworkServer:
                         event = self._ota_ack_events[device_mac]['event']
                         event.clear()  # Reset event to wait for new ACK
                     
-                    # Send checkpoint request to device
-                    checkpoint_packet = self.encoder.encode_ota_checkpoint_req(device_mac, checkpoint_msg_id)
+                    # Send checkpoint request to device (dual-stack v1/v2)
+                    checkpoint_packet = self._encode_ota_checkpoint_req_dual(device_mac, checkpoint_msg_id)
                     if is_gateway:
                         if locked_gateway_ip:
                             self._send_packet_to_gateway(locked_gateway_ip, checkpoint_packet)
@@ -3277,16 +4446,29 @@ class NetworkServer:
                         logger.debug(f"✅ Checkpoint confirmed: chunks {batch_start}-{batch_end - 1} received")
                         chunk_idx = batch_end
                         retry_count = 0  # Reset retry counter on success
+                        stall_chunk_idx = -1
+                        stall_retries = 0
                         
                         # Update progress
-                        bytes_sent = chunk_idx * OTA_CHUNK_DATA_SIZE
+                        bytes_sent = chunk_idx * chunk_data_size
                         if bytes_sent > len(firmware_data):
                             bytes_sent = len(firmware_data)
                         ota_manager.update_progress(device_mac, chunk_idx, total_chunks, bytes_sent)
                     else:
-                        # Some chunks were lost - resume from last received + 1
-                        chunk_idx = last_chunk_index + 1
-                        retry_count = 0  # Reset retry counter, we're making progress
+                        # Firmware reports 0 both when 0 chunks arrived and when only chunk 0 arrived.
+                        # Track stalls at ANY chunk index (0 or N > 0) so a wedged device never loops forever.
+                        next_idx = 0 if (last_chunk_index == 0 and (batch_start == 0 or stall_chunk_idx == 0)) else (last_chunk_index + 1)
+                        if next_idx == stall_chunk_idx:
+                            stall_retries += 1
+                            if stall_retries > 5:
+                                logger.error(f"❌ OTA stalled at chunk {next_idx} for {device_mac} after 5 retries")
+                                ota_manager.update_session_state(device_mac, OTAState.FAILED, f"OTA stalled at chunk {next_idx}")
+                                return
+                        else:
+                            stall_chunk_idx = next_idx
+                            stall_retries = 1
+                        chunk_idx = next_idx
+                        retry_count = 0  # Reset timeout retry counter, device is still ACKing
                         logger.warning(f"⚠️ Packet loss detected: resuming from chunk {chunk_idx} (expected {batch_end - 1}, got {last_chunk_index})")
                 else:
                     # No ACK received - retry the batch
@@ -3305,7 +4487,7 @@ class NetworkServer:
                 msg_id = self._next_msg_id
                 self._next_msg_id = (self._next_msg_id + 1) % 256
             
-            complete_packet = self.encoder.encode_ota_complete(device_mac, session.sha256_hash, msg_id)
+            complete_packet = self._encode_ota_complete_dual(device_mac, session.sha256_hash, msg_id)
             
             if locked_gateway_ip:
                 self._send_packet_to_gateway(locked_gateway_ip, complete_packet)
@@ -3324,7 +4506,7 @@ class NetworkServer:
             ota_manager.update_session_state(device_mac, OTAState.FAILED, str(e))
     
     def abort_ota_update(self, device_mac: str, reason: str = "User cancelled"):
-        """Abort an ongoing OTA update.
+        """Abort an ongoing or queued OTA update.
         
         Args:
             device_mac: Device MAC address
@@ -3333,6 +4515,17 @@ class NetworkServer:
         session = ota_manager.get_session(device_mac)
         if not session:
             return
+
+        # Never overwrite an already-finished session or transmit spurious abort traffic
+        if session.state in (OTAState.COMPLETE, OTAState.FAILED, OTAState.ABORTED, OTAState.IDLE):
+            logger.debug(f"Ignoring abort_ota_update for {device_mac} in terminal state {session.state.value}")
+            return
+
+        # If the session was only queued (never sent OTA_NOTIFY), cancel locally without radio traffic
+        if session.state == OTAState.QUEUED:
+            logger.info(f"🛑 Cancelled queued OTA for {device_mac}: {reason}")
+            ota_manager.update_session_state(device_mac, OTAState.ABORTED, reason)
+            return
         
         try:
             # Generate message ID
@@ -3340,8 +4533,8 @@ class NetworkServer:
                 msg_id = self._next_msg_id
                 self._next_msg_id = (self._next_msg_id + 1) % 256
             
-            # Send OTA_ABORT packet
-            packet = self.encoder.encode_ota_abort(device_mac, reason_code=0, msg_id=msg_id)
+            # Send OTA_ABORT packet (dual-stack v1/v2)
+            packet = self._encode_ota_abort_dual(device_mac, reason_code=0, msg_id=msg_id)
             
             # Send to device
             success = self._send_with_fallback(device_mac, packet, wait_for_delivery=False)

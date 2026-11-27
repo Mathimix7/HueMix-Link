@@ -4,6 +4,7 @@
 */
 
 #include "HueMixLink.h"
+#include "sec_device.h"
 #include <Preferences.h>
 #include <nvs_flash.h>
 #include "soc/soc.h"
@@ -45,7 +46,10 @@ int local_port  = 4210;
 WiFiManager wm; 
 Ticker wifiTicker; 
 HueMixLinkPacket txPkt;  
-uint8_t udpBuffer[512];  
+#define MAX_FRAME_BUFFER 1500
+uint8_t udpBuffer[MAX_FRAME_BUFFER];  
+SecPairingState netSecState;
+SecCounter netCounter;
 uint8_t radioNodeMAC[6] = {0,0,0,0,0,0};
 uint8_t radioVersion[3] = {0, 0, 0};  // major, minor, patch
 
@@ -81,11 +85,21 @@ uint8_t expected_sha256[32];
 mbedtls_sha256_context sha256_ctx;
 unsigned long last_ota_activity = 0;  
 
-// --- SERIAL STATE MACHINE ---
-enum SerialState { S_IDLE, S_READING, S_FOOTER };
+// --- SERIAL STATE MACHINE (length-prefixed: 0xFE | len_lo | len_hi | payload | 0xFD) ---
+enum SerialState { S_IDLE, S_LEN_LO, S_LEN_HI, S_READING, S_FOOTER };
 SerialState rxState = S_IDLE;
 uint16_t rxIndex = 0;
-uint8_t rxRawBuffer[sizeof(HueMixLinkPacket)];
+uint16_t rxExpectedLen = 0;
+uint8_t rxRawBuffer[MAX_FRAME_BUFFER];
+
+void sendSerialFrame(const uint8_t* data, uint16_t len) {
+  if (len < V2_OVERHEAD || len > V2_MAX_FRAME_ESP32) return;
+  uint8_t hdr[3] = { SERIAL_START, (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
+  Serial2.write(hdr, 3);
+  Serial2.write(data, len);
+  Serial2.write(SERIAL_END);
+  Serial2.flush();
+}
 
 void tickWifiLed() { digitalWrite(PIN_LED_WIFI, !digitalRead(PIN_LED_WIFI)); }
 void setWifiLedState(int state) {
@@ -138,59 +152,70 @@ void stopDataLedBreathing() {
 }
 
 // --- HANDLE SERIAL PACKET ---
-void handleSerialPacket(uint8_t* data) {
-  memcpy(&txPkt, data, sizeof(HueMixLinkPacket));
-  
-  // Debug
-  Serial.printf("[NET] RX Serial Type 0x%02X\n", txPkt.type);
+void handleSerialPacket(uint8_t* data, uint16_t len) {
+  Serial.printf("[NET] RX Serial Type 0x%02X (Len %u)\n", data[0], len);
 
   if (WiFi.status() == WL_CONNECTED) {
     udp.beginPacket(server_ip, server_port);
-    udp.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket));
+    udp.write(data, len);
     udp.endPacket();
   } else {
     Serial.println("[NET] WiFi down, cannot forward");
   }
 }
 
-// --- PARSER ---
+// --- PARSER (length-prefixed: 0xFE | len_lo | len_hi | payload | 0xFD) ---
 void parseSerialByte(uint8_t b) {
+  // Inter-frame idle timeout: reset partial/corrupted frame after >100 ms silence
+  if (rxState != S_IDLE && (millis() - last_serial_activity) > 100) {
+    Serial.printf("[NET] Serial frame timeout in state %d (got %u/%u B) - resync\n",
+                  rxState, rxIndex, rxExpectedLen);
+    rxState = S_IDLE;
+    rxIndex = 0;
+    rxExpectedLen = 0;
+  }
   last_serial_activity = millis();
   
   switch(rxState) {
     case S_IDLE:
       if (b == SERIAL_START) {
-        rxState = S_READING;
+        rxState = S_LEN_LO;
         rxIndex = 0;
+        rxExpectedLen = 0;
+      }
+      break;
+    case S_LEN_LO:
+      rxExpectedLen = b;
+      rxState = S_LEN_HI;
+      break;
+    case S_LEN_HI:
+      rxExpectedLen |= ((uint16_t)b << 8);
+      if (rxExpectedLen < V2_OVERHEAD || rxExpectedLen > V2_MAX_FRAME_ESP32) {
+        Serial.printf("[NET] Invalid serial frame len %u - resync\n", rxExpectedLen);
+        rxState = (b == SERIAL_START) ? S_LEN_LO : S_IDLE;
+        rxIndex = 0;
+        rxExpectedLen = 0;
+      } else {
+        rxIndex = 0;
+        rxState = S_READING;
       }
       break;
     case S_READING:
       rxRawBuffer[rxIndex++] = b;
-      // Prevent buffer overflow
-      if (rxIndex > sizeof(HueMixLinkPacket)) {
-        Serial.printf("[NET] Buffer overflow - resync\n");
-        rxState = S_IDLE;
-        rxIndex = 0;
-        // Check if current byte is SERIAL_START for next packet
-        if (b == SERIAL_START) {
-          rxState = S_READING;
-          rxIndex = 0;
-        }
-      } else if (rxIndex >= sizeof(HueMixLinkPacket)) {
+      if (rxIndex >= rxExpectedLen) {
         rxState = S_FOOTER;
       }
       break;
     case S_FOOTER:
       if (b == SERIAL_END) {
-        handleSerialPacket(rxRawBuffer);
+        handleSerialPacket(rxRawBuffer, rxExpectedLen);
         rxState = S_IDLE;
       } else if (b == SERIAL_START) {
-        // Possible packet corruption or misalignment, but current byte could be start of next packet
         Serial.printf("[NET] Footer Err (got 0x%02X instead of 0x%02X), resyncing to next packet\n", b, SERIAL_END);
-        rxState = S_READING;
+        rxState = S_LEN_LO;
         rxIndex = 0;
+        rxExpectedLen = 0;
       } else {
-        // Footer mismatch - garbage byte, resync by looking for SERIAL_START
         Serial.printf("[NET] Footer Err (got 0x%02X), discarding packet\n", b);
         rxState = S_IDLE;
       }
@@ -202,22 +227,35 @@ void parseSerialByte(uint8_t b) {
 void abortOta(const char* reason) {
   Serial.printf("[OTA] ABORT: %s\n", reason);
   
-  // Notify server about the abort
-  HueMixLinkPacket abortPkt;  memset(&abortPkt, 0, sizeof(HueMixLinkPacket));  abortPkt.type = PKT_OTA_ABORT;
-  WiFi.macAddress(abortPkt.sourceMAC);
-  memset(abortPkt.targetMAC, 0, 6);
-  abortPkt.msgID = 0;
-  
-  // Encode reason as a simple code (0 = device-initiated abort)
-  abortPkt.payload.raw[0] = 0;  // reason_code
-  
-  // Calculate signature (1 byte payload)
-  abortPkt.signature = calculateHash(abortPkt.payload.raw, 185, HOME_ID);
-  
-  // Send abort notification to server
-  udp.beginPacket(server_ip, server_port);
-  udp.write((uint8_t*)&abortPkt, sizeof(HueMixLinkPacket));
-  udp.endPacket();
+  // Notify server about the abort (dual-stack v1/v2)
+  uint8_t myWifiMac[6];
+  WiFi.macAddress(myWifiMac);
+  if (sec_device_is_v2(&netSecState)) {
+    uint8_t reasonCode = 0;
+    const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t v2Buf[96];
+    size_t v2Len = sec_device_encode_tx(
+        &netSecState, &netCounter, PKT_OTA_ABORT, myWifiMac, backendMac, 0,
+        &reasonCode, sizeof(reasonCode), v2Buf, sizeof(v2Buf)
+    );
+    if (v2Len > 0) {
+      udp.beginPacket(server_ip, server_port);
+      udp.write(v2Buf, v2Len);
+      udp.endPacket();
+    }
+  } else {
+    HueMixLinkPacket abortPkt;
+    memset(&abortPkt, 0, sizeof(HueMixLinkPacket));
+    abortPkt.type = PKT_OTA_ABORT;
+    memcpy(abortPkt.sourceMAC, myWifiMac, 6);
+    memset(abortPkt.targetMAC, 0, 6);
+    abortPkt.msgID = 0;
+    abortPkt.payload.raw[0] = 0;  // reason_code
+    abortPkt.signature = calculateHash(abortPkt.payload.raw, 185, HOME_ID);
+    udp.beginPacket(server_ip, server_port);
+    udp.write((uint8_t*)&abortPkt, sizeof(HueMixLinkPacket));
+    udp.endPacket();
+  }
   
   Serial.printf("[OTA] Sent abort notification to server\n");
   
@@ -242,10 +280,7 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   
   if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
     // Not for us, forward to radio node via UART
-    Serial2.write(SERIAL_START);
-    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
-    Serial2.write(SERIAL_END);
-    Serial2.flush(); 
+    sendSerialFrame((uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
   
@@ -299,19 +334,68 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   // Start DATA LED breathing during OTA
   startDataLedBreathing();
   
-  // Send PKT_OTA_READY
-  HueMixLinkPacket ready;
-  ready.type = PKT_OTA_READY;
-  WiFi.macAddress(ready.sourceMAC);
-  memcpy(ready.targetMAC, pkt->sourceMAC, 6);
-  ready.payload.otaReady.firmware_size = expected_firmware_size;
-  ready.payload.otaReady.battery_mv = 0; // Not battery powered
-  ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
-  
-  udp.beginPacket(server_ip, server_port);
-  udp.write((uint8_t*)&ready, sizeof(HueMixLinkPacket));
-  udp.endPacket();
-  Serial.println("[OTA] Sent READY");
+  // Send PKT_OTA_READY (dual-stack v1/v2)
+  if (sec_device_is_v2(&netSecState)) {
+    Payload_OtaReady r = {};
+    r.firmware_size = expected_firmware_size;
+    r.battery_mv = 0;
+    uint8_t myMac[6];
+    WiFi.macAddress(myMac);
+    const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t v2Buf[96];
+    size_t v2Len = sec_device_encode_tx(
+        &netSecState, &netCounter, PKT_OTA_READY, myMac, backendMac, 0,
+        (const uint8_t*)&r, sizeof(r), v2Buf, sizeof(v2Buf)
+    );
+    if (v2Len > 0) {
+      udp.beginPacket(server_ip, server_port);
+      udp.write(v2Buf, v2Len);
+      udp.endPacket();
+      Serial.println("[OTA] Sent v2 READY");
+    }
+  } else {
+    HueMixLinkPacket ready;
+    memset(&ready, 0, sizeof(HueMixLinkPacket));
+    ready.type = PKT_OTA_READY;
+    WiFi.macAddress(ready.sourceMAC);
+    memcpy(ready.targetMAC, pkt->sourceMAC, 6);
+    ready.payload.otaReady.firmware_size = expected_firmware_size;
+    ready.payload.otaReady.battery_mv = 0; // Not battery powered
+    ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
+    
+    udp.beginPacket(server_ip, server_port);
+    udp.write((uint8_t*)&ready, sizeof(HueMixLinkPacket));
+    udp.endPacket();
+    Serial.println("[OTA] Sent READY");
+  }
+}
+
+void handleOtaChunkRaw(uint16_t chunk_idx, const uint8_t* chunk_data, uint16_t data_len) {
+  if (otaState != OTA_RECEIVING) {
+    return;
+  }
+  last_ota_activity = millis();
+  if (chunk_idx < expected_chunk_index) {
+    return;
+  }
+  if (chunk_idx != expected_chunk_index) {
+    Serial.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
+    return;
+  }
+  esp_err_t err = esp_ota_write(update_handle, chunk_data, data_len);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA] Write failed at chunk %d: %d\n", chunk_idx, err);
+    abortOta("Write failed");
+    return;
+  }
+  mbedtls_sha256_update(&sha256_ctx, chunk_data, data_len);
+  received_bytes += data_len;
+  expected_chunk_index++;
+  if (chunk_idx % 50 == 0) {
+    Serial.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n",
+      received_bytes, expected_firmware_size,
+      (received_bytes * 100.0) / expected_firmware_size);
+  }
 }
 
 void handleOtaChunk(HueMixLinkPacket* pkt) {
@@ -321,10 +405,7 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
   
   if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
     // Not for us, forward to radio node via UART
-    Serial2.write(SERIAL_START);
-    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
-    Serial2.write(SERIAL_END);
-    Serial2.flush();  // Wait for transmission to complete
+    sendSerialFrame((uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
 
@@ -341,46 +422,30 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
     }
   }
   
-  
-  last_ota_activity = millis();
-  
-  uint16_t chunk_idx = pkt->payload.otaChunk.chunk_index;
-  uint8_t data_len = pkt->payload.otaChunk.data_len;
-  
-  // Check chunk order: accept current or future chunks, ignore duplicates
-  if (chunk_idx < expected_chunk_index) {
-    // This is a duplicate chunk we already received - ignore it silently
-    Serial.printf("[OTA] Ignoring duplicate chunk %d (already at %d)\n", chunk_idx, expected_chunk_index);
-    return;
-  }
-  
-  if (chunk_idx != expected_chunk_index) {
-    Serial.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
-    return;
-  }
-  
-  // Write chunk to partition
-  esp_err_t err = esp_ota_write(update_handle, pkt->payload.otaChunk.data, data_len);
-  if (err != ESP_OK) {
-    Serial.printf("[OTA] Write failed at chunk %d: %d\n", chunk_idx, err);
-    abortOta("Write failed");
-    return;
-  }
-  
-  // Update SHA256
-  mbedtls_sha256_update(&sha256_ctx, pkt->payload.otaChunk.data, data_len);
-  
-  received_bytes += data_len;
-  expected_chunk_index++;
-  
-  if (chunk_idx % 50 == 0) {
-    Serial.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n", 
-      received_bytes, expected_firmware_size, 
-      (received_bytes * 100.0) / expected_firmware_size);
-  }
+  handleOtaChunkRaw(pkt->payload.otaChunk.chunk_index, pkt->payload.otaChunk.data, pkt->payload.otaChunk.data_len);
 }
 
 void sendOtaChunkAck(uint16_t last_chunk_index) {
+  if (sec_device_is_v2(&netSecState)) {
+    Payload_OtaChunkAck ack = {};
+    ack.last_chunk_index = last_chunk_index;
+    uint8_t myMac[6];
+    WiFi.macAddress(myMac);
+    const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t v2Buf[96];
+    size_t v2Len = sec_device_encode_tx(
+        &netSecState, &netCounter, PKT_OTA_CHUNK_ACK, myMac, backendMac, 0,
+        (const uint8_t*)&ack, sizeof(ack), v2Buf, sizeof(v2Buf)
+    );
+    if (v2Len > 0) {
+      udp.beginPacket(server_ip, server_port);
+      udp.write(v2Buf, v2Len);
+      udp.endPacket();
+      Serial.printf("[OTA] Sent v2 checkpoint ACK: last_chunk=%d\n", last_chunk_index);
+    }
+    return;
+  }
+
   HueMixLinkPacket pkt;
   memset(&pkt, 0, sizeof(HueMixLinkPacket));
   pkt.type = PKT_OTA_CHUNK_ACK;
@@ -410,10 +475,7 @@ void handleOtaComplete(HueMixLinkPacket* pkt) {
   if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
     // Not for us, forward to radio node via UART
     Serial.println("[OTA] COMPLETE not for us, forwarding to radio");
-    Serial2.write(SERIAL_START);
-    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
-    Serial2.write(SERIAL_END);
-    Serial2.flush();  // Wait for transmission to complete
+    sendSerialFrame((uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
   
@@ -498,10 +560,7 @@ void handleOtaAbort(HueMixLinkPacket* pkt) {
   
   if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
     // Not for us, forward to radio node via UART
-    Serial2.write(SERIAL_START);
-    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
-    Serial2.write(SERIAL_END);
-    Serial2.flush();  // Wait for transmission to complete
+    sendSerialFrame((uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
   
@@ -525,10 +584,7 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
   
   if (memcmp(pkt->targetMAC, myWifiMac, 6) != 0) {
     // Not for us, forward to radio node via UART
-    Serial2.write(SERIAL_START);
-    Serial2.write((uint8_t*)pkt, sizeof(HueMixLinkPacket));
-    Serial2.write(SERIAL_END);
-    Serial2.flush();  // Wait for transmission to complete
+    sendSerialFrame((uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
   
@@ -618,6 +674,14 @@ void sendGatewayHello() {
   pkt.payload.raw[12] = radioVersion[1];  // Radio node minor
   pkt.payload.raw[13] = radioVersion[2];  // Radio node patch
   pkt.payload.raw[14] = 0;                // Radio node build number
+
+  if (!sec_device_is_v2(&netSecState)) {
+    sec_pairing_fill_hello_tlv(&netSecState, pkt.payload.raw, 15, V2_MAX_FRAME_ESP32);
+  } else {
+    pkt.payload.raw[15] = PROTO_VERSION_V2;
+    pkt.payload.raw[16] = (uint8_t)(V2_MAX_FRAME_ESP32 & 0xFF);
+    pkt.payload.raw[17] = (uint8_t)((V2_MAX_FRAME_ESP32 >> 8) & 0xFF);
+  }
   
   pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   udp.beginPacket(server_ip, server_port);
@@ -635,22 +699,35 @@ void sendWiFiStatusToRadio(bool connected) {
   pkt.payload.raw[1] = connected ? 1 : 0;
   pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   
-  Serial2.write(SERIAL_START);
-  Serial2.write((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
-  Serial2.write(SERIAL_END);
-  Serial2.flush();
+  sendSerialFrame((uint8_t*)&pkt, sizeof(HueMixLinkPacket));
   
   Serial.printf("[NET] Sent WiFi status to radio: %s\n", connected ? "CONNECTED" : "DISCONNECTED");
 }
 
 void performFactoryReset() {
   Serial.println("FACTORY RESET TRIGGERED!");
+  // Tell the paired radio node over UART to factory-reset its Security v2 keys & HOME_ID too
+  uint8_t zeroMac[6] = {0, 0, 0, 0, 0, 0};
+  if (memcmp(radioNodeMAC, zeroMac, 6) != 0) {
+    HueMixLinkPacket rstPkt;
+    memset(&rstPkt, 0, sizeof(HueMixLinkPacket));
+    rstPkt.type = PKT_SYS_CMD;
+    WiFi.macAddress(rstPkt.sourceMAC);
+    memcpy(rstPkt.targetMAC, radioNodeMAC, 6);
+    rstPkt.payload.sys.cmd = CMD_FACTORY_RESET;
+    rstPkt.signature = calculateHash(rstPkt.payload.raw, 185, HOME_ID);
+    sendSerialFrame((uint8_t*)&rstPkt, sizeof(HueMixLinkPacket));
+    delay(150);
+  }
+  // Clear pairing/v2 keys while preserving write-once PIN in NVS namespace "sec"
+  sec_device_on_factory_reset(&netSecState);
   wifiTicker.detach();
   for(int i=0; i<5; i++) { 
     digitalWrite(PIN_LED_WIFI, HIGH); digitalWrite(PIN_LED_DATA, HIGH); delay(100); 
     digitalWrite(PIN_LED_WIFI, LOW); digitalWrite(PIN_LED_DATA, LOW); delay(100);
   }
-  wm.resetSettings(); nvs_flash_erase(); nvs_flash_init(); prefs.clear();
+  wm.resetSettings();
+  prefs.clear();
   Serial.println("Rebooting..."); ESP.restart();
 }
 
@@ -672,6 +749,7 @@ void setup() {
     nvs_flash_erase(); nvs_flash_init(); prefs.begin("huemixlink", false);
   }
   HOME_ID = prefs.getUInt("hid", 0);
+  sec_device_init(&netSecState, &netCounter);
   
   last_serial_activity = millis();
   sendSerialHandshake();
@@ -759,10 +837,26 @@ void sendBtnEvent(uint8_t action) {
   
   btnPkt.signature = calculateHash(btnPkt.payload.raw, 185, HOME_ID);
   if (WiFi.status() == WL_CONNECTED) {
-    udp.beginPacket(server_ip, server_port);
-    udp.write((uint8_t*)&btnPkt, sizeof(HueMixLinkPacket));
-    udp.endPacket();
-    flashDataLED();
+    if (sec_device_is_v2(&netSecState)) {
+      const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+      uint8_t v2Wire[128];
+      size_t v2Len = sec_device_encode_tx(
+          &netSecState, &netCounter, PKT_BTN_EVENT, btnPkt.sourceMAC, backendMac, 0,
+          (const uint8_t*)&btnPkt.payload.btn, sizeof(Payload_Button),
+          v2Wire, sizeof(v2Wire)
+      );
+      if (v2Len > 0) {
+        udp.beginPacket(server_ip, server_port);
+        udp.write(v2Wire, v2Len);
+        udp.endPacket();
+        flashDataLED();
+      }
+    } else {
+      udp.beginPacket(server_ip, server_port);
+      udp.write((uint8_t*)&btnPkt, sizeof(HueMixLinkPacket));
+      udp.endPacket();
+      flashDataLED();
+    }
   }
 }
 
@@ -787,62 +881,184 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     int pSize = udp.parsePacket();
     if (pSize) {
-      // Read partial packet from UDP
-      int len = udp.read(udpBuffer, 512);
+      int len = udp.read(udpBuffer, sizeof(udpBuffer));
       if (len > 0) {
-        memset(&txPkt, 0, sizeof(HueMixLinkPacket));
-        memcpy(&txPkt, udpBuffer, len);
-        
         flashDataLED();
-        Serial.printf("[NET] UDP Recv Type 0x%02X (Len %d)\n", txPkt.type, len);
+        Serial.printf("[NET] UDP Recv Type 0x%02X (Len %d)\n", udpBuffer[0], len);
 
-        // Handle OTA packets
-        if (txPkt.type == PKT_OTA_NOTIFY) {
-          handleOtaNotify(&txPkt);
-        } else if (txPkt.type == PKT_OTA_CHUNK) {
-          handleOtaChunk(&txPkt);
-        } else if (txPkt.type == PKT_OTA_CHECKPOINT_REQ) {
-          handleOtaCheckpointReq(&txPkt);
-        } else if (txPkt.type == PKT_OTA_COMPLETE) {
-          handleOtaComplete(&txPkt);
-        } else if (txPkt.type == PKT_OTA_ABORT) {
-          handleOtaAbort(&txPkt);
-        } else if (txPkt.type == PKT_PAIR_CONFIRM) {
-          uint32_t incomingSig = txPkt.signature;
-          uint32_t expectedSig = calculateHash(txPkt.payload.raw, 185, 0);
-          if (incomingSig == expectedSig) {
-            uint32_t newID = txPkt.payload.pair.newHomeID;
-            if (newID != HOME_ID && newID != 0) { 
-              Serial.printf("!!! UPDATING HOME ID: 0x%X !!!\n", newID);
-              HOME_ID = newID; prefs.putUInt("hid", HOME_ID);
-              digitalWrite(PIN_LED_DATA, HIGH); delay(1000); digitalWrite(PIN_LED_DATA, LOW);
-              sendGatewayHello();
-            } else if (newID == HOME_ID) {
-              Serial.println("Re-sending Gateway Hello...");
-              sendGatewayHello();
+        // Variable-length Security v2 frame (never 203 B)
+        if (len != (int)sizeof(HueMixLinkPacket)) {
+          if (len >= V2_MIN_FRAME_SIZE && len <= V2_MAX_FRAME_ESP32 && udpBuffer[1] == PROTO_VERSION_V2) {
+            uint8_t myWifiMac[6];
+            WiFi.macAddress(myWifiMac);
+            HueMixLinkHeaderV2 hdr;
+            memcpy(&hdr, udpBuffer, V2_HEADER_SIZE);
+
+            // Net-node targeted v2 PKT_PAIR_CONFIRM (151 B): install K_own[wifi_mac] and send PKT_PAIR_ACK
+            if (hdr.type == PKT_PAIR_CONFIRM && len == V2_PAIR_CONFIRM_LEN && memcmp(hdr.targetMAC, myWifiMac, 6) == 0) {
+              uint32_t newHomeId = 0;
+              uint8_t ackBuf[96];
+              size_t ackLen = 0;
+              if (sec_pairing_handle_confirm_v2(&netSecState, myWifiMac, udpBuffer, (size_t)len, &netCounter, &newHomeId, ackBuf, sizeof(ackBuf), &ackLen)) {
+                if (newHomeId != 0 && newHomeId != HOME_ID) {
+                  HOME_ID = newHomeId;
+                  prefs.putUInt("hid", HOME_ID);
+                }
+                // Send PKT_PAIR_ACK twice over UDP so a single dropped packet cannot leave
+                // Python thinking the net node is still v1 while NVS has committed v2.
+                for (int attempt = 0; attempt < 2; attempt++) {
+                  udp.beginPacket(server_ip, server_port);
+                  udp.write(ackBuf, ackLen);
+                  udp.endPacket();
+                  if (attempt == 0) delay(150);
+                }
+                Serial.printf("[NET] PAIRED v2! K_own[wifi_mac] installed (epoch=%u)\n", netSecState.key_epoch);
+              }
+            } else if (hdr.type == PKT_PING && memcmp(hdr.targetMAC, myWifiMac, 6) == 0 && sec_device_is_v2(&netSecState)) {
+              uint8_t pt[32];
+              size_t ptLen = 0;
+              if (sec_decode_v2(udpBuffer, (size_t)len, netSecState.k_own, nullptr, pt, sizeof(pt), &ptLen)) {
+                uint32_t uptime_seconds = millis() / 1000;
+                const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+                uint8_t pongBuf[96];
+                size_t pongLen = sec_device_encode_tx(
+                    &netSecState, &netCounter, PKT_PING, myWifiMac, backendMac, hdr.msgID,
+                    (const uint8_t*)&uptime_seconds, sizeof(uptime_seconds),
+                    pongBuf, sizeof(pongBuf)
+                );
+                if (pongLen > 0) {
+                  udp.beginPacket(server_ip, server_port);
+                  udp.write(pongBuf, pongLen);
+                  udp.endPacket();
+                  Serial.printf("[NET] PING v2 Response: Uptime %u seconds\n", uptime_seconds);
+                }
+              }
+            } else if (hdr.type == PKT_SYS_CMD && memcmp(hdr.targetMAC, myWifiMac, 6) == 0 && sec_device_is_v2(&netSecState)) {
+              uint8_t pt[64];
+              size_t ptLen = 0;
+              if (sec_decode_v2(udpBuffer, (size_t)len, netSecState.k_own, nullptr, pt, sizeof(pt), &ptLen) && ptLen >= 1) {
+                uint8_t rspBuf[96];
+                size_t rspLen = 0;
+                if (sec_device_handle_set_pin_cmd(&netSecState, &netCounter, myWifiMac, pt, ptLen, rspBuf, sizeof(rspBuf), &rspLen)) {
+                  udp.beginPacket(server_ip, server_port);
+                  udp.write(rspBuf, rspLen);
+                  udp.endPacket();
+                  Serial.println("[NET] Processed v2 CMD_SET_PIN and sent ACK");
+                } else if (pt[0] == 1 || pt[0] == 2) {
+                  bool oldMode = nightMode;
+                  nightMode = (pt[0] == 1);
+                  if (oldMode != nightMode) {
+                    Serial.printf("[NET] v2 Night Mode: %s\n", nightMode ? "ON" : "OFF");
+                    setWifiLedState(1);
+                  }
+                }
+              }
+            } else if ((hdr.type == PKT_OTA_NOTIFY || hdr.type == PKT_OTA_CHUNK ||
+                        hdr.type == PKT_OTA_CHECKPOINT_REQ || hdr.type == PKT_OTA_COMPLETE ||
+                        hdr.type == PKT_OTA_ABORT) &&
+                       memcmp(hdr.targetMAC, myWifiMac, 6) == 0 && sec_device_is_v2(&netSecState)) {
+              static uint8_t otaPt[1440];
+              size_t ptLen = 0;
+              if (sec_decode_v2(udpBuffer, (size_t)len, netSecState.k_own, nullptr, otaPt, sizeof(otaPt), &ptLen)) {
+                if (hdr.type == PKT_OTA_CHUNK && ptLen >= sizeof(Payload_OtaChunkV2Header)) {
+                  Payload_OtaChunkV2Header ch;
+                  memcpy(&ch, otaPt, sizeof(ch));
+                  if (sizeof(ch) + ch.data_len <= ptLen) {
+                    handleOtaChunkRaw(ch.chunk_index, otaPt + sizeof(ch), ch.data_len);
+                  }
+                } else {
+                  HueMixLinkPacket synth;
+                  memset(&synth, 0, sizeof(synth));
+                  synth.type = hdr.type;
+                  memcpy(synth.sourceMAC, hdr.sourceMAC, 6);
+                  memcpy(synth.targetMAC, myWifiMac, 6);
+                  synth.msgID = hdr.msgID;
+                  size_t cp = (ptLen > sizeof(synth.payload.raw)) ? sizeof(synth.payload.raw) : ptLen;
+                  memcpy(synth.payload.raw, otaPt, cp);
+                  synth.signature = calculateHash(synth.payload.raw, 185, HOME_ID);
+                  if (hdr.type == PKT_OTA_NOTIFY) handleOtaNotify(&synth);
+                  else if (hdr.type == PKT_OTA_CHECKPOINT_REQ) handleOtaCheckpointReq(&synth);
+                  else if (hdr.type == PKT_OTA_COMPLETE) handleOtaComplete(&synth);
+                  else if (hdr.type == PKT_OTA_ABORT) handleOtaAbort(&synth);
+                }
+              }
+            } else {
+              // Relay all other v2 frames verbatim to radio node
+              sendSerialFrame(udpBuffer, (uint16_t)len);
             }
           }
+          continue_udp_done:;
+        } else {
+        memset(&txPkt, 0, sizeof(HueMixLinkPacket));
+        memcpy(&txPkt, udpBuffer, sizeof(HueMixLinkPacket));
+
+        uint8_t myWifiMacV1[6];
+        WiFi.macAddress(myWifiMacV1);
+        bool targetIsSelfV1 = (memcmp(txPkt.targetMAC, myWifiMacV1, 6) == 0);
+
+        // Handle OTA packets (anti-downgrade: reject v1 OTA targeted to self once v2-paired)
+        if (txPkt.type == PKT_OTA_NOTIFY || txPkt.type == PKT_OTA_CHUNK ||
+            txPkt.type == PKT_OTA_CHECKPOINT_REQ || txPkt.type == PKT_OTA_COMPLETE ||
+            txPkt.type == PKT_OTA_ABORT) {
+          if (targetIsSelfV1 && sec_device_is_v2(&netSecState)) {
+            Serial.printf("[NET] SECURITY: Rejected v1 OTA packet (type=0x%02X) while v2-paired\n", txPkt.type);
+          } else if (txPkt.type == PKT_OTA_NOTIFY) {
+            handleOtaNotify(&txPkt);
+          } else if (txPkt.type == PKT_OTA_CHUNK) {
+            handleOtaChunk(&txPkt);
+          } else if (txPkt.type == PKT_OTA_CHECKPOINT_REQ) {
+            handleOtaCheckpointReq(&txPkt);
+          } else if (txPkt.type == PKT_OTA_COMPLETE) {
+            handleOtaComplete(&txPkt);
+          } else if (txPkt.type == PKT_OTA_ABORT) {
+            handleOtaAbort(&txPkt);
+          }
+        } else if (txPkt.type == PKT_PAIR_CONFIRM) {
+          if (sec_pairing_allow_v1_confirm(&netSecState)) {
+            uint32_t incomingSig = txPkt.signature;
+            uint32_t expectedSig = calculateHash(txPkt.payload.raw, 185, 0);
+            if (incomingSig == expectedSig) {
+              uint32_t newID = txPkt.payload.pair.newHomeID;
+              if (newID != HOME_ID && newID != 0) { 
+                Serial.printf("!!! UPDATING HOME ID: 0x%X !!!\n", newID);
+                HOME_ID = newID; prefs.putUInt("hid", HOME_ID);
+                digitalWrite(PIN_LED_DATA, HIGH); delay(1000); digitalWrite(PIN_LED_DATA, LOW);
+                sendGatewayHello();
+              } else if (newID == HOME_ID) {
+                Serial.println("Re-sending Gateway Hello...");
+                sendGatewayHello();
+              }
+            }
+          } else if (targetIsSelfV1) {
+            Serial.println("[NET] SECURITY: Rejected v1 PKT_PAIR_CONFIRM while v2-paired");
+          }
           
-          Serial2.write(SERIAL_START); 
-          Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
-          Serial2.write(SERIAL_END);
-          Serial2.flush();
+          // Forward to radio node for downstream legacy v1 device pairing
+          sendSerialFrame((uint8_t*)&txPkt, sizeof(HueMixLinkPacket));
         } else if (txPkt.type == PKT_SYS_CMD) {
           if (txPkt.signature == calculateHash(txPkt.payload.raw, 185, HOME_ID)) {
-            bool oldMode = nightMode;
-            if (txPkt.payload.sys.cmd == 1) nightMode = true;
-            if (txPkt.payload.sys.cmd == 2) nightMode = false;
-            
-            if (oldMode != nightMode) {
-              Serial.printf("Night Mode: %s\n", nightMode ? "ON" : "OFF");
-              setWifiLedState(1);
+            uint8_t myWifiMac[6];
+            WiFi.macAddress(myWifiMac);
+            if (txPkt.payload.sys.cmd == CMD_UPGRADE_TO_V2 && memcmp(txPkt.targetMAC, myWifiMac, 6) == 0) {
+              if (sec_device_is_v2(&netSecState)) {
+                Serial.println("[NET] Clearing stale v2 keys for re-pairing (CMD_UPGRADE_TO_V2)");
+                sec_pairing_clear_keys(&netSecState);
+              }
+              Serial.println("[NET] Triggering in-place v2 upgrade HELLO");
+              sendGatewayHello();
+            } else {
+              bool oldMode = nightMode;
+              if (txPkt.payload.sys.cmd == 1) nightMode = true;
+              if (txPkt.payload.sys.cmd == 2) nightMode = false;
+              
+              if (oldMode != nightMode) {
+                Serial.printf("Night Mode: %s\n", nightMode ? "ON" : "OFF");
+                setWifiLedState(1);
+              }
+              
+              // Forward to radio node
+              sendSerialFrame((uint8_t*)&txPkt, sizeof(HueMixLinkPacket));
             }
-            
-            // Forward to radio node
-            Serial2.write(SERIAL_START); 
-            Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
-            Serial2.write(SERIAL_END);
-            Serial2.flush();
           }
         } else if (txPkt.type == PKT_PING) {
           // Security: Verify signature for PING
@@ -854,26 +1070,42 @@ void loop() {
             }
           }
           
-          // Respond with uptime
-          HueMixLinkPacket pong;
-          memset(&pong, 0, sizeof(HueMixLinkPacket));
-          pong.type = PKT_PING;
-          WiFi.macAddress(pong.sourceMAC);
+          // Respond with uptime (encrypted v2 if paired as v2, else v1)
           uint32_t uptime_seconds = millis() / 1000;
-          memcpy(pong.payload.raw, &uptime_seconds, sizeof(uint32_t));
-          pong.signature = calculateHash(pong.payload.raw, 185, HOME_ID);
-          
-          udp.beginPacket(server_ip, server_port);
-          udp.write((uint8_t*)&pong, sizeof(HueMixLinkPacket));
-          udp.endPacket();
-          Serial.printf("[NET] PING Response: Uptime %d seconds\n", uptime_seconds);
+          if (sec_device_is_v2(&netSecState)) {
+            uint8_t myWifiMac[6];
+            WiFi.macAddress(myWifiMac);
+            const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+            uint8_t pongBuf[96];
+            size_t pongLen = sec_device_encode_tx(
+                &netSecState, &netCounter, PKT_PING, myWifiMac, backendMac, txPkt.msgID,
+                (const uint8_t*)&uptime_seconds, sizeof(uptime_seconds),
+                pongBuf, sizeof(pongBuf)
+            );
+            if (pongLen > 0) {
+              udp.beginPacket(server_ip, server_port);
+              udp.write(pongBuf, pongLen);
+              udp.endPacket();
+              Serial.printf("[NET] PING v2 Response: Uptime %u seconds\n", uptime_seconds);
+            }
+          } else {
+            HueMixLinkPacket pong;
+            memset(&pong, 0, sizeof(HueMixLinkPacket));
+            pong.type = PKT_PING;
+            WiFi.macAddress(pong.sourceMAC);
+            memcpy(pong.payload.raw, &uptime_seconds, sizeof(uint32_t));
+            pong.signature = calculateHash(pong.payload.raw, 185, HOME_ID);
+            
+            udp.beginPacket(server_ip, server_port);
+            udp.write((uint8_t*)&pong, sizeof(HueMixLinkPacket));
+            udp.endPacket();
+            Serial.printf("[NET] PING Response: Uptime %d seconds\n", uptime_seconds);
+          }
         } else {
           // Forward other packet types to radio node
-          Serial2.write(SERIAL_START); 
-          Serial2.write((uint8_t*)&txPkt, sizeof(HueMixLinkPacket)); 
-          Serial2.write(SERIAL_END);
-          Serial2.flush();
+          sendSerialFrame((uint8_t*)&txPkt, sizeof(HueMixLinkPacket));
         }
+        } // end v1 203-byte branch
       }
     }
   }

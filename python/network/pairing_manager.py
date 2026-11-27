@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 from network.device_manager import device_manager
 from services.data_manager import data_manager
-from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, FILE_PAIRING_HISTORY
+from constants import DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, DEV_PLUGIN_MARKER, FILE_PAIRING_HISTORY
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ class PairingManager:
         self._pairing_active = False
         self._expiry_time: Optional[datetime] = None
         self._allowed_types: List[int] = []  # Empty = all types allowed
+        self._active_pin: Optional[str] = None
         self._lock = threading.RLock()
         
         # Track last 5 paired devices
@@ -31,17 +32,24 @@ class PairingManager:
         
         logger.info("PairingManager initialized")
     
-    def start_pairing(self, duration: int = 60, device_types: Optional[List[str]] = None):
+    def start_pairing(self, duration: int = 60, device_types: Optional[List[str]] = None, pin: Optional[str] = None):
         """Start pairing mode for specified duration.
         
         Args:
             duration: Pairing window duration in seconds (default 60)
             device_types: List of device type strings ['gateway', 'button', 'light']
                          None or empty = all types allowed
+            pin: Optional 6-digit Security v2 device PIN for this pairing window
         """
         with self._lock:
             self._pairing_active = True
             self._expiry_time = datetime.now() + timedelta(seconds=duration)
+            self._active_pin = str(pin).strip() if pin else None
+            try:
+                from network.pairing_v2 import pairing_v2_manager
+                pairing_v2_manager.reset_window_failures()
+            except Exception:
+                pass
             
             # Convert device type strings to constants
             if device_types:
@@ -51,7 +59,8 @@ class PairingManager:
                     'light': DEV_LIGHT,
                     'remote': DEV_REMOTE,
                     'motion': DEV_MOTION,
-                    'door': DEV_DOOR
+                    'door': DEV_DOOR,
+                    'plugin': DEV_PLUGIN_MARKER,
                 }
                 allowed_types = []
                 for device_type in device_types:
@@ -78,7 +87,19 @@ class PairingManager:
             if self._pairing_active:
                 self._pairing_active = False
                 self._expiry_time = None
+                self._active_pin = None
                 logger.info("Pairing mode stopped")
+
+    def get_active_pin(self) -> Optional[str]:
+        """Return the 6-digit PIN configured for the active pairing window, if any."""
+        with self._lock:
+            if not self._pairing_active:
+                return None
+            if self._expiry_time and datetime.now() > self._expiry_time:
+                self._pairing_active = False
+                self._active_pin = None
+                return None
+            return self._active_pin
     
     def is_pairing_allowed(self, device_mac: str, device_type: int, rssi: int = 0) -> bool:
         """Check if pairing is allowed for a device.
@@ -147,7 +168,8 @@ class PairingManager:
             return {
                 'active': self._pairing_active,
                 'remaining_seconds': remaining,
-                'allowed_types': allowed_type_names if allowed_type_names else ['all']
+                'allowed_types': allowed_type_names if allowed_type_names else ['all'],
+                'pin_active': bool(self._pairing_active and self._active_pin),
             }
     
     def record_device_paired(self, device_mac: str, device_type: int, device_name: str, mode: str = 'unknown'):
@@ -171,8 +193,11 @@ class PairingManager:
                 'mode': mode
             }
             
-            # Remove if already exists (update)
-            self._paired_devices = [d for d in self._paired_devices if d['mac'].upper() != device_mac.upper()]
+            # Remove if already exists with same (mac, type) so gateway + its built-in button coexist
+            self._paired_devices = [
+                d for d in self._paired_devices
+                if not (d['mac'].upper() == device_mac.upper() and d.get('type') == device_type)
+            ]
             
             # Add to front of list
             self._paired_devices.insert(0, paired_device)
@@ -226,6 +251,17 @@ class PairingManager:
                         device_copy['name'] = sensor.get('name', device['name'])
                         device_copy['id'] = sensor.get('id')
                 
+                try:
+                    from network.security_store import security_store
+                    lookup_mac = device['mac']
+                    if device['type'] == DEV_GATEWAY:
+                        gw = device_manager.get_gateway_by_wifi_mac(device['mac'])
+                        if gw and gw.get('radio_mac'):
+                            lookup_mac = gw['radio_mac']
+                    device_copy['crypto_mode'] = security_store.get_crypto_mode(lookup_mac)
+                except Exception:
+                    device_copy['crypto_mode'] = 'v1'
+
                 updated_devices.append(device_copy)
             
             return updated_devices

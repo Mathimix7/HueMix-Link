@@ -13,6 +13,7 @@
 - [First-time Commissioning Workflow](#first-time-commissioning-workflow)
 - [ESP Firmware: Build and Flash](#esp-firmware-build-and-flash)
 - [Firmware Updates (OTA Page)](#firmware-updates-ota-page)
+- [Security v2 Protocol](#security-v2-protocol)
 - [Configuration and Data Storage](#configuration-and-data-storage)
 - [Networking and Ports](#networking-and-ports)
 - [How Automation Works](#how-automation-works)
@@ -29,7 +30,7 @@
   sudo bash install.sh
   ```
 
-2. Open the web UI at `http://huemixlink.local` or your server IP.
+1. Open the web UI at `http://huemixlink.local` or your server IP.
 2. Pair your Hue Bridge from the Bridge configuration page.
 3. Put an ESP device into pairing mode and add it from the Pairing page.
 4. Configure the device behavior, then verify it by triggering a button, motion sensor, or lightstrip sync.
@@ -218,10 +219,21 @@ Pre-built firmware binaries are available in the project's GitHub releases. Down
 The **OTA** page in the web UI lets you:
 
 - **Check available versions** from GitHub releases
-- **Select device** type/model and target device
-- **Battery-powered devices**: double-press the reset button before OTA update
-- **Initiate flash** with progress monitoring
-- **Monitor errors** and retry failed updates
+- **Web Serial Flasher**: Flash ESP32/ESP8266 devices directly from the browser; v4.x non-gateway firmwares automatically provision a unique 6-digit Security v2 PIN, with one-click **Copy PIN**, **Copy NFC Pairing URL**, and **Print Label** (QR code + PIN)
+- **Queued & wake-triggered OTA**: Queue multiple device updates (runs one at a time, automatically ordering radio node before net node on gateways); battery-powered v2 devices can wake and pull queued updates automatically (with a 20% minimum battery guard)
+- **Fast v2 OTA**: ESP32 devices on Security v2 use ESP-NOW v2 frames (up to 1024-byte chunks) for 3–5× faster wireless updates
+- **Security upgrades & PIN management**: Trigger in-place v1 → v2 upgrades, provision/view 6-digit PINs, and print pairing labels directly from the device list
+
+## Security v2 Protocol
+
+Firmware `4.x` introduces **Security v2**, an authenticated encryption layer over ESP-NOW and UDP that replaces legacy v1 FNV-1a checksums while remaining dual-stack compatible during migration:
+
+- **Authenticated encryption & replay protection**: Every v2 device derives unique per-device `K_own` and `K_ack` keys (via HKDF from the server's master key) during an **X25519 ECDH** 3-flight handshake. All packets are encrypted and authenticated with **AES-128-GCM** and protected against replay attacks by monotonic counters persisted on flash and SQLite.
+- **6-digit device PINs**: Non-gateway devices support a write-once 6-digit pairing PIN (auto-provisioned during Web Serial Flashing or sent over an encrypted v2 link from the OTA page) that binds the ECDH handshake against MITM attacks.
+- **QR labels & NFC tap-to-pair**: Printable labels include a QR code pointing to `/pairing#pin=XXXXXX`, and the same URL can be written to NTAG NFC stickers. Scanning a label or tapping an NFC tag opens `/pairing` and automatically starts a 60-second v2 pairing window with that PIN (using the `#` URL fragment keeps the PIN out of HTTP server logs).
+- **TOFU-only gateways**: Local LAN WiFi and Serial gateways use TOFU Security v2 and auto-pair without requiring PINs.
+- **Secure Short-Range Auto-Pairing**: An optional toggle on `/pairing` allows non-revoked Security v2 devices with a saved 6-digit PIN and signal stronger than `-50 dBm` to auto-pair without opening a long-range window (legacy v1, TOFU, and revoked devices are blocked).
+- **Migration controls**: Settings provides toggles to enable v2 pairing, require v2 for new pairings, or disable legacy v1 traffic once all devices are upgraded.
 
 ## Configuration and Data Storage
 
@@ -234,7 +246,7 @@ All runtime configuration is stored in `python/data/` (or `/opt/huemix-link/data
 - `motion_sensors.json`: Motion sensor configurations and time slots
 - `lightstrips.json`: Lightstrip configurations and color overrides
 - `pairing_history.json`: Last 5 paired devices
-- `home_id`: Unique identifier for this HueMix-Link instance. This value is embedded in every packet as a shared secret and used to verify that incoming messages belong to your installation. All devices must be paired while this ID is set — re-pairing is required if it changes.
+- `home_id`: Unique 32-bit network identifier for this HueMix-Link instance. In legacy protocol v1, it is mixed into the FNV-1a packet checksum to separate installations (**HomeID is a network identifier, not a cryptographic secret**). See [Security v2 Protocol](#security-v2-protocol) for authenticated encryption.
 
 Backups are created and restored through the settings page; they are stored in `data/backups/`.
 
@@ -250,7 +262,7 @@ UDP port can be changed in settings; the backend will restart UDP listening with
 
 1. **Device sends event** via **ESP-NOW** (button press, remote action, motion detection)
 2. **Gateway receives** via ESP-NOW and forwards message to backend via **UDP**
-3. **UDP server** decodes and validates packet (signature check using HomeID)
+3. **UDP server** decodes and validates packet (AES-128-GCM authentication in Security v2, or HomeID checksum in legacy v1)
 4. **Device manager** resolves device identity; **pairing manager** verifies eligibility
 5. **Automation engine** applies configured logic:
    - **Buttons/Remotes**: Scene cycle, toggle, brightness adjust, hold-to-adjust
@@ -278,7 +290,7 @@ The Gateway is a single board that contains two ESP32 modules working together:
 **LED indicators**
 
 | LED | State | Meaning |
-|-----|-------|---------|
+| ----- | ------- | --------- |
 | WiFi | Off | No power / booting |
 | WiFi | Fast blink (0.2s) | Not yet configured — WiFi config portal is open |
 | WiFi | Slow blink (0.5s) | Connecting or retrying WiFi |
@@ -343,7 +355,7 @@ The Button is a single pushbutton device that sends click, hold, and release eve
 **Events sent**
 
 | Action | Trigger |
-|--------|---------|
+| -------- | --------- |
 | Click | Short press and release |
 | Holding | Held beyond 500 ms, repeated every 500 ms |
 | Release | Released after a hold |
@@ -353,7 +365,7 @@ The Button is a single pushbutton device that sends click, hold, and release eve
 **LED indicators**
 
 | State | Meaning |
-|-------|---------|
+| ------- | --------- |
 | Brief flash | Action sent via ESP-NOW |
 | 2 fast blinks | No acknowledgment — gateway may be out of range |
 | 2 slow blinks | Failed to pair device |
@@ -385,7 +397,7 @@ The Remote is a battery-powered ESP32 device with up to 4 independently configur
 **Action types per button** (configurable in web UI)
 
 | Type | Click | Hold |
-|------|-------|------|
+| ------ | ------- | ------ |
 | Normal | Cycle scenes / turn room off | Adjust brightness |
 | Toggle | Toggle room on/off | — |
 | Brightness Up | Increase brightness | Increase continuously |
@@ -395,7 +407,7 @@ The Remote is a battery-powered ESP32 device with up to 4 independently configur
 **LED indicators**
 
 | State | Meaning |
-|-------|---------|
+| ------- | --------- |
 | Brief flash | Button action sent |
 | 2 fast blinks | No acknowledgment — gateway may be out of range |
 | 2 slow blinks | Failed to pair device |
@@ -443,7 +455,7 @@ The Motion Sensor is a battery-powered ESP32 device with a PIR sensor and an amb
 **LED indicators**
 
 | State | Meaning |
-|-------|---------|
+| ------- | --------- |
 | Brief flash | Motion detected, event sent |
 | 2 fast blinks | No acknowledgment — gateway may be out of range |
 | 3 blinks | OTA mode |
@@ -489,7 +501,7 @@ The Door Sensor is a battery-powered ESP32 device that reports magnetic open/clo
 **LED indicators**
 
 | State | Meaning |
-|-------|---------|
+| ------- | --------- |
 | Brief flash | Door event sent |
 | 2 fast blinks | No acknowledgment — gateway may be out of range |
 | 3 blinks | OTA mode |
@@ -520,7 +532,7 @@ The Lightstrip is an ESP32 or ESP8266 device that drives WS2812B or SK6812 LED s
 **Hardware models**
 
 | Model | MCU | LED type | Notes |
-|-------|-----|----------|-------|
+| ------- | ----- | ---------- | ------- |
 | 1 | ESP32 | WS2812B | Standard RGB |
 | 2 | ESP8266 | WS2812B | Standard RGB |
 | 3 | ESP32 | SK6812 | RGBW |

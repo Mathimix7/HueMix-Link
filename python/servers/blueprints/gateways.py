@@ -1,4 +1,5 @@
 """Gateways routes blueprint for ESP-NOW UDP network gateways."""
+import logging
 from flask import Blueprint, render_template, request, jsonify
 from services import data_manager
 from services.config_manager import config_manager
@@ -8,6 +9,7 @@ from datetime import datetime
 from constants import FILE_GATEWAYS
 from services import config_notifier
 
+logger = logging.getLogger(__name__)
 gateways_bp = Blueprint('gateways', __name__, url_prefix='/gateways')
 
 
@@ -218,8 +220,26 @@ def delete_gateway(gateway_id):
             baudrate=serial_cfg.get('baudrate', 460800),
         )
     
-    # Notify network server to remove from routing table
+    # Notify network server to remove from routing table and revoke v2 trust (keeping saved PINs)
     if deleted_gateway:
+        try:
+            from network.network_server import network_server
+            gw_name = deleted_gateway.get('name') or 'Gateway'
+            if deleted_gateway.get('mac_address'):
+                network_server.revoke_device(
+                    deleted_gateway['mac_address'],
+                    keep_pin=True,
+                    last_name=f"{gw_name} (Net)",
+                )
+            if deleted_gateway.get('radio_mac'):
+                network_server.revoke_device(
+                    deleted_gateway['radio_mac'],
+                    keep_pin=True,
+                    last_name=f"{gw_name} (Radio)",
+                )
+        except Exception as e:
+            logger.warning(f"Failed to revoke Security v2 access for gateway {gateway_id}: {e}")
+
         config_notifier.notify_change('gateway_deleted', {
             'gateway_id': gateway_id,
             'wifi_mac': deleted_gateway.get('mac_address'),

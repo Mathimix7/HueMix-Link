@@ -1962,18 +1962,18 @@ class AutomationEngine:
                     break
             
             if not light_config:
-                logger.debug(f"Light {light_mac} not found in config, skipping color update")
+                logger.info(f"Light {light_mac} not found in config, skipping color update")
                 return
             
             # Get group (room/zone) and check for active scene
             group_id, group_type = self._strip_target(light_config)
             if not group_id:
-                logger.debug(f"Light {light_mac} has no room/zone assigned, skipping color update")
+                logger.info(f"Light {light_mac} has no room/zone assigned, skipping color update")
                 return
             
             group_state = self._get_group_state(group_id, group_type)
             if not group_state or not group_state.get('current_scene_id'):
-                logger.debug(f"{group_type.capitalize()} {group_id} has no active scene, skipping color update")
+                logger.info(f"{group_type.capitalize()} {group_id} has no active scene, skipping color update for {light_mac}")
                 return
             
             # Get colors for current scene
@@ -1990,6 +1990,8 @@ class AutomationEngine:
                     logger.info(f"✨ Sent current scene colors to {light_mac} (scene: {scene_id})")
                 else:
                     logger.warning(f"Failed to send colors to {light_mac}")
+            else:
+                logger.info(f"No color data computed for {light_mac} (scene: {scene_id}), skipping color update")
             
         except Exception as e:
             logger.error(f"Error sending current colors to {light_mac}: {e}", exc_info=True)

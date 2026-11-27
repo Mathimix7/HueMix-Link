@@ -315,8 +315,9 @@ def toggle_enabled(device_id):
 
 @door_sensors_bp.route('/api/devices/<device_id>', methods=['DELETE'])
 def delete_device(device_id):
-    """Delete a door sensor from configuration."""
+    """Delete a door sensor from configuration and revoke its Security v2 radio trust (keeping its saved PIN)."""
     sensors = get_door_sensors()
+    deleted_sensor = next((s for s in sensors if s['id'] == device_id), None)
     original_length = len(sensors)
     sensors = [sensor for sensor in sensors if sensor['id'] != device_id]
 
@@ -324,6 +325,17 @@ def delete_device(device_id):
         return jsonify({'success': False, 'error': 'Device not found'}), 404
 
     save_door_sensors(sensors)
+
+    if deleted_sensor and deleted_sensor.get('mac_address'):
+        try:
+            from network.network_server import network_server
+            network_server.revoke_device(
+                deleted_sensor['mac_address'],
+                keep_pin=True,
+                last_name=deleted_sensor.get('name'),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to revoke Security v2 access for door sensor {deleted_sensor.get('mac_address')}: {e}")
 
     config_notifier.notify_change('door_sensor_delete', {
         'device_id': device_id,

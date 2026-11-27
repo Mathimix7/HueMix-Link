@@ -17,6 +17,11 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('start-long-range-btn').addEventListener('click', startLongRangePairing);
     document.getElementById('stop-long-range-btn').addEventListener('click', stopPairing);
     
+    // Support NFC tap-to-pair via URL fragment: /pairing#pin=123456 (optional &type=button&auto=0)
+    // Using the hash fragment keeps the 6-digit PIN out of HTTP server logs and Referer headers.
+    handleNfcPairingHash();
+    window.addEventListener('hashchange', handleNfcPairingHash);
+    
     // Poll for status updates every second
     statusTimer = setInterval(() => {
         updatePairingStatus();
@@ -24,28 +29,84 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 1000);
 });
 
+// Parse #pin=XXXXXX (& optional &type=... &auto=0/1) from URL fragment and auto-start pairing
+async function handleNfcPairingHash() {
+    const rawHash = window.location.hash ? window.location.hash.slice(1) : '';
+    if (!rawHash) return;
+
+    const params = new URLSearchParams(rawHash);
+    const pin = (params.get('pin') || '').trim();
+    const type = (params.get('type') || '').trim().toLowerCase();
+    const auto = params.get('auto') !== '0';
+
+    if (!pin) return;
+
+    // Immediately remove PIN from the URL bar / browser history so refreshes don't re-trigger
+    try {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+    } catch (_) {}
+
+    if (!/^\d{6}$/.test(pin)) {
+        showToast('Error', 'Invalid NFC pairing PIN (must be 6 digits)', 'error');
+        return;
+    }
+
+    const typeSelect = document.getElementById('pairing-type');
+    if (type && typeSelect) {
+        const validOption = Array.from(typeSelect.options).some(opt => opt.value === type);
+        if (validOption) {
+            typeSelect.value = type;
+        }
+    }
+
+    const pinInput = document.getElementById('pairing-pin');
+    if (pinInput) {
+        pinInput.value = pin;
+    }
+
+    if (auto) {
+        const started = await startLongRangePairing();
+        if (started) {
+            showToast('NFC Pairing Active', '60-second Security v2 pairing window started with device PIN', 'success');
+        }
+    }
+}
+
 // Start long range pairing mode (fixed to 60 seconds)
 async function startLongRangePairing() {
     const type = document.getElementById('pairing-type').value;
     const types = type === 'all' ? null : [type];
+    const pinInput = document.getElementById('pairing-pin');
+    const pin = pinInput ? pinInput.value.trim() : '';
+
+    if (pin && !/^\d{6}$/.test(pin)) {
+        showToast('Error', 'Security PIN must be exactly 6 digits (or leave blank for legacy devices)', 'error');
+        return false;
+    }
     
     try {
+        const body = { duration: 60, types };
+        if (pin) body.pin = pin;
         const response = await fetch('/api/pairing/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ duration: 60, types })
+            body: JSON.stringify(body)
         });
         
         const data = await response.json();
         
         if (data.success) {
+            if (pinInput) pinInput.value = '';
             updatePairingStatus();
+            return true;
         } else {
             showToast('Error', 'Failed to start long range pairing: ' + data.error, 'error');
+            return false;
         }
     } catch (error) {
         console.error('Error starting long range pairing:', error);
         showToast('Error', 'Failed to start long range pairing mode', 'error');
+        return false;
     }
 }
 
@@ -85,6 +146,16 @@ async function updatePairingStatus() {
         const longRangeInfo = document.getElementById('long-range-info');
         const timeRemaining = document.getElementById('time-remaining');
         const lookingFor = document.getElementById('looking-for');
+        const gwWarn = document.getElementById('legacy-gateway-warning');
+        const gwWarnText = document.getElementById('legacy-gateway-warning-text');
+
+        if (gwWarn && data.security_flags && data.security_flags.security_v2_pair && data.legacy_gateways && data.legacy_gateways.length > 0) {
+            gwWarn.classList.remove('hidden');
+            const names = data.legacy_gateways.map(g => `${g.name} (${g.version_radio})`).join(', ');
+            gwWarnText.textContent = `Upgrade legacy gateways before pairing Security v2 devices: ${names}`;
+        } else if (gwWarn) {
+            gwWarn.classList.add('hidden');
+        }
         
         if (data.active) {
             // Long range mode active - replace short range with long range info
@@ -106,18 +177,64 @@ async function updatePairingStatus() {
                 'button': 'Buttons/Remotes Only',
                 'light': 'Lightstrips Only',
                 'motion': 'Motion Sensors Only',
-                'door': 'Door Sensors Only'
+                'door': 'Door Sensors Only',
+                'plugin': 'Plugin Devices Only'
             };
             const types = data.allowed_types || ['all'];
-            lookingFor.textContent = types.length === 1 ? (typeNames[types[0]] || types[0]) : 'All Devices';
+            const typeLabel = types.length === 1 ? (typeNames[types[0]] || types[0]) : 'All Devices';
+            lookingFor.textContent = data.pin_active ? `${typeLabel} (🔒 6-digit PIN active)` : typeLabel;
             
         } else {
-            // Short range only state
-            badge.innerHTML = '<span class="bg-green-100 text-green-700 px-3 py-1 rounded-full">Short Range Active</span>';
+            // Pairing window closed — reflect whether secure v2 Known-PIN short-range auto-pair is enabled
+            const v2PairOn = Boolean(data.security_flags && data.security_flags.security_v2_pair);
+            const autoPairOn = Boolean(data.allow_rssi_auto_pair) && v2PairOn;
+            const reqV2 = Boolean(data.security_flags && data.security_flags.require_v2);
+            const srToggle = document.getElementById('short-range-toggle');
+            if (srToggle) {
+                srToggle.checked = autoPairOn;
+                srToggle.disabled = !v2PairOn;
+            }
+            if (autoPairOn) {
+                badge.innerHTML = '<span class="bg-green-100 text-green-700 px-3 py-1 rounded-full">Short Range Active (v2 PIN)</span>';
+                shortRangeInfo.className = 'bg-green-50 border border-green-200 rounded-lg p-4 mb-4';
+                const icon = document.getElementById('short-range-icon');
+                const title = document.getElementById('short-range-title');
+                const desc = document.getElementById('short-range-desc');
+                if (icon) icon.className = 'fas fa-shield-alt text-green-600 mr-2';
+                if (title) { title.className = 'font-semibold text-green-800'; title.textContent = 'Short Range Auto-Pairing Active (v2 PIN Only)'; }
+                if (desc) { desc.className = 'text-sm text-green-700'; desc.textContent = 'Non-revoked Security v2 devices with a saved 6-digit PIN closer than -50 dBm will auto-pair. Legacy v1 and TOFU devices are blocked.'; }
+            } else {
+                badge.innerHTML = reqV2
+                    ? '<span class="bg-blue-100 text-blue-700 px-3 py-1 rounded-full">Pairing Closed (v2 Required)</span>'
+                    : '<span class="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">Pairing Closed</span>';
+                shortRangeInfo.className = 'bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4';
+                const icon = document.getElementById('short-range-icon');
+                const title = document.getElementById('short-range-title');
+                const desc = document.getElementById('short-range-desc');
+                if (icon) icon.className = 'fas fa-lock text-gray-500 mr-2';
+                if (title) { title.className = 'font-semibold text-gray-800'; title.textContent = 'Short Range Auto-Pairing (Off)'; }
+                if (desc) {
+                    desc.className = 'text-sm text-gray-600';
+                    desc.textContent = v2PairOn
+                        ? 'Auto-pairing is off. Start Pairing Mode below, or toggle this on to allow non-revoked v2 devices with a saved PIN closer than -50 dBm to auto-pair.'
+                        : 'Auto-pairing is off. Enable Security v2 in Settings to use Short Range v2 PIN Auto-Pairing.';
+                }
+            }
             activeControls.classList.add('hidden');
             inactiveControls.classList.remove('hidden');
             shortRangeInfo.classList.remove('hidden');
             longRangeInfo.classList.add('hidden');
+        }
+
+        // Reflect security_v2_pair / require_v2 on the PIN input field
+        const pinInput = document.getElementById('pairing-pin');
+        if (pinInput && data.security_flags) {
+            const v2PairOn = Boolean(data.security_flags.security_v2_pair);
+            const reqV2 = Boolean(data.security_flags.require_v2);
+            pinInput.disabled = !v2PairOn;
+            pinInput.placeholder = !v2PairOn
+                ? 'Enable Security v2 in Settings to use PIN pairing'
+                : (reqV2 ? '6-digit PIN (required for PIN devices; v1 disabled)' : 'e.g. 482910');
         }
         
     } catch (error) {
@@ -211,6 +328,23 @@ async function loadPairedDevices() {
                     'wifi': '<span class="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded-full">WiFi</span>'
                 };
                 const modeBadge = modeBadges[device.mode] || '<span class="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded-full">Unknown</span>';
+
+                // Security v2 badge (gateways do not use PINs, so v2-unverified renders as green v2)
+                const isGateway = Number(device.type) === 1;
+                const secBadges = {
+                    'v2': '<span class="px-2 py-1 text-xs bg-emerald-100 text-emerald-800 rounded-full font-medium">🔒 v2 Verified</span>',
+                    'v2-unverified': isGateway
+                        ? '<span class="px-2 py-1 text-xs bg-emerald-100 text-emerald-800 rounded-full font-medium">🔒 v2</span>'
+                        : '<span class="px-2 py-1 text-xs bg-amber-100 text-amber-800 rounded-full font-medium">⚠️ v2 Unverified</span>',
+                    'v1': '<span class="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded-full">Legacy v1</span>'
+                };
+                const secBadge = secBadges[device.crypto_mode || 'v1'] || secBadges['v1'];
+                const safeDeviceName = String(device.name || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
                 
                 // Config page URLs
                 const configUrls = {
@@ -234,11 +368,12 @@ async function loadPairedDevices() {
                             <div class="flex items-center space-x-3 flex-1">
                                 <div class="text-2xl">${icon}</div>
                                 <div class="flex-1">
-                                    <div class="font-semibold text-gray-800">${device.name}</div>
+                                    <div class="font-semibold text-gray-800">${safeDeviceName}</div>
                                     <div class="font-mono text-xs text-gray-500">${device.mac}</div>
                                     <div class="flex items-center gap-2 mt-1">
                                         <span class="text-xs text-gray-500">${device.type_name}</span>
                                         ${modeBadge}
+                                        ${secBadge}
                                     </div>
                                 </div>
                             </div>
@@ -478,6 +613,38 @@ async function confirmDelete() {
         console.error('Error deleting device:', error);
         showToast('Error', 'Failed to delete device', 'error');
         closeDeleteModal();
+    }
+}
+
+async function toggleShortRangeAutoPair(checkbox) {
+    const enabled = Boolean(checkbox.checked);
+    checkbox.disabled = true;
+    try {
+        const resp = await fetch('/api/pairing/short-range', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled })
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            checkbox.checked = !enabled;
+            showToast('Error', data.error || 'Failed to update short-range auto-pairing', 'error');
+        } else {
+            showToast(
+                'Success',
+                enabled
+                    ? 'Short Range Auto-Pairing enabled (v2 saved PINs only, > -50 dBm)'
+                    : 'Short Range Auto-Pairing disabled',
+                'success'
+            );
+        }
+    } catch (error) {
+        checkbox.checked = !enabled;
+        console.error('Error toggling short-range auto-pairing:', error);
+        showToast('Error', 'Failed to update short-range auto-pairing', 'error');
+    } finally {
+        checkbox.disabled = false;
+        await updatePairingStatus();
     }
 }
 

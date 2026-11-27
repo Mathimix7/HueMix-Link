@@ -29,6 +29,12 @@ class ConfigManager:
                 'serial_gateway_enabled': False,
                 'serial_gateway_port': '',
                 'serial_gateway_baudrate': 460800,
+                'allow_rssi_auto_pair': False,
+                'security_v2_decode': True,
+                'security_v2_pair': False,
+                'security_v2_send': False,
+                'require_v2': False,
+                'allow_v1': True,
             }
             self.save_config(default_config)
     
@@ -46,10 +52,17 @@ class ConfigManager:
                     'serial_gateway_enabled': False,
                     'serial_gateway_port': '',
                     'serial_gateway_baudrate': 460800,
+                    'allow_rssi_auto_pair': False,
+                    'security_v2_decode': True,
+                    'security_v2_pair': False,
+                    'security_v2_send': False,
+                    'require_v2': False,
+                    'allow_v1': True,
                 }
     
     def save_config(self, config):
         """Save configuration to file."""
+        self._security_flags_cache = None
         with self.lock:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2)
@@ -80,6 +93,43 @@ class ConfigManager:
         config = self.load_config()
         config['dev_mode'] = enabled
         self.save_config(config)
+
+    def get_allow_rssi_auto_pair(self) -> bool:
+        """Return whether legacy RSSI-proximity auto-pairing is enabled (default False)."""
+        config = self.load_config()
+        return bool(config.get('allow_rssi_auto_pair', False))
+
+    def set_allow_rssi_auto_pair(self, enabled: bool):
+        """Persist legacy RSSI-proximity auto-pairing setting."""
+        config = self.load_config()
+        config['allow_rssi_auto_pair'] = bool(enabled)
+        self.save_config(config)
+
+    def get_security_flags(self) -> dict:
+        """Return Security v2 runtime feature flags (cached in memory, invalidated on save)."""
+        cached = getattr(self, '_security_flags_cache', None)
+        if cached is not None:
+            return dict(cached)
+        config = self.load_config()
+        flags = {
+            'security_v2_decode': bool(config.get('security_v2_decode', True)),
+            'security_v2_pair': bool(config.get('security_v2_pair', False)),
+            'security_v2_send': bool(config.get('security_v2_send', False)),
+            'require_v2': bool(config.get('require_v2', False)),
+            'allow_v1': bool(config.get('allow_v1', True)),
+        }
+        self._security_flags_cache = flags
+        return dict(flags)
+
+    def set_security_flag(self, flag_name: str, enabled: bool):
+        """Update one Security v2 runtime feature flag."""
+        allowed = {'security_v2_decode', 'security_v2_pair', 'security_v2_send', 'require_v2', 'allow_v1'}
+        if flag_name not in allowed:
+            raise ValueError(f"Unknown security flag: {flag_name}")
+        config = self.load_config()
+        config[flag_name] = bool(enabled)
+        self.save_config(config)
+        self._security_flags_cache = None
 
     def get_serial_gateway_config(self):
         """Get USB serial gateway settings."""

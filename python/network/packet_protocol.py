@@ -5,15 +5,22 @@ Handles packet encoding/decoding, signature validation, and MAC address formatti
 """
 import struct
 import binascii
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Any
 import logging
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from constants import (
     PKT_PAIR_CONFIRM, PKT_LIGHT_RAW, PKT_SYS_CMD, PKT_GW_LIST_UPD,
+    PKT_PAIR_ACK, PKT_KEY_DISTRIB,
     PKT_HELLO, PKT_BTN_EVENT, PKT_DELIVERY_RPT, PKT_MOTION_EVENT,
     PKT_PING_DEVICE, PKT_PING,
     PKT_OTA_NOTIFY, PKT_OTA_READY, PKT_OTA_CHUNK, PKT_OTA_CHUNK_ACK, PKT_OTA_COMPLETE, PKT_OTA_ABORT, PKT_OTA_CHECKPOINT_REQ,
     DEV_GATEWAY, DEV_BUTTON, DEV_LIGHT, DEV_REMOTE, DEV_MOTION, DEV_DOOR, DEV_PLUGIN_MARKER,
-    FNV_OFFSET_BASIS, FNV_PRIME, FNV_MASK, OTA_CHUNK_DATA_SIZE
+    FNV_OFFSET_BASIS, FNV_PRIME, FNV_MASK, OTA_CHUNK_DATA_SIZE,
+    PACKET_TOTAL_SIZE, PROTO_VERSION_V1, PROTO_VERSION_V2,
+    V2_HEADER_SIZE, V2_AAD_SIZE, V2_TAG_SIZE, V2_OVERHEAD,
+    V2_MIN_FRAME_SIZE, V2_FORBIDDEN_LEN,
+    V2_HELLO_CAP_OFFSETS, V2_HELLO_CAP_LEN, V2_HELLO_FLAG_HAS_PIN,
 )
 from services.home_id_manager import home_id_manager
 
@@ -143,6 +150,17 @@ class PacketEncoder:
         packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
         
         return packet
+
+    def encode_custom(self, pkt_type: int, target_mac: str, payload: bytes, msg_id: int = 0) -> bytes:
+        """Encode a legacy v1 203-byte packet with arbitrary packet type and payload (<= 185 B)."""
+        raw_payload = bytes(payload or b"")
+        if len(raw_payload) > 185:
+            raise ValueError(f"v1 payload too large: {len(raw_payload)} > 185 bytes")
+        src_mac = b'\x00' * 6
+        tgt_mac = MACFormatter.to_bytes(target_mac)
+        padded = raw_payload + b'\x00' * (185 - len(raw_payload))
+        signature = self._calculate_hash(padded)
+        return struct.pack("<BI", pkt_type & 0xFF, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id & 0xFF) + padded
     
     def encode_light_raw(self, target_mac: str, rgb_data: List[Tuple[int, int, int]], 
                         brightness: int = 255, msg_id: int = 0) -> bytes:
@@ -627,7 +645,8 @@ class PacketDecoder:
                 major, minor, patch, build = struct.unpack("<BBBB", payload[19:23])
                 result['version'] = f"{major}.{minor}.{patch}"
                 result['platform'] = 'esp8266' if build == 1 else 'esp32'
-            
+
+            self._attach_hello_capability(dev_type, payload, result)
             return result
         
         if dev_type == DEV_GATEWAY and len(payload) >= 15:
@@ -696,8 +715,33 @@ class PacketDecoder:
             if len(payload) >= 11:
                 model_id = struct.unpack("<H", payload[9:11])[0]  # uint16_t little-endian
                 result['model_id'] = model_id
-        
+
+        self._attach_hello_capability(dev_type, payload, result)
         return result
+
+    @staticmethod
+    def _attach_hello_capability(dev_type: int, payload: bytes, result: dict) -> None:
+        """Parse optional Security v2 capability TLV + pairing fields appended to v1 HELLO."""
+        cap_off = V2_HELLO_CAP_OFFSETS.get(dev_type)
+        if cap_off is None or len(payload) < cap_off + 4:
+            return
+
+        proto_ver = payload[cap_off]
+        if proto_ver < PROTO_VERSION_V2:
+            return
+
+        max_frame = struct.unpack("<H", payload[cap_off + 1:cap_off + 3])[0]
+        flags = payload[cap_off + 3]
+        result['proto_version'] = proto_ver
+        result['max_frame'] = max_frame
+        result['has_pin'] = bool(flags & V2_HELLO_FLAG_HAS_PIN)
+
+        if len(payload) >= cap_off + V2_HELLO_CAP_LEN:
+            ecdh_pub = payload[cap_off + 4:cap_off + 36]
+            nonce_d = payload[cap_off + 36:cap_off + 44]
+            if any(ecdh_pub):
+                result['ecdh_pub'] = ecdh_pub
+                result['nonce_d'] = nonce_d
     
     def parse_button_event(self, payload: bytes) -> Optional[dict]:
         """Parse button event payload.
@@ -1036,3 +1080,282 @@ class PacketDecoder:
         return {
             'reason_code': reason_code
         }
+
+
+# ===== Security v2 Codec (AES-128-GCM, variable-length) =====
+
+V2_HEADER_STRUCT = struct.Struct("<BB6s6sBIHB")
+
+
+class PacketEncoderV2:
+    """Encodes variable-length AES-128-GCM authenticated v2 packets."""
+
+    @staticmethod
+    def build_nonce(src_mac_bytes: bytes, counter: int, key_epoch: int) -> bytes:
+        if len(src_mac_bytes) != 6:
+            raise ValueError("src_mac_bytes must be 6 bytes")
+        return src_mac_bytes + struct.pack("<IH", int(counter) & 0xFFFFFFFF, int(key_epoch) & 0xFFFF)
+
+    @staticmethod
+    def encode(
+        pkt_type: int,
+        src_mac: str,
+        dst_mac: str,
+        msg_id: int,
+        counter: int,
+        key_epoch: int,
+        plaintext: bytes,
+        key: bytes,
+        rssi: int = 0,
+        max_frame: Optional[int] = None,
+    ) -> bytes:
+        """Encode and encrypt one v2 frame.
+
+        Enforces:
+        - N >= 1 byte plaintext
+        - Never produces an exact 203-byte frame (pads 1 zero byte if N == 165)
+        - AAD covers header bytes 0..20 (excludes rssi at offset 21)
+        """
+        if len(key) != 16:
+            raise ValueError("AES-128-GCM key must be 16 bytes")
+        if len(plaintext) < 1:
+            plaintext = b"\x00"
+
+        # Rule 1 (§4.2): A v2 frame must never be exactly 203 bytes (reserved for v1)
+        if len(plaintext) + V2_OVERHEAD == V2_FORBIDDEN_LEN:
+            plaintext = plaintext + b"\x00"
+
+        total_len = len(plaintext) + V2_OVERHEAD
+        if max_frame is not None and total_len > max_frame:
+            raise ValueError(f"v2 frame size {total_len} exceeds peer max_frame {max_frame}")
+
+        src_bytes = MACFormatter.to_bytes(src_mac)
+        dst_bytes = MACFormatter.to_bytes(dst_mac)
+        header = V2_HEADER_STRUCT.pack(
+            pkt_type & 0xFF,
+            PROTO_VERSION_V2,
+            src_bytes,
+            dst_bytes,
+            msg_id & 0xFF,
+            int(counter) & 0xFFFFFFFF,
+            int(key_epoch) & 0xFFFF,
+            rssi & 0xFF,
+        )
+        nonce = PacketEncoderV2.build_nonce(src_bytes, counter, key_epoch)
+        aad = header[:V2_AAD_SIZE]
+        ciphertext_and_tag = AESGCM(key).encrypt(nonce, plaintext, aad)
+        return header + ciphertext_and_tag
+
+    @staticmethod
+    def max_ota_chunk_size(max_frame: int) -> int:
+        """Return max OTA chunk data bytes for a v2 peer (Payload_OtaChunkV2Header = 4 B)."""
+        return max(1, int(max_frame) - V2_OVERHEAD - 4)
+
+    @staticmethod
+    def max_leds_per_frame(max_frame: int) -> int:
+        """Return max RGB LEDs in one v2 PKT_LIGHT_RAW frame (Payload_LightV2Header = 3 B)."""
+        return max(1, (int(max_frame) - V2_OVERHEAD - 3) // 3)
+
+    @staticmethod
+    def encode_ota_chunk_v2(
+        target_mac: str,
+        chunk_index: int,
+        chunk_data: bytes,
+        counter: int,
+        key_epoch: int,
+        key: bytes,
+        max_frame: int = 250,
+        msg_id: int = 0,
+    ) -> bytes:
+        """Encode variable-length v2 OTA chunk with uint16 data_len."""
+        cap = PacketEncoderV2.max_ota_chunk_size(max_frame)
+        data = chunk_data[:cap]
+        plaintext = struct.pack("<HH", chunk_index & 0xFFFF, len(data)) + data
+        return PacketEncoderV2.encode(
+            pkt_type=PKT_OTA_CHUNK,
+            src_mac="00:00:00:00:00:00",
+            dst_mac=target_mac,
+            msg_id=msg_id,
+            counter=counter,
+            key_epoch=key_epoch,
+            plaintext=plaintext,
+            key=key,
+            max_frame=max_frame,
+        )
+
+    @staticmethod
+    def encode_light_raw_v2(
+        target_mac: str,
+        rgb_data: List[Tuple[int, int, int]],
+        brightness: int,
+        counter: int,
+        key_epoch: int,
+        key: bytes,
+        max_frame: int = 250,
+        msg_id: int = 0,
+    ) -> bytes:
+        """Encode variable-length v2 RGB light frame with uint16 LED count."""
+        max_leds = PacketEncoderV2.max_leds_per_frame(max_frame)
+        count = min(len(rgb_data), max_leds)
+        parts = [struct.pack("<HB", count, brightness & 0xFF)]
+        for r, g, b in rgb_data[:count]:
+            parts.append(struct.pack("<BBB", r & 0xFF, g & 0xFF, b & 0xFF))
+        plaintext = b"".join(parts)
+        return PacketEncoderV2.encode(
+            pkt_type=PKT_LIGHT_RAW,
+            src_mac="00:00:00:00:00:00",
+            dst_mac=target_mac,
+            msg_id=msg_id,
+            counter=counter,
+            key_epoch=key_epoch,
+            plaintext=plaintext,
+            key=key,
+            max_frame=max_frame,
+        )
+
+
+class PacketDecoderV2:
+    """Decodes and authenticates AES-128-GCM v2 packets."""
+
+    @staticmethod
+    def parse_header(data: bytes) -> Optional[dict]:
+        if len(data) < V2_HEADER_SIZE:
+            return None
+        pkt_type, version, src_bytes, dst_bytes, msg_id, counter, key_epoch, rssi_raw = (
+            V2_HEADER_STRUCT.unpack(data[:V2_HEADER_SIZE])
+        )
+        return {
+            'type': pkt_type,
+            'version': version,
+            'source_mac': MACFormatter.to_string(src_bytes),
+            'source_mac_bytes': src_bytes,
+            'target_mac': MACFormatter.to_string(dst_bytes),
+            'target_mac_bytes': dst_bytes,
+            'msg_id': msg_id,
+            'counter': counter,
+            'key_epoch': key_epoch,
+            'rssi': MACFormatter.parse_rssi(rssi_raw),
+        }
+
+    @staticmethod
+    def decode_with_key(data: bytes, key: bytes) -> Optional[dict]:
+        """Decrypt and verify a v2 frame using the given 16-byte AES-GCM key."""
+        if len(data) < V2_MIN_FRAME_SIZE or len(key) != 16:
+            return None
+
+        hdr = PacketDecoderV2.parse_header(data)
+        if not hdr or hdr['version'] != PROTO_VERSION_V2:
+            return None
+
+        nonce = PacketEncoderV2.build_nonce(hdr['source_mac_bytes'], hdr['counter'], hdr['key_epoch'])
+        aad = data[:V2_AAD_SIZE]
+        ciphertext_and_tag = data[V2_HEADER_SIZE:]
+
+        try:
+            plaintext = AESGCM(key).decrypt(nonce, ciphertext_and_tag, aad)
+        except InvalidTag:
+            return None
+
+        return {
+            'protocol_version': PROTO_VERSION_V2,
+            'type': hdr['type'],
+            'source_mac': hdr['source_mac'],
+            'target_mac': hdr['target_mac'],
+            'msg_id': hdr['msg_id'],
+            'counter': hdr['counter'],
+            'key_epoch': hdr['key_epoch'],
+            'rssi': hdr['rssi'],
+            'payload': plaintext,
+            'ciphertext': ciphertext_and_tag[:-V2_TAG_SIZE],
+            'is_paired': True,
+        }
+
+
+def decode_dual(
+    data: bytes,
+    v1_decoder: PacketDecoder,
+    security_store: Any,
+    allow_v2: bool = True,
+    allow_v1: bool = True,
+) -> Optional[dict]:
+    """Dual-stack v1/v2 frame dispatcher with AEAD-first verification and anti-downgrade policy.
+
+    Rules (§4.2):
+    - len != 203: v2 only (try AEAD; drop if invalid or unknown version).
+    - len == 203: try AEAD first if v2 header present; otherwise try v1 FNV only if
+      the source is NOT recorded as a v2 device (except v1 HELLO discovery frames).
+    """
+    def _try_v2(strict_version_log: bool) -> Optional[dict]:
+        if not allow_v2 or security_store is None or len(data) < V2_MIN_FRAME_SIZE:
+            return None
+        version = data[1]
+        if version > PROTO_VERSION_V2:
+            if strict_version_log:
+                logger.warning(f"SECURITY: Dropping packet with unsupported protocol version {version:#x}")
+            return None
+        if version != PROTO_VERSION_V2:
+            return None
+        hdr = PacketDecoderV2.parse_header(data)
+        if not hdr:
+            return None
+        src_mac = hdr['source_mac']
+        if not security_store.is_v2_device(src_mac):
+            if strict_version_log:
+                logger.warning(
+                    f"SECURITY: Dropped v2 packet (type={hdr['type']:#x}) from {src_mac} "
+                    f"— device is not registered as v2 on server (factory reset device to re-pair)"
+                )
+            return None
+        rec = security_store.get_device_record(src_mac) or {}
+        expected_epoch = int(rec.get('key_epoch', security_store.epoch))
+        if hdr['key_epoch'] != expected_epoch:
+            if strict_version_log:
+                logger.warning(
+                    f"SECURITY: Rejecting v2 packet from {src_mac} with stale/wrong key_epoch="
+                    f"{hdr['key_epoch']} (expected {expected_epoch})"
+                )
+            return None
+        key = security_store.derive_k_own(src_mac, epoch=expected_epoch)
+        return PacketDecoderV2.decode_with_key(data, key)
+
+    if len(data) != PACKET_TOTAL_SIZE:
+        return _try_v2(strict_version_log=True)
+
+    # Ambiguous 203-byte length: try AEAD first (quietly, since byte 1 is FNV sig[0] for v1 frames)
+    v2_pkt = _try_v2(strict_version_log=False)
+    if v2_pkt is not None:
+        return v2_pkt
+
+    v1_pkt = v1_decoder.decode(data)
+    if v1_pkt is None:
+        return None
+
+    if not allow_v1:
+        # Even when legacy v1 is disabled, allow v2 pairing Flight 1 (203-byte PKT_HELLO
+        # carrying a valid v2 capability TLV with proto_version >= 2) so new v2 devices
+        # can still pair and re-pair.
+        if v1_pkt['type'] == PKT_HELLO and allow_v2:
+            parsed_hello = v1_decoder.parse_hello(v1_pkt['payload'])
+            if parsed_hello and parsed_hello.get('proto_version', 1) >= PROTO_VERSION_V2:
+                v1_pkt['protocol_version'] = PROTO_VERSION_V1
+                return v1_pkt
+        logger.warning(
+            f"SECURITY: Dropped legacy v1 packet (type={v1_pkt['type']:#x}) from "
+            f"{v1_pkt['source_mac']} because allow_v1=false"
+        )
+        return None
+
+    # Anti-downgrade: reject non-HELLO v1 packets from devices already paired as v2
+    src_mac = v1_pkt['source_mac']
+    if (
+        security_store is not None
+        and v1_pkt['type'] != PKT_HELLO
+        and security_store.is_v2_device(src_mac)
+    ):
+        logger.warning(
+            f"SECURITY: Rejected v1 downgrade attempt (type={v1_pkt['type']:#x}) from v2 device {src_mac}"
+        )
+        return None
+
+    v1_pkt['protocol_version'] = PROTO_VERSION_V1
+    return v1_pkt

@@ -8,6 +8,7 @@
 */
 
 #include "HueMixLink.h"
+#include "sec_device.h"
 #include <Preferences.h>
 #include <WiFi.h>
 #include <esp_now.h>
@@ -48,6 +49,11 @@ bool breathingActive = false;
 
 Preferences prefs;
 uint32_t HOME_ID = 0;
+bool pairRequested = false;
+volatile bool pendingUpgradeHello = false;
+unsigned long pairRequestTime = 0;
+SecPairingState secState;
+SecCounter secCounter;
 Payload_GatewayList gateways;
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -228,6 +234,25 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   bool sent = false;
   int successfulGatewayIndex = -1;
   
+  uint8_t readyTxBuf[sizeof(HueMixLinkPacket)];
+  size_t readyTxLen = 0;
+  if (sec_device_is_v2(&secState)) {
+    Payload_OtaReady r = {};
+    r.firmware_size = expected_firmware_size;
+    r.battery_mv = battery_mv;
+    uint8_t myMac[6];
+    WiFi.macAddress(myMac);
+    const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+    readyTxLen = sec_device_encode_tx(
+        &secState, &secCounter, PKT_OTA_READY, myMac, backendMac, 0,
+        (const uint8_t*)&r, sizeof(r), readyTxBuf, sizeof(readyTxBuf)
+    );
+  } else {
+    memcpy(readyTxBuf, &ready, sizeof(ready));
+    readyTxLen = sizeof(ready);
+  }
+
+  if (readyTxLen > 0) {
   for(int i = 0; i < gateways.count; i++) {
     if (!esp_now_is_peer_exist(gateways.macs[i])) {
       memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
@@ -236,12 +261,13 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
       esp_now_add_peer(&peerInfo);
     }
     
-    if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
+    if (esp_now_send(gateways.macs[i], readyTxBuf, readyTxLen) == ESP_OK) {
       sent = true;
       successfulGatewayIndex = i;
       Serial.printf("[OTA] Sent OTA_READY response via gateway %d\n", i);
       break;
     }
+  }
   }
   
   // Move successful gateway to front of list
@@ -260,46 +286,37 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   }
 }
 
-void handleOtaChunk(HueMixLinkPacket* pkt) {
+void handleOtaChunkRaw(uint16_t chunk_idx, const uint8_t* chunk_data, uint16_t data_len) {
   if (otaState != OTA_RECEIVING) {
     return;
   }
-  
   last_ota_activity = millis();
   ota_wake_time = millis();
-  
-  uint16_t chunk_idx = pkt->payload.otaChunk.chunk_index;
-  uint8_t data_len = pkt->payload.otaChunk.data_len;
-  
-  // Check chunk order: accept current or future chunks, ignore duplicates
   if (chunk_idx < expected_chunk_index) {
-    // This is a duplicate chunk we already received - ignore it silently
-    Serial.printf("[OTA] Ignoring duplicate chunk %d (already at %d)\n", chunk_idx, expected_chunk_index);
     return;
   }
-  
   if (chunk_idx != expected_chunk_index) {
     Serial.printf("[OTA] Ignoring out-of-order chunk %d (expecting %d)\n", chunk_idx, expected_chunk_index);
     return;
   }
-  
-  esp_err_t err = esp_ota_write(update_handle, pkt->payload.otaChunk.data, data_len);
+  esp_err_t err = esp_ota_write(update_handle, chunk_data, data_len);
   if (err != ESP_OK) {
     Serial.printf("[OTA] Write failed at chunk %d: %d\n", chunk_idx, err);
     abortOta("Write failed");
     return;
   }
-  
-  mbedtls_sha256_update(&sha256_ctx, pkt->payload.otaChunk.data, data_len);
-  
+  mbedtls_sha256_update(&sha256_ctx, chunk_data, data_len);
   received_bytes += data_len;
   expected_chunk_index++;
-  
   if (chunk_idx % 50 == 0) {
-    Serial.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n", 
-      received_bytes, expected_firmware_size, 
+    Serial.printf("[OTA] Progress: %u / %u bytes (%.1f%%)\n",
+      received_bytes, expected_firmware_size,
       (received_bytes * 100.0) / expected_firmware_size);
   }
+}
+
+void handleOtaChunk(HueMixLinkPacket* pkt) {
+  handleOtaChunkRaw(pkt->payload.otaChunk.chunk_index, pkt->payload.otaChunk.data, pkt->payload.otaChunk.data_len);
 }
 
 void handleOtaComplete(HueMixLinkPacket* pkt) {
@@ -369,10 +386,27 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
   ack.payload.otaChunkAck.last_chunk_index = last_chunk;
   ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
   
-  // Try sending to gateways (not to pkt->sourceMAC which is Python server)
+  // Try sending to gateways (dual-stack v1/v2)
   bool sent = false;
   int successfulGatewayIndex = -1;
+  uint8_t ackTxBuf[sizeof(HueMixLinkPacket)];
+  size_t ackTxLen = 0;
+  if (sec_device_is_v2(&secState)) {
+    Payload_OtaChunkAck a = {};
+    a.last_chunk_index = last_chunk;
+    uint8_t myMac[6];
+    WiFi.macAddress(myMac);
+    const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+    ackTxLen = sec_device_encode_tx(
+        &secState, &secCounter, PKT_OTA_CHUNK_ACK, myMac, backendMac, 0,
+        (const uint8_t*)&a, sizeof(a), ackTxBuf, sizeof(ackTxBuf)
+    );
+  } else {
+    memcpy(ackTxBuf, &ack, sizeof(ack));
+    ackTxLen = sizeof(ack);
+  }
   
+  if (ackTxLen > 0) {
   for(int i = 0; i < gateways.count; i++) {
     if (!esp_now_is_peer_exist(gateways.macs[i])) {
       memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
@@ -381,12 +415,13 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
       esp_now_add_peer(&peerInfo);
     }
     
-    if (esp_now_send(gateways.macs[i], (uint8_t*)&ack, sizeof(ack)) == ESP_OK) {
+    if (esp_now_send(gateways.macs[i], ackTxBuf, ackTxLen) == ESP_OK) {
       sent = true;
       successfulGatewayIndex = i;
       Serial.printf("[OTA] Sent checkpoint ACK via gateway %d: last_chunk=%d\n", i, last_chunk);
       break;
     }
+  }
   }
   
   // Move successful gateway to front of list for future OTA packets
@@ -531,6 +566,10 @@ void sendPacket(uint8_t packetType, uint8_t action) {
     }
     pkt.payload.raw[5] = platformFlags;
 
+    if (HOME_ID == 0 || (pairRequested && !sec_device_is_v2(&secState))) {
+      sec_device_prepare_unpaired_hello(&secState, pkt.payload.raw, 6);
+    }
+
     pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
   }
 
@@ -540,6 +579,39 @@ void sendPacket(uint8_t packetType, uint8_t action) {
 
   // A. PAIRED MODE
   if (HOME_ID != 0 && gateways.count > 0) {
+    // HELLO packets don't receive PKT_ACK_TO_BTN - send directly to preferred gateway
+    if (packetType == PKT_HELLO) {
+      Serial.println("[DOOR] Sending HELLO packet (no ACK required)");
+      if (!esp_now_is_peer_exist(gateways.macs[0])) {
+        memcpy(peerInfo.peer_addr, gateways.macs[0], 6);
+        peerInfo.channel = 0;
+        peerInfo.encrypt = false;
+        esp_now_add_peer(&peerInfo);
+      }
+      esp_now_send(gateways.macs[0], (uint8_t*)&pkt, sizeof(pkt));
+      return;
+    }
+
+    uint8_t v2Wire[128];
+    size_t v2Len = 0;
+    const uint8_t* txPtr = (const uint8_t*)&pkt;
+    size_t txLen = sizeof(pkt);
+    if (sec_device_is_v2(&secState) && packetType == PKT_DOOR_EVENT) {
+      const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+      v2Len = sec_device_encode_tx(
+          &secState, &secCounter, PKT_DOOR_EVENT, pkt.sourceMAC, backendMac, 0,
+          (const uint8_t*)&pkt.payload.door, sizeof(Payload_Door),
+          v2Wire, sizeof(v2Wire)
+      );
+      if (v2Len == 0) {
+        Serial.println("[DOOR] SECURITY_PANIC: halting TX");
+        ledBlink(6, 80);
+        return;
+      }
+      txPtr = v2Wire;
+      txLen = v2Len;
+    }
+
     for(int i = 0; i < gateways.count; i++) {
       Serial.printf("[DOOR] Attempt %d/%d: %02X:%02X:%02X:%02X:%02X:%02X\n", i+1, gateways.count,
         gateways.macs[i][0], gateways.macs[i][1], gateways.macs[i][2],
@@ -552,7 +624,7 @@ void sendPacket(uint8_t packetType, uint8_t action) {
         esp_now_add_peer(&peerInfo);
       }
       
-      if (esp_now_send(gateways.macs[i], (uint8_t*)&pkt, sizeof(pkt)) == ESP_OK) {
+      if (esp_now_send(gateways.macs[i], txPtr, txLen) == ESP_OK) {
         unsigned long w = millis();
         while(millis() - w < 75 && !ackReceived) delay(1);
         if (ackReceived) {
@@ -592,6 +664,8 @@ void sendPacket(uint8_t packetType, uint8_t action) {
 
     if (packetType == PKT_HELLO) {
       // Use the same retry + short ACK wait strategy for pairing HELLO.
+      pairRequested = true;
+      pairRequestTime = millis();
       Serial.printf("[DOOR][HELLO] Broadcast");
       if (esp_now_send(broadcastAddress, (uint8_t*)&pkt, sizeof(pkt)) == ESP_OK) {
         unsigned long w = millis();
@@ -603,11 +677,116 @@ void sendPacket(uint8_t packetType, uint8_t action) {
 }
 
 void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) {
-  if(len != sizeof(HueMixLinkPacket)) return;
+  const uint8_t *mac = info->src_addr;
+
+  if (len != (int)sizeof(HueMixLinkPacket)) {
+    if (len < V2_MIN_FRAME_SIZE || len > V2_MAX_FRAME_ESP32 || data[1] != PROTO_VERSION_V2) return;
+    uint8_t myMac[6];
+    WiFi.macAddress(myMac);
+    HueMixLinkHeaderV2 hdr;
+    static uint8_t pt[1440];
+    size_t pt_len = 0;
+    uint32_t newHomeId = 0;
+    uint8_t ackBuf[96];
+    size_t ackLen = 0;
+
+    bool wasV1 = !sec_device_is_v2(&secState);
+    SecRxResult res = sec_device_handle_rx_v2(
+        &secState, &secCounter, myMac, data, (size_t)len,
+        &hdr, pt, sizeof(pt), &pt_len, &newHomeId, ackBuf, sizeof(ackBuf), &ackLen
+    );
+    if (res == SEC_RX_PAIRED_V2 && (HOME_ID == 0 || wasV1) && pairRequested && (millis() - pairRequestTime) <= PAIR_WINDOW_MS) {
+      HOME_ID = newHomeId;
+      pairRequested = false;
+      addGateway(mac);
+      ackReceived = true;
+      lastActivityTime = millis();
+      homeSetupDone = true;
+      esp_now_peer_info_t p = {}; memcpy(p.peer_addr, mac, 6); p.channel = HUEMIXLINK_CHANNEL; p.encrypt = false;
+      if (!esp_now_is_peer_exist(mac)) esp_now_add_peer(&p);
+      esp_now_send(mac, ackBuf, ackLen);
+      Serial.printf("[DOOR] PAIRED v2! ID: 0x%X\n", HOME_ID);
+    } else if (res == SEC_RX_DATA_V2 && hdr.type == PKT_SYS_CMD) {
+      uint8_t rspBuf[96];
+      size_t rspLen = 0;
+      if (sec_device_handle_set_pin_cmd(&secState, &secCounter, myMac, pt, pt_len, rspBuf, sizeof(rspBuf), &rspLen)) {
+        lastActivityTime = millis();
+        esp_now_peer_info_t p = {}; memcpy(p.peer_addr, mac, 6); p.channel = HUEMIXLINK_CHANNEL; p.encrypt = false;
+        if (!esp_now_is_peer_exist(mac)) esp_now_add_peer(&p);
+        esp_now_send(mac, rspBuf, rspLen);
+        Serial.println("[DOOR] Processed v2 CMD_SET_PIN and sent ACK");
+      }
+    } else if (res == SEC_RX_DATA_V2 && hdr.type == PKT_GW_LIST_UPD && pt_len >= sizeof(Payload_GatewayList)) {
+      Payload_GatewayList rxList;
+      memcpy(&rxList, pt, sizeof(Payload_GatewayList));
+      if (rxList.count > 0 && rxList.count <= MAX_GATEWAYS) {
+        gateways = rxList;
+        saveGateways();
+      }
+    } else if (res == SEC_RX_DATA_V2 && (hdr.type == PKT_OTA_NOTIFY || hdr.type == PKT_OTA_CHUNK ||
+               hdr.type == PKT_OTA_CHECKPOINT_REQ || hdr.type == PKT_OTA_COMPLETE || hdr.type == PKT_OTA_ABORT)) {
+      if (hdr.type == PKT_OTA_CHUNK && pt_len >= sizeof(Payload_OtaChunkV2Header)) {
+        Payload_OtaChunkV2Header ch;
+        memcpy(&ch, pt, sizeof(ch));
+        if (sizeof(ch) + ch.data_len <= pt_len) {
+          handleOtaChunkRaw(ch.chunk_index, pt + sizeof(ch), ch.data_len);
+          lastActivityTime = millis();
+        }
+      } else {
+        HueMixLinkPacket synth;
+        memset(&synth, 0, sizeof(synth));
+        synth.type = hdr.type;
+        memcpy(synth.sourceMAC, hdr.sourceMAC, 6);
+        memcpy(synth.targetMAC, myMac, 6);
+        size_t cp = (pt_len > sizeof(synth.payload.raw)) ? sizeof(synth.payload.raw) : pt_len;
+        memcpy(synth.payload.raw, pt, cp);
+        if (hdr.type == PKT_OTA_NOTIFY) {
+          if (otaState == OTA_IDLE) {
+            ota_mode = true;
+            otaState = OTA_WAITING_NOTIFY;
+          }
+          handleOtaNotify(&synth);
+          lastActivityTime = millis();
+          ota_wake_time = millis();
+        }
+        else if (hdr.type == PKT_OTA_CHECKPOINT_REQ) { handleOtaCheckpointReq(&synth); }
+        else if (hdr.type == PKT_OTA_COMPLETE) { handleOtaComplete(&synth); }
+        else if (hdr.type == PKT_OTA_ABORT) { handleOtaAbort(&synth); }
+      }
+    } else if (res == SEC_RX_DATA_V2 && hdr.type == PKT_ACK_TO_BTN) {
+      ackReceived = true;
+      if (pt_len >= sizeof(Payload_GatewayList)) {
+        Payload_GatewayList rxList;
+        memcpy(&rxList, pt, sizeof(Payload_GatewayList));
+        if (rxList.count > 0 && rxList.count <= MAX_GATEWAYS) {
+          Payload_GatewayList newList;
+          newList.count = 0;
+          for (int i = 0; i < gateways.count && newList.count < MAX_GATEWAYS; i++) {
+            for (int j = 0; j < rxList.count; j++) {
+              if (memcmp(gateways.macs[i], rxList.macs[j], 6) == 0) {
+                memcpy(newList.macs[newList.count++], gateways.macs[i], 6);
+                break;
+              }
+            }
+          }
+          for (int i = 0; i < rxList.count && newList.count < MAX_GATEWAYS; i++) {
+            bool isNew = true;
+            for (int j = 0; j < newList.count; j++) {
+              if (memcmp(rxList.macs[i], newList.macs[j], 6) == 0) { isNew = false; break; }
+            }
+            if (isNew) memcpy(newList.macs[newList.count++], rxList.macs[i], 6);
+          }
+          gateways = newList;
+          saveGateways();
+        }
+      }
+    }
+    return;
+  }
+  if (sec_device_is_v2(&secState)) return;
   
   HueMixLinkPacket pkt;
   memcpy(&pkt, data, sizeof(pkt));
-  const uint8_t *mac = info->src_addr;
   
   uint32_t expectedSig = calculateHash(pkt.payload.raw, 185, HOME_ID);
   if(pkt.signature != expectedSig && HOME_ID != 0) return;
@@ -615,10 +794,11 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
   lastActivityTime = millis();
   
   if (pkt.type == PKT_PAIR_CONFIRM) {
-    if(HOME_ID == 0) {
+    if(HOME_ID == 0 && pairRequested && (millis() - pairRequestTime) <= PAIR_WINDOW_MS && sec_pairing_allow_v1_confirm(&secState)) {
       uint32_t sig = calculateHash(pkt.payload.raw, 185, 0);
       if (pkt.signature == sig) {
         HOME_ID = pkt.payload.pair.newHomeID;
+        pairRequested = false;
         addGateway(mac);
         ackReceived = true;
         Serial.printf("PAIRED! ID: 0x%X\n", HOME_ID);
@@ -692,6 +872,11 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
     Serial.printf("[GW] Gateway list updated: %d gateways\n", gateways.count);
   }
   else if (pkt.type == PKT_SYS_CMD) {
+    if (pkt.payload.sys.cmd == CMD_UPGRADE_TO_V2 && !sec_device_is_v2(&secState)) {
+      pendingUpgradeHello = true;
+      lastActivityTime = millis();
+      Serial.println("[DOOR] Received CMD_UPGRADE_TO_V2; scheduling v2 HELLO");
+    }
   }
   // OTA Handling
   // Security: Verify all OTA packets before processing
@@ -735,6 +920,7 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *data, int len) 
 
 // --- SLEEP FUNCTIONS ---
 void goToSleepDoor() {
+  sec_counter_prepare_sleep(&secCounter);
   uint8_t reedLevel = readReedLevelStable();
   lastReedLevel = reedLevel;
 
@@ -834,6 +1020,7 @@ void setup() {
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   if (esp_now_init() != ESP_OK) ESP.restart();
   
+  sec_device_init(&secState, &secCounter);
   esp_now_register_recv_cb(OnDataRecv);
   
   // Initialize peer info structure
@@ -879,6 +1066,14 @@ void setup() {
 }
 
 void loop() {
+  if (pendingUpgradeHello) {
+    pendingUpgradeHello = false;
+    pairRequested = true;
+    pairRequestTime = millis();
+    lastActivityTime = millis();
+    sendPacket(PKT_HELLO, 0);
+  }
+
   if (wakeupFromReset) {
     wakeupFromReset = false;
     if (digitalRead(PIN_RESET) == LOW && !ota_mode) {
@@ -1025,10 +1220,28 @@ void loop() {
         ready.payload.otaReady.battery_mv = battery_mv;
         ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
         
-        // Try sending to gateways sequentially
+        // Try sending to gateways sequentially (dual-stack v1/v2)
         bool sent = false;
         int successfulGatewayIndex = -1;
+        uint8_t readyTxBuf[sizeof(HueMixLinkPacket)];
+        size_t readyTxLen = 0;
+        if (sec_device_is_v2(&secState)) {
+          Payload_OtaReady r = {};
+          r.firmware_size = 0;
+          r.battery_mv = battery_mv;
+          uint8_t myMac[6];
+          WiFi.macAddress(myMac);
+          const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+          readyTxLen = sec_device_encode_tx(
+              &secState, &secCounter, PKT_OTA_READY, myMac, backendMac, 0,
+              (const uint8_t*)&r, sizeof(r), readyTxBuf, sizeof(readyTxBuf)
+          );
+        } else {
+          memcpy(readyTxBuf, &ready, sizeof(ready));
+          readyTxLen = sizeof(ready);
+        }
         
+        if (readyTxLen > 0) {
         for(int i = 0; i < gateways.count; i++) {
           if (!esp_now_is_peer_exist(gateways.macs[i])) {
             memcpy(peerInfo.peer_addr, gateways.macs[i], 6);
@@ -1037,12 +1250,13 @@ void loop() {
             esp_now_add_peer(&peerInfo);
           }
           
-          if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
+          if (esp_now_send(gateways.macs[i], readyTxBuf, readyTxLen) == ESP_OK) {
             sent = true;
             successfulGatewayIndex = i;
             Serial.printf("[OTA] Sent OTA_READY announcement via gateway %d\n", i);
             break;
           }
+        }
         }
         
         // Move successful gateway to front of list
@@ -1091,6 +1305,7 @@ void loop() {
         Serial.println("Factory reset initiated...");
         ledBlink(10, 50);
         prefs.clear();
+        sec_device_on_factory_reset(&secState);
         HOME_ID = 0;
         gateways.count = 0;
         lastReedLevel = readReedLevelStable();

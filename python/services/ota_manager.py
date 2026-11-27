@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 class OTAState(Enum):
     """OTA session states."""
     IDLE = "idle"
+    QUEUED = "queued"
     WAITING_READY = "waiting_ready"
     TRANSFERRING = "transferring"
     VALIDATING = "validating"
@@ -34,11 +35,21 @@ class OTAState(Enum):
     ABORTED = "aborted"
 
 
+ACTIVE_OR_QUEUED_STATES = (
+    OTAState.QUEUED,
+    OTAState.WAITING_READY,
+    OTAState.TRANSFERRING,
+    OTAState.VALIDATING,
+)
+
+
 class OTASession:
-    """Represents an active OTA update session for a single device."""
+    """Represents an active or queued OTA update session for a single device."""
     
     def __init__(self, device_mac: str, device_type: int, firmware_path: str, 
-                 firmware_size: int, sha256_hash: bytes, version: Tuple[int, int, int, int]):
+                 firmware_size: int, sha256_hash: bytes, version: Tuple[int, int, int, int],
+                 wake_triggered: bool = False, preferred_gateway_mac: Optional[str] = None,
+                 depends_on_mac: Optional[str] = None):
         """Initialize OTA session.
         
         Args:
@@ -48,6 +59,9 @@ class OTASession:
             firmware_size: Size of firmware in bytes
             sha256_hash: SHA256 hash of firmware
             version: Firmware version tuple (major, minor, patch, build)
+            wake_triggered: True for v2 battery devices that start on next wake
+            preferred_gateway_mac: Best gateway MAC for routing chunks
+            depends_on_mac: Optional MAC that must complete OTA before this session starts
         """
         self.device_mac = device_mac
         self.device_type = device_type
@@ -56,11 +70,15 @@ class OTASession:
         self.sha256_hash = sha256_hash
         self.version = version
         
-        self.state = OTAState.IDLE
+        self.state = OTAState.QUEUED
+        self.wake_triggered = wake_triggered
+        self.depends_on_mac = depends_on_mac
+        self.queued_at = datetime.now()
+        self.ready_timeout_token = 0
         self.chunks_sent = 0
         self.total_chunks = 0
         self.bytes_sent = 0
-        self.start_time = None  # When session started (includes WAITING_READY)
+        self.start_time = None  # When session became active (WAITING_READY)
         self.transfer_start_time = None  # When actual transfer began (TRANSFERRING)
         self.end_time = None
         self.validating_start_time = None  # Track when validation phase started
@@ -68,7 +86,7 @@ class OTASession:
         self.last_bytes_sent = 0  # Bytes sent at last progress update
         self.failure_reason = None
         self.battery_mv = None
-        self.preferred_gateway_mac = None  # Best gateway for routing chunks to this device
+        self.preferred_gateway_mac = preferred_gateway_mac  # Best gateway for routing chunks to this device
         
         self.lock = threading.Lock()
     
@@ -116,6 +134,8 @@ class OTASession:
                 'firmware_size': self.firmware_size,
                 'version': f"{self.version[0]}.{self.version[1]}.{self.version[2]}.{self.version[3]}",
                 'state': self.state.value,
+                'wake_triggered': self.wake_triggered,
+                'depends_on_mac': self.depends_on_mac,
                 'chunks_sent': self.chunks_sent,
                 'total_chunks': self.total_chunks,
                 'bytes_sent': self.bytes_sent,
@@ -128,16 +148,29 @@ class OTASession:
 
 
 class OTAManager:
-    """Manages OTA update sessions for all devices."""
+    """Manages OTA update sessions and single-active-transfer queue for all devices."""
     
     def __init__(self):
         """Initialize OTA manager."""
         self.sessions: Dict[str, OTASession] = {}
         self.lock = threading.Lock()
         self.active_session_mac: Optional[str] = None
+        self._on_slot_released = None
         
         # Load persisted sessions
         self._load_sessions()
+
+    def set_slot_released_callback(self, callback):
+        """Register callback invoked whenever the active OTA slot becomes free."""
+        self._on_slot_released = callback
+
+    def _notify_slot_released(self):
+        cb = self._on_slot_released
+        if cb:
+            try:
+                cb()
+            except Exception as e:
+                logger.error(f"Error in OTA slot-released callback: {e}")
     
     def _load_sessions(self):
         """Load OTA sessions from persistent storage."""
@@ -148,39 +181,41 @@ class OTAManager:
             logger.error(f"Failed to load OTA sessions: {e}")
     
     def _save_sessions(self):
-        """Save OTA sessions to persistent storage."""
+        """Save OTA sessions to persistent storage (snapshot under lock to avoid AB-BA deadlock)."""
         try:
-            sessions_data = []
             with self.lock:
-                for mac, session in self.sessions.items():
-                    sessions_data.append(session.to_dict())
-            
+                sessions_snapshot = list(self.sessions.values())
+            sessions_data = [session.to_dict() for session in sessions_snapshot]
             data_manager.write_json(FILE_OTA_SESSIONS, sessions_data)
         except Exception as e:
             logger.error(f"Failed to save OTA sessions: {e}")
     
-    def create_session(self, device_mac: str, device_type: int, firmware_path: str) -> Optional[OTASession]:
-        """Create a new OTA session.
+    def create_session(self, device_mac: str, device_type: int, firmware_path: str,
+                       wake_triggered: bool = False,
+                       preferred_gateway_mac: Optional[str] = None,
+                       depends_on_mac: Optional[str] = None) -> Optional[OTASession]:
+        """Create a new queued OTA session for a device.
+        
+        Multiple devices may be queued concurrently; only one device holds
+        ``active_session_mac`` at a time via :meth:`claim_active_session`.
         
         Args:
             device_mac: Target device MAC address
             device_type: Device type constant
             firmware_path: Path to firmware binary file
+            wake_triggered: True for v2 battery devices that start on next wake
+            preferred_gateway_mac: Optional preferred gateway MAC
+            depends_on_mac: Optional dependency MAC that must complete first
             
         Returns:
             OTASession instance if successful, None if failed
         """
         with self.lock:
-            # Check if another session is active
-            if self.active_session_mac is not None:
-                logger.warning(f"Cannot start OTA for {device_mac}: Another update is in progress for {self.active_session_mac}")
-                return None
-            
-            # Check if device already has a session
+            # Check if this device already has an active or queued session
             if device_mac in self.sessions:
                 old_session = self.sessions[device_mac]
-                if old_session.state in [OTAState.WAITING_READY, OTAState.TRANSFERRING, OTAState.VALIDATING]:
-                    logger.warning(f"Cannot start OTA for {device_mac}: Session already in progress")
+                if old_session.state in ACTIVE_OR_QUEUED_STATES:
+                    logger.warning(f"Cannot queue OTA for {device_mac}: Session already {old_session.state.value}")
                     return None
         
         try:
@@ -227,28 +262,114 @@ class OTAManager:
                     build = int(version_match.group(4)) if version_match.group(4) else 0
                     version = (major, minor, patch, build)
             
-            # Create session
+            # Create queued session
             session = OTASession(
                 device_mac=device_mac,
                 device_type=device_type,
                 firmware_path=firmware_path,
                 firmware_size=firmware_size,
                 sha256_hash=sha256_hash,
-                version=version
+                version=version,
+                wake_triggered=wake_triggered,
+                preferred_gateway_mac=preferred_gateway_mac,
+                depends_on_mac=depends_on_mac,
             )
             
             with self.lock:
+                # Re-check under lock in case of concurrent requests for the same MAC
+                existing = self.sessions.get(device_mac)
+                if existing and existing.state in ACTIVE_OR_QUEUED_STATES:
+                    logger.warning(f"Cannot queue OTA for {device_mac}: Session already {existing.state.value}")
+                    return None
                 self.sessions[device_mac] = session
-                self.active_session_mac = device_mac
             
             self._save_sessions()
-            logger.info(f"Created OTA session for {device_mac}: {firmware_size} bytes, version {version}")
+            logger.info(f"Created queued OTA session for {device_mac}: {firmware_size} bytes, version {version}, wake_triggered={wake_triggered}")
             
             return session
             
         except Exception as e:
             logger.error(f"Failed to create OTA session: {e}")
             return None
+
+    def claim_active_session(self, device_mac: str) -> bool:
+        """Atomically claim the single active OTA transfer slot for ``device_mac``."""
+        with self.lock:
+            if self.active_session_mac is not None and self.active_session_mac != device_mac:
+                return False
+            session = self.sessions.get(device_mac)
+            if not session or session.state not in (OTAState.QUEUED, OTAState.WAITING_READY):
+                return False
+            self.active_session_mac = device_mac
+            return True
+
+    def requeue_session(self, device_mac: str, reason: Optional[str] = None) -> bool:
+        """Return a WAITING_READY session back to QUEUED and release the active slot."""
+        session = self.get_session(device_mac)
+        if not session:
+            return False
+
+        slot_released = False
+        with session.lock:
+            if session.state != OTAState.WAITING_READY:
+                return False
+            session.state = OTAState.QUEUED
+            session.start_time = None
+            session.transfer_start_time = None
+            session.validating_start_time = None
+            with self.lock:
+                if self.active_session_mac == device_mac:
+                    self.active_session_mac = None
+                    slot_released = True
+            logger.info(f"OTA {device_mac}: waiting_ready → queued" + (f" ({reason})" if reason else ""))
+
+        self._save_sessions()
+        if slot_released:
+            self._notify_slot_released()
+        return True
+
+    def get_next_queued_session(self) -> Optional[OTASession]:
+        """Return the next eligible queued always-on session in FIFO order, or None."""
+        failed_dependents = []
+        selected: Optional[OTASession] = None
+
+        with self.lock:
+            if self.active_session_mac is not None:
+                return None
+
+            candidates = [
+                s for s in self.sessions.values()
+                if s.state == OTAState.QUEUED and not s.wake_triggered
+            ]
+            candidates.sort(key=lambda s: s.queued_at)
+
+            for candidate in candidates:
+                dep_mac = candidate.depends_on_mac
+                if dep_mac:
+                    dep_session = self.sessions.get(dep_mac)
+                    if dep_session:
+                        if dep_session.state in ACTIVE_OR_QUEUED_STATES:
+                            continue  # Wait for dependency (e.g. gateway_radio) to finish
+                        if dep_session.state in (OTAState.FAILED, OTAState.ABORTED):
+                            failed_dependents.append((candidate.device_mac, dep_mac))
+                            continue
+                selected = candidate
+                break
+
+        for mac, dep_mac in failed_dependents:
+            self.update_session_state(
+                mac,
+                OTAState.FAILED,
+                f"Dependency {dep_mac} did not complete",
+            )
+
+        return selected
+
+    def has_active_or_queued_session(self, device_mac: str) -> bool:
+        """Return True if ``device_mac`` already has an active or queued OTA session."""
+        with self.lock:
+            session = self.sessions.get(device_mac)
+            return bool(session and session.state in ACTIVE_OR_QUEUED_STATES)
     
     def get_session(self, device_mac: str) -> Optional[OTASession]:
         """Get OTA session for a device.
@@ -274,13 +395,16 @@ class OTAManager:
         if not session:
             return
         
+        slot_released = False
         with session.lock:
             old_state = session.state
             session.state = new_state
             
-            # Start overall timer when session begins
-            if new_state == OTAState.WAITING_READY and not session.start_time:
-                session.start_time = datetime.now()
+            # Start overall timer when session becomes active
+            if new_state == OTAState.WAITING_READY:
+                session.ready_timeout_token += 1
+                if not session.start_time:
+                    session.start_time = datetime.now()
             
             # Start transfer timer when actual data transfer begins
             if new_state == OTAState.TRANSFERRING and not session.transfer_start_time:
@@ -296,6 +420,7 @@ class OTAManager:
                 with self.lock:
                     if self.active_session_mac == device_mac:
                         self.active_session_mac = None
+                        slot_released = True
             
             if failure_reason:
                 session.failure_reason = failure_reason
@@ -304,6 +429,8 @@ class OTAManager:
                        (f" ({failure_reason})" if failure_reason else ""))
         
         self._save_sessions()
+        if slot_released:
+            self._notify_slot_released()
     
     def update_progress(self, device_mac: str, chunks_sent: int, total_chunks: int, bytes_sent: int):
         """Update OTA transfer progress.
@@ -351,24 +478,29 @@ class OTAManager:
         Args:
             device_mac: Device MAC address
         """
+        slot_released = False
         with self.lock:
             if device_mac in self.sessions:
                 del self.sessions[device_mac]
                 
                 if self.active_session_mac == device_mac:
                     self.active_session_mac = None
+                    slot_released = True
         
         self._save_sessions()
         logger.info(f"Cleared OTA session for {device_mac}")
+        if slot_released:
+            self._notify_slot_released()
     
     def get_all_sessions(self) -> Dict[str, Dict]:
-        """Get all OTA sessions as dictionaries.
+        """Get all OTA sessions as dictionaries (snapshot under lock to avoid AB-BA deadlock).
         
         Returns:
             Dictionary mapping device MAC to session data
         """
         with self.lock:
-            return {mac: session.to_dict() for mac, session in self.sessions.items()}
+            items = list(self.sessions.items())
+        return {mac: session.to_dict() for mac, session in items}
     
     def is_update_in_progress(self) -> bool:
         """Check if any update is in progress.

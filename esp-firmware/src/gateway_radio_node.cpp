@@ -185,6 +185,81 @@ static bool shouldAckInboundPacket(uint8_t packetType) {
          (packetType >= PLUGIN_EVENT_PACKET_MIN && packetType <= PLUGIN_EVENT_PACKET_MAX);
 }
 
+// --- ESP-NOW PEER LRU CACHE (ESP32 hard limit is 20 unencrypted peers) ---
+#define MAX_ESPNOW_PEERS 18
+struct EspNowPeerSlot {
+  uint8_t mac[6];
+  uint32_t lastUsed;
+  bool used;
+};
+static EspNowPeerSlot espNowPeerLru[MAX_ESPNOW_PEERS] = {};
+static uint32_t espNowPeerTick = 0;
+
+static bool ensureEspNowPeer(const uint8_t mac[6]) {
+  espNowPeerTick++;
+
+  int freeSlot = -1;
+  int oldestSlot = 0;
+  uint32_t oldestTick = 0xFFFFFFFFUL;
+  for (int i = 0; i < MAX_ESPNOW_PEERS; i++) {
+    if (espNowPeerLru[i].used) {
+      if (memcmp(espNowPeerLru[i].mac, mac, 6) == 0) {
+        espNowPeerLru[i].lastUsed = espNowPeerTick;
+        if (esp_now_is_peer_exist(mac)) {
+          return true;
+        }
+        freeSlot = i;
+        break;
+      }
+      if (espNowPeerLru[i].lastUsed < oldestTick) {
+        oldestTick = espNowPeerLru[i].lastUsed;
+        oldestSlot = i;
+      }
+    } else if (freeSlot < 0) {
+      freeSlot = i;
+    }
+  }
+
+  if (esp_now_is_peer_exist(mac)) {
+    int slot = (freeSlot >= 0) ? freeSlot : oldestSlot;
+    if (freeSlot < 0 && espNowPeerLru[slot].used) {
+      esp_now_del_peer(espNowPeerLru[slot].mac);
+    }
+    memcpy(espNowPeerLru[slot].mac, mac, 6);
+    espNowPeerLru[slot].lastUsed = espNowPeerTick;
+    espNowPeerLru[slot].used = true;
+    return true;
+  }
+
+  int slot = freeSlot;
+  if (slot < 0) {
+    slot = oldestSlot;
+    esp_now_del_peer(espNowPeerLru[slot].mac);
+    espNowPeerLru[slot].used = false;
+  }
+
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, mac, 6);
+  peer.channel = HUEMIXLINK_CHANNEL;
+  peer.encrypt = false;
+  esp_err_t res = esp_now_add_peer(&peer);
+  if (res == ESP_ERR_ESPNOW_FULL) {
+    esp_now_peer_info_t victim = {};
+    if (esp_now_fetch_peer(true, &victim) == ESP_OK) {
+      esp_now_del_peer(victim.peer_addr);
+      res = esp_now_add_peer(&peer);
+    }
+  }
+  if (res == ESP_OK || res == ESP_ERR_ESPNOW_EXIST) {
+    memcpy(espNowPeerLru[slot].mac, mac, 6);
+    espNowPeerLru[slot].lastUsed = espNowPeerTick;
+    espNowPeerLru[slot].used = true;
+    return true;
+  }
+  SERIAL_DEBUG.printf("[RADIO] esp_now_add_peer failed: %d\n", (int)res);
+  return false;
+}
+
 // --- OTA BUFFERING CONFIG ---
 // Sized to hold a full 10-chunk v2 batch (10 * 1024 B = 10,240 B) in RAM so
 // esp_ota_write() only runs at checkpoints when UART is idle (no mid-batch flash stalls).
@@ -611,13 +686,7 @@ void handleOtaNotify(HueMixLinkPacket* pkt) {
   
   if (memcmp(pkt->targetMAC, myMac, 6) != 0) {
     // Not for us, forward via ESP-NOW
-    esp_now_peer_info_t peer = {};
-    memcpy(peer.peer_addr, pkt->targetMAC, 6);
-    peer.channel = HUEMIXLINK_CHANNEL;
-    peer.encrypt = false;
-    if (!esp_now_is_peer_exist(pkt->targetMAC)) {
-      esp_now_add_peer(&peer);
-    }
+    ensureEspNowPeer(pkt->targetMAC);
     esp_now_send(pkt->targetMAC, (uint8_t*)pkt, sizeof(HueMixLinkPacket));
     SERIAL_DEBUG.println("[OTA] NOTIFY forwarded via ESP-NOW");
     return;
@@ -758,13 +827,7 @@ void handleOtaChunk(HueMixLinkPacket* pkt) {
   
   if (memcmp(pkt->targetMAC, myMac, 6) != 0) {
     // Not for us, forward via ESP-NOW
-    esp_now_peer_info_t peer = {};
-    memcpy(peer.peer_addr, pkt->targetMAC, 6);
-    peer.channel = HUEMIXLINK_CHANNEL;
-    peer.encrypt = false;
-    if (!esp_now_is_peer_exist(pkt->targetMAC)) {
-      esp_now_add_peer(&peer);
-    }
+    ensureEspNowPeer(pkt->targetMAC);
     esp_now_send(pkt->targetMAC, (uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
@@ -829,13 +892,7 @@ void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
   
   if (memcmp(pkt->targetMAC, myMac, 6) != 0) {
     // Not for us, forward via ESP-NOW
-    esp_now_peer_info_t peer = {};
-    memcpy(peer.peer_addr, pkt->targetMAC, 6);
-    peer.channel = HUEMIXLINK_CHANNEL;
-    peer.encrypt = false;
-    if (!esp_now_is_peer_exist(pkt->targetMAC)) {
-      esp_now_add_peer(&peer);
-    }
+    ensureEspNowPeer(pkt->targetMAC);
     esp_now_send(pkt->targetMAC, (uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
@@ -874,13 +931,7 @@ void handleOtaComplete(HueMixLinkPacket* pkt) {
   
   if (memcmp(pkt->targetMAC, myMac, 6) != 0) {
     // Not for us, forward via ESP-NOW
-    esp_now_peer_info_t peer = {};
-    memcpy(peer.peer_addr, pkt->targetMAC, 6);
-    peer.channel = HUEMIXLINK_CHANNEL;
-    peer.encrypt = false;
-    if (!esp_now_is_peer_exist(pkt->targetMAC)) {
-      esp_now_add_peer(&peer);
-    }
+    ensureEspNowPeer(pkt->targetMAC);
     esp_now_send(pkt->targetMAC, (uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
@@ -978,13 +1029,7 @@ void handleOtaAbort(HueMixLinkPacket* pkt) {
   
   if (memcmp(pkt->targetMAC, myMac, 6) != 0) {
     // Not for us, forward via ESP-NOW
-    esp_now_peer_info_t peer = {};
-    memcpy(peer.peer_addr, pkt->targetMAC, 6);
-    peer.channel = HUEMIXLINK_CHANNEL;
-    peer.encrypt = false;
-    if (!esp_now_is_peer_exist(pkt->targetMAC)) {
-      esp_now_add_peer(&peer);
-    }
+    ensureEspNowPeer(pkt->targetMAC);
     esp_now_send(pkt->targetMAC, (uint8_t*)pkt, sizeof(HueMixLinkPacket));
     return;
   }
@@ -1153,11 +1198,7 @@ void handleSerialPacket(uint8_t* data, uint16_t len) {
     }
 
     // Relay v2 frame verbatim over ESP-NOW to targetMAC
-    esp_now_peer_info_t peer = {};
-    memcpy(peer.peer_addr, hdr.targetMAC, 6);
-    peer.channel = HUEMIXLINK_CHANNEL;
-    peer.encrypt = false;
-    if (!esp_now_is_peer_exist(hdr.targetMAC)) { esp_now_add_peer(&peer); }
+    ensureEspNowPeer(hdr.targetMAC);
     // Skip per-packet delivery reports for OTA and ping packets (matching v1 behavior;
     // OTA uses checkpoint ACKs so per-chunk delivery reports waste UART/counter/logs).
     bool trackDelivery = (
@@ -1274,11 +1315,7 @@ void handleSerialPacket(uint8_t* data, uint16_t len) {
         return;
       }
       // Targeted at a downstream radio device: forward over ESP-NOW
-      esp_now_peer_info_t peer = {};
-      memcpy(peer.peer_addr, radioTx.targetMAC, 6);
-      peer.channel = HUEMIXLINK_CHANNEL;
-      peer.encrypt = false;
-      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      ensureEspNowPeer(radioTx.targetMAC);
       lastMsgID = radioTx.msgID;
       memcpy(lastTargetMAC, radioTx.targetMAC, 6);
       waitingForDelivery = true;
@@ -1298,22 +1335,14 @@ void handleSerialPacket(uint8_t* data, uint16_t len) {
         return;
       }
       // Targeted at a downstream radio device: forward over ESP-NOW
-      esp_now_peer_info_t peer = {};
-      memcpy(peer.peer_addr, radioTx.targetMAC, 6);
-      peer.channel = HUEMIXLINK_CHANNEL;
-      peer.encrypt = false;
-      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      ensureEspNowPeer(radioTx.targetMAC);
       lastMsgID = radioTx.msgID;
       memcpy(lastTargetMAC, radioTx.targetMAC, 6);
       waitingForDelivery = true;
       esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
     }
     else {
-      esp_now_peer_info_t peer = {};
-      memcpy(peer.peer_addr, radioTx.targetMAC, 6);
-      peer.channel = HUEMIXLINK_CHANNEL;
-      peer.encrypt = false;
-      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      ensureEspNowPeer(radioTx.targetMAC);
       lastMsgID = radioTx.msgID;
       memcpy(lastTargetMAC, radioTx.targetMAC, 6);
       waitingForDelivery = true;
@@ -1335,11 +1364,7 @@ void handleSerialPacket(uint8_t* data, uint16_t len) {
     
     // If targeted, forward to the device via ESP-NOW
     if (!isBroadcast) {      
-      esp_now_peer_info_t peer = {};
-      memcpy(peer.peer_addr, radioTx.targetMAC, 6);
-      peer.channel = HUEMIXLINK_CHANNEL;
-      peer.encrypt = false;
-      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      ensureEspNowPeer(radioTx.targetMAC);
       lastMsgID = radioTx.msgID;
       memcpy(lastTargetMAC, radioTx.targetMAC, 6);
       waitingForDelivery = true;
@@ -1357,18 +1382,14 @@ void handleSerialPacket(uint8_t* data, uint16_t len) {
 
     uint8_t zeroMac[6] = {0};
     if (memcmp(radioTx.targetMAC, zeroMac, 6) != 0) {
-      esp_now_peer_info_t peer = {}; memcpy(peer.peer_addr, radioTx.targetMAC, 6);
-      peer.channel = HUEMIXLINK_CHANNEL; peer.encrypt = false;
-      if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+      ensureEspNowPeer(radioTx.targetMAC);
       lastMsgID = radioTx.msgID;
       memcpy(lastTargetMAC, radioTx.targetMAC, 6);
       waitingForDelivery = true;
       esp_now_send(radioTx.targetMAC, (uint8_t*)&radioTx, sizeof(radioTx));
     }
   } else {
-    esp_now_peer_info_t peer = {}; memcpy(peer.peer_addr, radioTx.targetMAC, 6);
-    peer.channel = HUEMIXLINK_CHANNEL; peer.encrypt = false;
-    if (!esp_now_is_peer_exist(radioTx.targetMAC)) { esp_now_add_peer(&peer); }
+    ensureEspNowPeer(radioTx.targetMAC);
     lastMsgID = radioTx.msgID;
     memcpy(lastTargetMAC, radioTx.targetMAC, 6);
     waitingForDelivery = true;
@@ -1609,11 +1630,7 @@ void loop() {
     if (shouldAckInboundPacket(inType)) {
       // Only send ACK if net node has WiFi connectivity
       if (netNodeHasWiFi) {
-        esp_now_peer_info_t peer = {};
-        memcpy(peer.peer_addr, inSrcMac, 6);
-        peer.channel = HUEMIXLINK_CHANNEL;
-        peer.encrypt = false;
-        if (!esp_now_is_peer_exist(inSrcMac)) esp_now_add_peer(&peer);
+        ensureEspNowPeer(inSrcMac);
 
         const SecGwPeerEntry* peerSec = inIsV2 ? sec_gw_table_find(&gwPeerTable, inSrcMac) : nullptr;
         if (inIsV2 && peerSec != nullptr) {
